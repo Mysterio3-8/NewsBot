@@ -1,6 +1,6 @@
 # AI News Rewriter
 
-**Статус:** ⚪ заготовка (код ещё не написан, есть спецификация)
+**Статус:** 🟡 dev (Этап 0 завершён — каркас проекта работает)
 
 ## Что это
 
@@ -22,18 +22,17 @@
 
 - Python 3.12+
 - Ollama (локальная LLM, модель по умолчанию `qwen2.5:7b`)
-- PySide6, SQLAlchemy, APScheduler, Pillow, python-telegram-bot/aiogram, vk_api
+- PySide6, SQLAlchemy, APScheduler, Pillow, python-telegram-bot/aiogram, vk_api, pytest
 - Секреты — только в `.env` (см. `.env.example`), никогда в `config.yaml` или коде
 
 ## Быстрые команды
-
-Пока кода нет — появятся на Этапе 0:
 
 ```bash
 python -m venv venv && venv\Scripts\activate
 pip install -r requirements.txt
 python app/main.py            # десктоп UI
 python app/main.py --headless # сервер без UI
+pytest tests/ -v               # smoke-тесты (config loader, repository)
 ```
 
 ## Соглашения по коду
@@ -57,17 +56,21 @@ python app/main.py --headless # сервер без UI
 
 ## Что осталось сделать
 
-См. раздел 21 SPEC.md (Roadmap). Следующий шаг — **Этап 0**: каркас проекта, `config.yaml`, подключение SQLite, пустой UI-каркас.
+См. раздел 21 SPEC.md (Roadmap). Этап 0 готов. Следующий шаг — **Этап 1 (MVP)**: `telegram_fetcher.py` → фильтрация → `LLMClient`/классификатор/рерайтер (промпты уже готовы в `/prompts`) → ручная публикация в Telegram.
 
 ## Известные грабли
 
 - Ollama должна быть запущена и модель скачана до старта — иначе явный статус `⛔ LLM недоступна`, не тихий fallback.
 - Лимит caption в Telegram — 1024 символа, полный текст рерайта может не влезть в подпись к фото.
 - VK API публикация фото — двухшаговая (`photos.getWallUploadServer` → `photos.saveWallPhoto`), не один вызов.
+- Репозиторий `https://github.com/Mysterio3-8/NewsBot.git`, который пользователь предлагал как референс — полностью пустой (`git ls-remote` не возвращает ни одной ветки). Архитектуру оттуда брать не с чего, не тратить время на повторную проверку без новой ссылки.
+- Полный текст гуманизатора (`prompts/reference/humanizer_ru_full.md`) в system-промпт целиком не включён осознанно — на локальной 7B-модели такой объём инструкций на каждый вызов бьёт по скорости и качеству. В `prompts/system.txt` — сжатая выжимка самых частых паттернов. Если качество рерайта будет хромать — сначала пробовать точечно добавлять конкретные пункты из полного файла, не вставлять его целиком.
+- Локальный `venv` создан на Python 3.10.11, хотя SPEC.md требует 3.12+ (на машине не было другой версии на момент Этапа 0). Код синтаксически совместим (используется `from __future__ import annotations`), но перед продакшен-деплоем стоит пересоздать venv на 3.12+.
+- `assets/logo.png` пока не существует — нужен до Этапа 3 (watermark); `WatermarkConfig.logo_path` в `config.yaml` уже указывает на этот путь.
 
 ## Checkpoint (2026-07-01)
 
-- Сделано: написано полное ТЗ (SPEC.md), настроены правила/хуки для Claude Code.
+- Сделано: ТЗ (SPEC.md), правила/хуки Claude Code, все промпты в `/prompts` наполнены. Этап 0 завершён: `app/config/{config.yaml,loader.py}` (типизированный `AppConfig`, валидация границ), `app/db/{models.py,repository.py}` (5 таблиц + `Repository` — единственная точка доступа к БД), `app/ui/main_window.py` + 8 вкладок (Главная и Источники — рабочая вёрстка, остальные 6 — плейсхолдеры с пометкой этапа), `app/main.py` (`--headless` / UI), `app/logging_setup.py` (ротация по 5 файлам из раздела 17). 7 smoke-тестов в `tests/` — зелёные. `venv` создан, зависимости из `requirements.txt` установлены.
 - Активно: —
-- Следующий шаг: Этап 0 — каркас проекта (структура папок из раздела 18 SPEC.md, `config.yaml`, `requirements.txt`, подключение SQLite/SQLAlchemy, пустые вкладки UI).
+- Следующий шаг: Этап 1 (MVP) — `core/monitoring/telegram_fetcher.py`, `core/filtering/*` (rules/dedup/scoring), `core/llm/{client,classifier,rewriter,headline_generator}.py` (промпты уже готовы), `core/publishing/telegram_publisher.py`, довести до ручной публикации в Telegram.
 - Блокеры: нет.

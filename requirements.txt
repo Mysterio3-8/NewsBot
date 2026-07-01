@@ -8,3 +8,4 @@ python-dotenv>=1.0
 aiogram>=3.4
 vk_api>=11.9.9
 simhash>=2.1
+pytest>=8.0
