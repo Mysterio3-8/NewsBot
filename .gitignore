@@ -5,3 +5,6 @@ __pycache__/
 data/app.db
 logs/
 output/
+*.session
+*.session-journal
+.pytest_cache/

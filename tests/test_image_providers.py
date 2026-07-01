@@ -1,0 +1,74 @@
+import base64
+from unittest.mock import Mock, patch
+
+from app.core.images.providers.local_ai_provider import LocalAIImageProvider
+from app.core.images.providers.pexels_provider import PexelsProvider
+from app.core.images.providers.pixabay_provider import PixabayProvider
+from app.core.images.providers.source_provider import SourceImageProvider
+from app.core.images.providers.unsplash_provider import UnsplashProvider
+
+
+def test_source_provider_returns_up_to_count_paths():
+    provider = SourceImageProvider(["a.jpg", "b.jpg", "c.jpg"])
+    results = provider.search("query", count=2)
+    assert len(results) == 2
+    assert results[0].source_provider == "source"
+    assert results[0].local_path == "a.jpg"
+
+
+def test_unsplash_provider_maps_results():
+    provider = UnsplashProvider(access_key="key")
+    response = Mock()
+    response.json.return_value = {"results": [{"urls": {"regular": "http://img1"}}]}
+    response.raise_for_status = Mock()
+
+    with patch("app.core.images.providers.unsplash_provider.requests.get", return_value=response) as mock_get:
+        results = provider.search("cats", count=1)
+
+    assert results[0].url == "http://img1"
+    assert results[0].source_provider == "unsplash"
+    _, kwargs = mock_get.call_args
+    assert kwargs["headers"]["Authorization"] == "Client-ID key"
+
+
+def test_pexels_provider_maps_results():
+    provider = PexelsProvider(api_key="key")
+    response = Mock()
+    response.json.return_value = {"photos": [{"src": {"large": "http://img2"}}]}
+    response.raise_for_status = Mock()
+
+    with patch("app.core.images.providers.pexels_provider.requests.get", return_value=response):
+        results = provider.search("dogs", count=1)
+
+    assert results[0].url == "http://img2"
+    assert results[0].source_provider == "pexels"
+
+
+def test_pixabay_provider_enforces_minimum_per_page_and_slices_results():
+    provider = PixabayProvider(api_key="key")
+    response = Mock()
+    response.json.return_value = {"hits": [{"largeImageURL": f"http://img{i}"} for i in range(3)]}
+    response.raise_for_status = Mock()
+
+    with patch("app.core.images.providers.pixabay_provider.requests.get", return_value=response) as mock_get:
+        results = provider.search("birds", count=1)
+
+    assert len(results) == 1
+    _, kwargs = mock_get.call_args
+    assert kwargs["params"]["per_page"] == 3  # count=1 поднят до минимума API
+
+
+def test_local_ai_provider_decodes_base64_images():
+    provider = LocalAIImageProvider(host="http://localhost:7860/")
+    fake_bytes = b"fake-png-bytes"
+    response = Mock()
+    response.json.return_value = {"images": [base64.b64encode(fake_bytes).decode()]}
+    response.raise_for_status = Mock()
+
+    with patch("app.core.images.providers.local_ai_provider.requests.post", return_value=response) as mock_post:
+        results = provider.search("a news illustration", count=1)
+
+    assert results[0].image_bytes == fake_bytes
+    assert results[0].source_provider == "local_ai"
+    args, _ = mock_post.call_args
+    assert args[0] == "http://localhost:7860/sdapi/v1/txt2img"

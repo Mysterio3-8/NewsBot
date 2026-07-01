@@ -1,0 +1,77 @@
+app:
+  name: "AI News Rewriter"
+  language: "ru"
+  timezone: "Europe/Moscow"
+
+llm:
+  provider: "ollama"
+  host: "http://localhost:11434"
+  model: "qwen2.5:7b"
+  temperature: 0.7
+  top_p: 0.9
+  timeout_seconds: 60
+  retries: 1
+
+monitoring:
+  check_interval_minutes: 240
+  max_post_age_hours: 24
+  fetch_batch_size: 50
+
+sources:
+  telegram: []
+  vk: []
+
+filters:
+  min_score: 75
+  duplicate_similarity_threshold: 0.85
+  min_views: 500
+  stop_words: []
+  required_keywords_boost: true
+  whitelist_keywords: []
+  blacklist_keywords: []
+
+scoring:
+  weights:
+    news_value: 0.35
+    keyword_match: 0.25
+    source_views: 0.20
+    freshness: 0.10
+    source_priority: 0.10
+
+rewrite:
+  style: "viral"
+  max_length_chars: 900
+  headline_variants: 3
+
+images:
+  providers_order: ["source", "unsplash", "pexels", "pixabay"]
+  count_per_post: 3
+  target_aspect_ratio: "4:5"
+
+watermark:
+  logo_path: "assets/logo.png"
+  position: "bottom-right"
+  opacity: 70
+  margin_px: 24
+  channel_name_text: true
+
+publishing:
+  targets:
+    telegram:
+      enabled: true
+      bot_token_env: "TG_BOT_TOKEN"
+      chat_id: "@NewsThreeWord"
+    vk:
+      enabled: false  # публикация в VK не настроена — нет группы/токена для публикации
+      token_env: "VK_GROUP_TOKEN"
+      group_id: 0
+  schedule:
+    mode: "fixed_slots"
+    fixed_slots: ["09:00", "13:00", "18:00", "21:00"]
+    interval_minutes: 40
+    max_posts_per_day: 12
+
+logging:
+  level: "INFO"
+  max_file_size_mb: 10
+  backup_count: 5

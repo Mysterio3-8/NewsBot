@@ -1,0 +1,44 @@
+import pytest
+
+from app.config.loader import ConfigValidationError, load_config
+
+
+def test_load_config_returns_typed_config():
+    config = load_config()
+
+    assert config.app.name == "AI News Rewriter"
+    assert config.llm.model == "qwen2.5:7b"
+    assert config.filters.min_score == 75
+
+
+def test_load_config_missing_file_raises(tmp_path):
+    missing_path = tmp_path / "does_not_exist.yaml"
+
+    with pytest.raises(FileNotFoundError):
+        load_config(missing_path)
+
+
+def test_load_config_rejects_invalid_min_score(tmp_path):
+    bad_config = tmp_path / "config.yaml"
+    bad_config.write_text(
+        """
+app: {name: x, language: ru, timezone: UTC}
+llm: {provider: ollama, host: h, model: m, temperature: 0.7, top_p: 0.9, timeout_seconds: 60, retries: 1}
+monitoring: {check_interval_minutes: 240, max_post_age_hours: 24, fetch_batch_size: 50}
+filters: {min_score: 150, duplicate_similarity_threshold: 0.85, min_views: 500, stop_words: [], required_keywords_boost: true, whitelist_keywords: [], blacklist_keywords: []}
+scoring: {weights: {news_value: 0.35, keyword_match: 0.25, source_views: 0.20, freshness: 0.10, source_priority: 0.10}}
+rewrite: {style: viral, max_length_chars: 900, headline_variants: 3}
+images: {providers_order: [source], count_per_post: 3, target_aspect_ratio: "4:5"}
+watermark: {logo_path: x, position: bottom-right, opacity: 70, margin_px: 24, channel_name_text: true}
+publishing:
+  targets:
+    telegram: {enabled: true, bot_token_env: TG_BOT_TOKEN, chat_id: "@x"}
+    vk: {enabled: true, token_env: VK_GROUP_TOKEN, group_id: 0}
+  schedule: {mode: fixed_slots, fixed_slots: [], interval_minutes: 40, max_posts_per_day: 12}
+logging: {level: INFO, max_file_size_mb: 10, backup_count: 5}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigValidationError):
+        load_config(bad_config)

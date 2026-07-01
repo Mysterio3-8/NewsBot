@@ -1,0 +1,25 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      - ollama
+    env_file:
+      - .env
+    # ВАЖНО: llm.host в app/config/config.yaml должен быть "http://ollama:11434"
+    # (имя сервиса compose), а не "http://localhost:11434" — иначе LLMClient
+    # не найдёт Ollama внутри сети docker compose.
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./app/config/config.yaml:/app/app/config/config.yaml
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

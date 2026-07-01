@@ -1,0 +1,16 @@
+[Unit]
+Description=AI News Rewriter (headless)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ai-news-rewriter
+WorkingDirectory=/opt/ai-news-rewriter
+EnvironmentFile=/opt/ai-news-rewriter/.env
+ExecStart=/opt/ai-news-rewriter/venv/bin/python app/main.py --headless
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
