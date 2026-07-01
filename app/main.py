@@ -5,6 +5,12 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    # `python app/main.py` кладёт в sys.path каталог app/, а не корень проекта —
+    # без этого `from app...` абсолютные импорты не резолвятся.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 

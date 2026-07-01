@@ -8,6 +8,7 @@ python-dotenv>=1.0
 aiogram>=3.4
 aiohttp-socks>=0.9
 telethon>=1.34
+PySocks>=1.7
 vk_api>=11.9.9
 simhash>=2.1
 pytest>=8.0

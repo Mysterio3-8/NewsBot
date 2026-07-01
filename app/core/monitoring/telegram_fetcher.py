@@ -6,12 +6,26 @@ Bot API не подходит: он не может получить истор�
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
+import socks
 from telethon import TelegramClient
 
 from app.core.monitoring.models import FetchedPost
+
+
+def detect_telethon_proxy() -> tuple[int, str, int] | None:
+    """Telethon использует сырой MTProto, не aiohttp/requests — тот же локальный
+    HTTP_PROXY/HTTPS_PROXY нужно передать явно через PySocks-совместимый кортеж.
+    """
+    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    return (socks.HTTP, parsed.hostname, parsed.port)
 
 
 def message_to_post(message: Any) -> FetchedPost:
@@ -38,7 +52,9 @@ def _classify_message_type(message: Any) -> str:
 
 class TelegramFetcher:
     def __init__(self, api_id: int, api_hash: str, session_name: str) -> None:
-        self._client = TelegramClient(session_name, api_id, api_hash)
+        self._client = TelegramClient(
+            session_name, api_id, api_hash, proxy=detect_telethon_proxy()
+        )
 
     async def fetch_recent_posts(
         self, channel_url: str, *, max_age_hours: float, limit: int = 50
