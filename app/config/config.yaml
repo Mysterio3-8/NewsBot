@@ -62,9 +62,9 @@ publishing:
       bot_token_env: "TG_BOT_TOKEN"
       chat_id: "@NewsThreeWord"
     vk:
-      enabled: false  # публикация в VK не настроена — нет группы/токена для публикации
+      enabled: true
       token_env: "VK_GROUP_TOKEN"
-      group_id: 0
+      group_id: 233689032
   schedule:
     mode: "fixed_slots"
     fixed_slots: ["09:00", "13:00", "18:00", "21:00"]
@@ -75,3 +75,9 @@ logging:
   level: "INFO"
   max_file_size_mb: 10
   backup_count: 5
+
+footer:
+  enabled: true
+  label: "Подписывайтесь на нас"
+  telegram_url: "https://t.me/NewsThreeWord"
+  vk_url: "https://vk.com/club233689032"

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.publishing.footer import FooterLinks
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.db.repository import Repository
@@ -29,6 +30,7 @@ class PublishingPage(QWidget):
         self._repo: Repository | None = None
         self._publisher: TelegramPublisher | None = None
         self._chat_id: str | None = None
+        self._footer_links: FooterLinks | None = None
 
         self.table = QTableWidget(0, len(QUEUE_TABLE_HEADERS))
         self.table.setHorizontalHeaderLabels(QUEUE_TABLE_HEADERS)
@@ -49,10 +51,17 @@ class PublishingPage(QWidget):
         layout.addLayout(buttons_layout)
         self.setLayout(layout)
 
-    def bind(self, repo: Repository, publisher: TelegramPublisher, chat_id: str) -> None:
+    def bind(
+        self,
+        repo: Repository,
+        publisher: TelegramPublisher,
+        chat_id: str,
+        footer_links: FooterLinks | None = None,
+    ) -> None:
         self._repo = repo
         self._publisher = publisher
         self._chat_id = chat_id
+        self._footer_links = footer_links
         self.refresh()
 
     def refresh(self) -> None:
@@ -76,7 +85,11 @@ class PublishingPage(QWidget):
 
         result = asyncio.run(
             publish_queued_post(
-                self._repo, self._publisher, post_id=post_id, chat_id=self._chat_id
+                self._repo,
+                self._publisher,
+                post_id=post_id,
+                chat_id=self._chat_id,
+                footer_links=self._footer_links,
             )
         )
         if result.success:

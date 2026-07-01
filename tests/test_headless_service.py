@@ -26,8 +26,16 @@ class FakePublishingConfig:
     telegram = FakeTelegramConfig()
 
 
+class FakeFooterConfig:
+    enabled = False
+    label = "x"
+    telegram_url = ""
+    vk_url = ""
+
+
 class FakeAppConfig:
     publishing = FakePublishingConfig()
+    footer = FakeFooterConfig()
 
 
 @pytest.mark.asyncio

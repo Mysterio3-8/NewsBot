@@ -14,6 +14,7 @@ from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
+from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.scheduler import build_triggers, pick_next_post_to_publish
@@ -39,6 +40,8 @@ def build_check_job(
 
 
 def build_publish_job(repo: Repository, config: AppConfig, publisher: TelegramPublisher | None):
+    footer_links = build_footer_links_from_config(config.footer)
+
     async def publish_job() -> None:
         if publisher is None:
             return
@@ -48,7 +51,11 @@ def build_publish_job(repo: Repository, config: AppConfig, publisher: TelegramPu
         if post is None:
             return
         await publish_queued_post(
-            repo, publisher, post_id=post.id, chat_id=config.publishing.telegram.destination
+            repo,
+            publisher,
+            post_id=post.id,
+            chat_id=config.publishing.telegram.destination,
+            footer_links=footer_links,
         )
 
     return publish_job

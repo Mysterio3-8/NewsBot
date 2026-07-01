@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QHBoxLayout, QListWidget, QMainWindow, QStackedWid
 
 from app.config.loader import AppConfig
 from app.core.llm.client import LLMClient
+from app.core.publishing.footer import build_footer_links_from_config
 from app.db.repository import Repository
 from app.factories import build_telegram_publisher
 from app.ui.pages.ai_page import AIPage
@@ -88,10 +89,11 @@ class MainWindow(QMainWindow):
         llm_client = LLMClient(config.llm)
         publisher = build_telegram_publisher(config)
         chat_id = config.publishing.telegram.destination
+        footer_links = build_footer_links_from_config(config.footer)
 
         self.home_page.bind_repository(repo)
         self.sources_page.bind_repository(repo)
         self.ai_page.bind_llm_client(llm_client)
         self.settings_page.bind_config(config, config_path)
         if publisher is not None:
-            self.publishing_page.bind(repo, publisher, chat_id)
+            self.publishing_page.bind(repo, publisher, chat_id, footer_links)

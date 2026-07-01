@@ -107,6 +107,14 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class FooterConfig:
+    enabled: bool
+    label: str
+    telegram_url: str
+    vk_url: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     app: AppSection
     llm: LLMConfig
@@ -118,6 +126,7 @@ class AppConfig:
     watermark: WatermarkConfig
     publishing: PublishingConfig
     logging: LoggingConfig
+    footer: FooterConfig
 
 
 class ConfigValidationError(ValueError):
@@ -196,4 +205,5 @@ def load_config(path: Path | None = None) -> AppConfig:
         watermark=WatermarkConfig(**raw["watermark"]),
         publishing=publishing,
         logging=LoggingConfig(**raw["logging"]),
+        footer=FooterConfig(**raw["footer"]),
     )
