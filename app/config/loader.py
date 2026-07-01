@@ -37,6 +37,7 @@ class MonitoringConfig:
 @dataclass(frozen=True)
 class FiltersConfig:
     min_score: int
+    important_score_threshold: int
     duplicate_similarity_threshold: float
     min_views: int
     stop_words: list[str]
@@ -137,6 +138,17 @@ def _validate(raw: dict) -> None:
     min_score = raw["filters"]["min_score"]
     if not 0 <= min_score <= 100:
         raise ConfigValidationError(f"filters.min_score должен быть 0-100, получено: {min_score}")
+
+    important_score_threshold = raw["filters"]["important_score_threshold"]
+    if not 0 <= important_score_threshold <= 100:
+        raise ConfigValidationError(
+            f"filters.important_score_threshold должен быть 0-100, "
+            f"получено: {important_score_threshold}"
+        )
+    if important_score_threshold < min_score:
+        raise ConfigValidationError(
+            "filters.important_score_threshold не может быть меньше filters.min_score"
+        )
 
     similarity = raw["filters"]["duplicate_similarity_threshold"]
     if not 0.0 <= similarity <= 1.0:

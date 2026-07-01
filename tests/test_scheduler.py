@@ -75,6 +75,60 @@ def test_pick_next_post_returns_none_when_daily_limit_reached(tmp_path):
     assert picked is None
 
 
+def test_pick_next_post_alternates_important_and_regular_tiers(tmp_path):
+    import datetime
+
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+
+    def make_queued(score: float) -> int:
+        raw = repo.create_raw_post(
+            source_id=source.id, external_id=str(score), raw_text=f"post {score}"
+        )
+        return repo.create_processed_post(raw_post_id=raw.id, score=score, status="queued").id
+
+    important_high = make_queued(95)
+    important_low = make_queued(90)
+    regular_high = make_queued(80)
+    regular_low = make_queued(70)
+
+    def mark_published(post_id: int) -> None:
+        repo.update_processed_post_status(
+            post_id, "published", published_at=datetime.datetime.now(datetime.timezone.utc)
+        )
+
+    # 1-я публикация дня (published_today=0, чётное) -> главный пост
+    picked_1 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
+    assert picked_1.id == important_high
+    mark_published(picked_1.id)
+
+    # 2-я публикация дня (published_today=1, нечётное) -> обычный пост
+    picked_2 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
+    assert picked_2.id == regular_high
+    mark_published(picked_2.id)
+
+    # 3-я публикация дня -> снова главный
+    picked_3 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
+    assert picked_3.id == important_low
+    mark_published(picked_3.id)
+
+    # 4-я публикация дня -> снова обычный
+    picked_4 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
+    assert picked_4.id == regular_low
+
+
+def test_pick_next_post_falls_back_when_tier_has_no_candidates(tmp_path):
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
+    only_regular = repo.create_processed_post(raw_post_id=raw.id, score=70, status="queued")
+
+    # published_today=0 (чётное) хочет "главный", но в очереди только обычный — берём его
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
+
+    assert picked.id == only_regular.id
+
+
 @pytest.mark.asyncio
 async def test_publishing_scheduler_calls_on_slot_and_swallows_errors():
     schedule = ScheduleConfig(

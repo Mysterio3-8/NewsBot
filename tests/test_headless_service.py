@@ -33,9 +33,14 @@ class FakeFooterConfig:
     vk_url = ""
 
 
+class FakeFiltersConfig:
+    important_score_threshold = 88
+
+
 class FakeAppConfig:
     publishing = FakePublishingConfig()
     footer = FakeFooterConfig()
+    filters = FakeFiltersConfig()
 
 
 @pytest.mark.asyncio

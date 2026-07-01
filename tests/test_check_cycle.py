@@ -20,6 +20,7 @@ class FakeAppConfig:
         self.monitoring = Mock(max_post_age_hours=24)
         self.filters = FiltersConfig(
             min_score=75,
+            important_score_threshold=88,
             duplicate_similarity_threshold=0.85,
             min_views=500,
             stop_words=[],

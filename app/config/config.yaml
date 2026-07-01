@@ -14,7 +14,7 @@ llm:
 
 monitoring:
   check_interval_minutes: 240
-  max_post_age_hours: 24
+  max_post_age_hours: 168  # 7 дней
   fetch_batch_size: 50
 
 sources:
@@ -23,6 +23,7 @@ sources:
 
 filters:
   min_score: 75
+  important_score_threshold: 88  # выше — «главные» посты (6/день), ниже — «обычные» (6/день)
   duplicate_similarity_threshold: 0.85
   min_views: 500
   stop_words:
@@ -91,7 +92,11 @@ publishing:
       group_id: 233689032
   schedule:
     mode: "fixed_slots"
-    fixed_slots: ["09:00", "13:00", "18:00", "21:00"]
+    # 12 слотов, размазанные по всему дню каждые ~80 минут (08:00-22:40);
+    # нечётные по счёту публикации дня — «главные» посты, чётные — «обычные»
+    fixed_slots:
+      ["08:00", "09:20", "10:40", "12:00", "13:20", "14:40",
+       "16:00", "17:20", "18:40", "20:00", "21:20", "22:40"]
     interval_minutes: 40
     max_posts_per_day: 12
 

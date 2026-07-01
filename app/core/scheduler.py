@@ -34,14 +34,35 @@ def start_of_today_utc() -> datetime:
     return datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
 
 
-def pick_next_post_to_publish(repo: Repository, *, max_posts_per_day: int) -> ProcessedPost | None:
-    """Пустой слот пропускается без ошибки, если очередь пуста или лимит дня достигнут."""
+def pick_next_post_to_publish(
+    repo: Repository,
+    *,
+    max_posts_per_day: int,
+    important_score_threshold: int | None = None,
+) -> ProcessedPost | None:
+    """Пустой слот пропускается без ошибки, если очередь пуста или лимит дня достигнут.
+
+    Если задан `important_score_threshold`, публикации дня чередуются по важности:
+    1-я, 3-я, 5-я... публикация дня — «главный» пост (score >= порога),
+    2-я, 4-я, 6-я... — «обычный» (score < порога). При нехватке постов нужного
+    уровня важности слот не пропускается — берётся лучший из доступных.
+    """
     published_today = repo.count_published_since(start_of_today_utc())
     if published_today >= max_posts_per_day:
         return None
 
     queued_posts = repo.list_processed_posts(status="queued")  # уже отсортировано по score desc
-    return queued_posts[0] if queued_posts else None
+    if not queued_posts:
+        return None
+
+    if important_score_threshold is None:
+        return queued_posts[0]
+
+    wants_important = published_today % 2 == 0
+    tiered = [
+        post for post in queued_posts if (post.score >= important_score_threshold) == wants_important
+    ]
+    return tiered[0] if tiered else queued_posts[0]
 
 
 class PublishingScheduler:

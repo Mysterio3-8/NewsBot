@@ -23,6 +23,7 @@ def make_repo(tmp_path) -> Repository:
 def make_filters(**overrides) -> FiltersConfig:
     defaults = dict(
         min_score=75,
+        important_score_threshold=88,
         duplicate_similarity_threshold=0.85,
         min_views=500,
         stop_words=["скидка"],
