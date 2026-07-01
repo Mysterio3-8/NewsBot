@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "command": "python -m black \"$CLAUDE_FILE_PATH\" 2>nul || echo \"[hook] black недоступен, пропуск форматирования\"",
+        "description": "Форматирование изменённых .py файлов через black"
+      },
+      {
+        "matcher": "Write|Edit",
+        "command": "python -m ruff check --fix \"$CLAUDE_FILE_PATH\" 2>nul || echo \"[hook] ruff недоступен, пропуск линта\"",
+        "description": "Линт изменённых .py файлов через ruff"
+      }
+    ]
+  }
+}

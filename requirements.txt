@@ -1,0 +1,10 @@
+PySide6>=6.7
+SQLAlchemy>=2.0
+APScheduler>=3.10
+Pillow>=10.0
+requests>=2.31
+PyYAML>=6.0
+python-dotenv>=1.0
+aiogram>=3.4
+vk_api>=11.9.9
+simhash>=2.1
