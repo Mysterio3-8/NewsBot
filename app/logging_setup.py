@@ -46,10 +46,15 @@ def cleanup_old_logs(max_age_days: int = MAX_LOG_AGE_DAYS) -> int:
 
 
 def setup_logging(config: LoggingConfig) -> None:
+    """Идемпотентно: вызывается и в control_bot.main(), и внутри ServiceController.start()
+    (когда срабатывает AUTOSTART_SERVICE) — без этой защиты хендлеры добавлялись дважды
+    и каждая строка лога писалась в файл два раза (обнаружено на проде 2026-07-04)."""
+    root = logging.getLogger()
+    if root.handlers:
+        return
+
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     level = getattr(logging, config.level.upper(), logging.INFO)
-
-    root = logging.getLogger()
     root.setLevel(level)
     root.addHandler(_make_handler(LOG_FILES["app"], config, level))
     root.addHandler(_make_handler(LOG_FILES["errors"], config, logging.ERROR))
