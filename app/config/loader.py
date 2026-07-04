@@ -29,6 +29,9 @@ class LLMConfig:
     # Резервные модели того же провайдера: при отказе основной (напр. 429 у free-моделей
     # OpenRouter) клиент по очереди пробует их, пока одна не ответит. Пусто = без ротации.
     fallback_models: list[str] = field(default_factory=list)
+    # Vision-модель для detect_foreign_watermark (см. app/core/images/watermark_detector.py).
+    # Пусто = проверка водяных знаков выключена (Watermarker.apply просто накладывает свой).
+    vision_model: str = ""
 
 
 @dataclass(frozen=True)

@@ -331,6 +331,69 @@ def test_groq_generate_raises_immediately_when_key_missing(monkeypatch):
         client.generate("system", "user")
 
 
+GROQ_VISION_CONFIG = LLMConfig(
+    provider="groq",
+    host="",
+    model="llama-3.3-70b-versatile",
+    api_key_env="GROQ_API_KEY",
+    temperature=0.7,
+    top_p=0.9,
+    timeout_seconds=5,
+    retries=1,
+    vision_model="meta-llama/llama-4-scout-17b-16e-instruct",
+)
+
+
+def test_generate_vision_raises_when_provider_not_openai_compatible(tmp_path):
+    client = LLMClient(TEST_CONFIG)  # ollama
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+    with pytest.raises(LLMUnavailableError):
+        client.generate_vision("вопрос", image_path)
+
+
+def test_generate_vision_raises_when_vision_model_not_configured(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    client = LLMClient(GROQ_CONFIG)  # vision_model="" по умолчанию
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+    with pytest.raises(LLMUnavailableError):
+        client.generate_vision("вопрос", image_path)
+
+
+def test_generate_vision_returns_content_on_success(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    client = LLMClient(GROQ_VISION_CONFIG)
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {"choices": [{"message": {"content": "ДА"}}]}
+
+    with patch("app.core.llm.client.requests.post", return_value=response) as mock_post:
+        result = client.generate_vision("вопрос", image_path)
+
+    assert result == "ДА"
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["model"] == "meta-llama/llama-4-scout-17b-16e-instruct"
+    content = payload["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "вопрос"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_generate_vision_raises_on_request_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    client = LLMClient(GROQ_VISION_CONFIG)
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+
+    with patch("app.core.llm.client.requests.post", side_effect=requests.ConnectionError("сбой")):
+        with pytest.raises(LLMUnavailableError):
+            client.generate_vision("вопрос", image_path)
+
+
 def test_openrouter_is_running_false_when_api_key_missing(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     client = LLMClient(OPENROUTER_CONFIG)

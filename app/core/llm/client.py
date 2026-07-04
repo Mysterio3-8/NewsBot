@@ -1,10 +1,13 @@
 """Единый клиент LLM: Ollama (локально) или облачные API (Gemini/Groq/OpenRouter) — раздел 9 SPEC.md."""
 from __future__ import annotations
 
+import base64
 import logging
+import mimetypes
 import os
 import re
 import time
+from pathlib import Path
 
 import requests
 
@@ -235,6 +238,50 @@ class LLMClient:
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
+
+    def generate_vision(self, prompt: str, image_path: Path) -> str:
+        """Vision-запрос (анализ изображения) — только для OpenAI-совместимых
+        провайдеров (Groq/OpenRouter, см. OPENAI_COMPATIBLE_BASES) и только если
+        задан config.llm.vision_model. Используется detect_foreign_watermark
+        (app/core/images/watermark_detector.py); при недоступности вызывающий код
+        считает, что проверка не удалась, и не блокирует публикацию (fail-open)."""
+        if self._config.provider not in OPENAI_COMPATIBLE_BASES:
+            raise LLMUnavailableError(f"Vision не поддерживается для provider={self._config.provider}")
+        if not self._config.vision_model:
+            raise LLMUnavailableError("config.llm.vision_model не задан")
+
+        self._throttle()
+        image_base64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        mime_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+        base = OPENAI_COMPATIBLE_BASES[self._config.provider]
+        payload = {
+            "model": self._config.vision_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                        },
+                    ],
+                }
+            ],
+            "temperature": 0.1,
+        }
+        try:
+            response = requests.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {self._cloud_api_key()}"},
+                json=payload,
+                timeout=self._config.timeout_seconds,
+                proxies=self._cloud_proxies(),
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except (requests.RequestException, KeyError, IndexError) as error:
+            raise LLMUnavailableError(f"Vision-запрос не удался: {error}") from error
 
     def _throttle(self) -> None:
         interval = MIN_REQUEST_INTERVAL_SECONDS.get(self._config.provider, 0.0)

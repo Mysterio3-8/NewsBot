@@ -15,6 +15,10 @@ llm:
   # по очереди пробует их. Список должен соответствовать активному provider.
   fallback_models:
     - "llama-3.3-70b-versatile"
+  # Vision-модель для detect_foreign_watermark (проверка чужих логотипов/подписей
+  # "Источник: ..." на фото поста перед публикацией) — подтверждена доступной на
+  # этом Groq-аккаунте 2026-07-04. Пусто = проверка выключена.
+  vision_model: "meta-llama/llama-4-scout-17b-16e-instruct"
   temperature: 0.7
   top_p: 0.9
   timeout_seconds: 60

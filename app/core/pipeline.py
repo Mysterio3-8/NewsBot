@@ -21,6 +21,7 @@ from app.core.images.image_pipeline import prepare_images_for_post
 from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.watermark import Watermarker, WatermarkError
+from app.core.images.watermark_detector import detect_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
 from app.core.llm.headline_generator import generate_headlines
@@ -167,20 +168,23 @@ def _prepare_images(
     watermark_config: WatermarkConfig | None,
     image_providers: dict[str, ImageProvider] | None,
 ) -> list[str] | None:
-    """Своё фото поста (SourceImageProvider) в приоритете — если его нет, для стока
-    нужен поисковый запрос (отдельный LLM-вызов), генерируем только когда он реально
-    нужен, чтобы не тратить лимит Groq впустую."""
+    """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
+    отфильтрованы как чужой водяной знак, см. _filter_watermarked_photos), для
+    стока нужен поисковый запрос (отдельный LLM-вызов), генерируем только когда
+    он реально нужен, чтобы не тратить лимит Groq впустую."""
     if images_config is None or watermark_config is None:
         return None
 
+    own_photos = _filter_watermarked_photos(llm_client, post_media_urls)
+
     providers: dict[str, ImageProvider] = dict(image_providers or {})
-    if post_media_urls:
-        providers["source"] = SourceImageProvider(post_media_urls)
+    if own_photos:
+        providers["source"] = SourceImageProvider(own_photos)
 
     if not any(name in providers for name in images_config.providers_order):
         return None
 
-    query = "" if post_media_urls else _safe_image_query(llm_client, rewritten_text)
+    query = "" if own_photos else _safe_image_query(llm_client, rewritten_text)
 
     try:
         watermarker = Watermarker(watermark_config, images_config.uniquify)
@@ -200,6 +204,23 @@ def _prepare_images(
         return None
 
     return [str(p) for p in image_paths] or None
+
+
+def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:
+    """Отбрасывает локальные файлы (скачанные из TG) с обнаруженным чужим водяным
+    знаком/логотипом — см. app/core/images/watermark_detector.py. Удалённые URL
+    (VK) не проверяются (используются как есть) — сам провайдер их только резолвит
+    в файл, локальной копии для vision-анализа на этом шаге ещё нет."""
+    kept: list[str] = []
+    for item in media_urls:
+        if item.startswith("http://") or item.startswith("https://"):
+            kept.append(item)
+            continue
+        if detect_foreign_watermark(llm_client, Path(item)):
+            logger.info("Фото %s похоже на чужой водяной знак, пропускаю", item)
+            continue
+        kept.append(item)
+    return kept
 
 
 def _prepare_video(

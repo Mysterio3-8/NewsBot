@@ -8,7 +8,7 @@ from PIL import Image
 from app.config.loader import FiltersConfig, RewriteConfig, ScoringWeights, WatermarkConfig
 from app.core.llm.classifier import ClassificationError, ClassificationResult
 from app.core.llm.client import LLMClient
-from app.core.pipeline import process_fetched_post
+from app.core.pipeline import _filter_watermarked_photos, process_fetched_post
 from app.core.monitoring.models import FetchedPost
 from app.db.repository import Repository, init_db, make_engine
 
@@ -142,6 +142,38 @@ def test_process_fetched_post_caps_rewrite_length_to_original_post_length(tmp_pa
 
     _, kwargs = rewrite_mock.call_args
     assert kwargs["max_length"] == len("Госдума приняла закон.")
+
+
+def test_filter_watermarked_photos_drops_local_files_with_detected_watermark(monkeypatch):
+    """По запросу пользователя 2026-07-05: фото с чужим логотипом/подписью не
+    должны идти в публикацию — пайплайн вместо них падает на сток-фолбэк."""
+    import app.core.pipeline as pipeline_module
+
+    client = Mock(spec=LLMClient)
+
+    def fake_detect(_client, path):
+        return str(path) == "watermarked.jpg"
+
+    monkeypatch.setattr(pipeline_module, "detect_foreign_watermark", fake_detect)
+
+    result = _filter_watermarked_photos(client, ["clean.jpg", "watermarked.jpg"])
+
+    assert result == ["clean.jpg"]
+
+
+def test_filter_watermarked_photos_keeps_remote_urls_unchecked(monkeypatch):
+    """VK отдаёт прямые URL — на этом шаге локального файла для vision-анализа ещё
+    нет, поэтому такие элементы проходят без проверки (не regression, просто scope)."""
+    import app.core.pipeline as pipeline_module
+
+    client = Mock(spec=LLMClient)
+    detect_mock = Mock(return_value=True)
+    monkeypatch.setattr(pipeline_module, "detect_foreign_watermark", detect_mock)
+
+    result = _filter_watermarked_photos(client, ["https://vk.com/photo1.jpg"])
+
+    assert result == ["https://vk.com/photo1.jpg"]
+    detect_mock.assert_not_called()
 
 
 def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):
