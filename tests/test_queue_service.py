@@ -37,7 +37,7 @@ async def test_publish_queued_post_marks_published_on_success(tmp_path):
 
     assert result.success is True
     publisher.publish.assert_awaited_once_with(
-        chat_id="@channel", text="Заголовок\n\nТекст новости", image_paths=[], parse_mode="HTML"
+        chat_id="@channel", text="Текст новости", image_paths=[], parse_mode="HTML"
     )
     assert repo.list_processed_posts(status="published")[0].id == processed.id
 
@@ -65,7 +65,6 @@ async def test_publish_queued_post_escapes_html_and_appends_footer(tmp_path):
 
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
-        "Цены &lt;ниже&gt;\n\n"
         "Рост &amp; падение\n\n"
         'Подписывайтесь на нас: <a href="https://t.me/x">Telegram</a>'
     )
@@ -99,7 +98,6 @@ async def test_publish_queued_post_moves_hashtags_after_footer(tmp_path):
 
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
-        "Заголовок\n\n"
         "Текст новости.\n\n"
         'Подписывайтесь на нас: <a href="https://t.me/x">Telegram</a>\n\n'
         "#технологии #apple"
@@ -128,7 +126,7 @@ async def test_publish_queued_post_excludes_hashtags_by_default(tmp_path):
 
     _, kwargs = publisher.publish.call_args
     assert "#технологии" not in kwargs["text"]
-    assert kwargs["text"] == "Заголовок\n\nТекст новости."
+    assert kwargs["text"] == "Текст новости."
 
 
 @pytest.mark.asyncio

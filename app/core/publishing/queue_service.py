@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime
-import html
 import json
 import logging
 from pathlib import Path
@@ -86,12 +85,14 @@ def _build_publish_text(
     footer_links: FooterLinks | None,
     include_hashtags: bool = False,
 ) -> str:
+    """headline не публикуется отдельной строкой (по запросу пользователя 2026-07-04) —
+    рерайт уже открывается хук-предложением, дублирующим суть заголовка, и получалось
+    троекратное повторение одного факта в начале поста (заголовок + хук-предложение +
+    начало тела). headline остаётся полем в БД (используется для статуса/поиска картинок),
+    просто не идёт в опубликованный текст."""
     body, hashtags = split_hashtags(rewritten_text or "")
 
-    parts = []
-    if headline:
-        parts.append(html.escape(headline))
-    parts.append(markdown_to_telegram_html(body))
+    parts = [markdown_to_telegram_html(body)]
 
     if footer_links is not None:
         footer = build_html_footer(footer_links)

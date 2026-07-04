@@ -115,7 +115,7 @@ def process_fetched_post(
         text=post.text,
         source=source.name,
         style=rewrite_config.style,
-        max_length=rewrite_config.max_length_chars,
+        max_length=min(rewrite_config.max_length_chars, len(post.text)),
         include_hashtags=rewrite_config.include_hashtags,
     )
     headlines = generate_headlines(

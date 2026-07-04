@@ -34,7 +34,7 @@ def test_publish_queued_post_vk_marks_published_on_success(tmp_path):
 
     assert result.success is True
     publisher.publish.assert_called_once_with(
-        group_id=123, text="Заголовок\n\nТекст новости", image_paths=[]
+        group_id=123, text="Текст новости", image_paths=[]
     )
     assert repo.list_processed_posts(status="published")[0].id == processed.id
 
@@ -66,7 +66,6 @@ def test_publish_queued_post_vk_uses_bracket_link_footer_and_moves_hashtags(tmp_
 
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
-        "Заголовок\n\n"
         "Текст новости.\n\n"
         "Подписывайтесь на нас: [https://t.me/x|Telegram]\n\n"
         "#технологии #apple"
@@ -92,7 +91,7 @@ def test_publish_queued_post_vk_excludes_hashtags_by_default(tmp_path):
 
     _, kwargs = publisher.publish.call_args
     assert "#технологии" not in kwargs["text"]
-    assert kwargs["text"] == "Заголовок\n\nТекст новости."
+    assert kwargs["text"] == "Текст новости."
 
 
 def test_publish_queued_post_vk_strips_markdown(tmp_path):

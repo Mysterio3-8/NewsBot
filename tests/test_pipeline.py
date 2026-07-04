@@ -98,6 +98,52 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
     assert len(queued) == 1
 
 
+def test_process_fetched_post_caps_rewrite_length_to_original_post_length(tmp_path):
+    """По запросу пользователя: рерайт не должен быть длиннее исходного поста —
+    max_length передаётся в rewrite_post как min(конфиг, длина оригинала), а не
+    всегда фиксированный потолок из config.yaml (900 символов растягивал короткие
+    новости искусственными подробностями)."""
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    client = Mock(spec=LLMClient)
+    client.load_prompt.side_effect = lambda name: f"<{name}>"
+
+    short_post = make_post(text="Госдума приняла закон.")  # короче 900, whitelist-слово для проходного скора
+
+    import app.core.pipeline as pipeline_module
+
+    original_classify = pipeline_module.classify_post
+    original_rewrite = pipeline_module.rewrite_post
+    original_headlines = pipeline_module.generate_headlines
+    pipeline_module.classify_post = Mock(
+        return_value=ClassificationResult(
+            is_news=True, category="политика", score=90, reasons=["важно"], reject_reason=None
+        )
+    )
+    rewrite_mock = Mock(return_value="Переписанный текст новости")
+    pipeline_module.rewrite_post = rewrite_mock
+    pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
+
+    try:
+        process_fetched_post(
+            repo,
+            source,
+            short_post,
+            llm_client=client,
+            filters=make_filters(),
+            scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG,
+            max_post_age_hours=24,
+        )
+    finally:
+        pipeline_module.classify_post = original_classify
+        pipeline_module.rewrite_post = original_rewrite
+        pipeline_module.generate_headlines = original_headlines
+
+    _, kwargs = rewrite_mock.call_args
+    assert kwargs["max_length"] == len("Госдума приняла закон.")
+
+
 def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):
     """Реальный ffmpeg-вызов (не мок) — история проекта уже показала, что моки
     пропускают баги, которые ловит только реальный внешний инструмент."""

@@ -81,12 +81,11 @@ def _build_vk_publish_text(
     footer_links: FooterLinks | None,
     include_hashtags: bool = False,
 ) -> str:
+    """headline не публикуется отдельной строкой — см. то же решение и обоснование
+    в queue_service.py::_build_publish_text."""
     body, hashtags = split_hashtags(rewritten_text or "")
 
-    parts = []
-    if headline:
-        parts.append(headline)
-    parts.append(strip_markdown(body))
+    parts = [strip_markdown(body)]
 
     if footer_links is not None:
         footer = build_vk_footer(footer_links)
