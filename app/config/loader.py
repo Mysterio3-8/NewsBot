@@ -25,6 +25,10 @@ class LLMConfig:
     top_p: float
     timeout_seconds: int
     retries: int
+    api_key_env: str = ""
+    # Резервные модели того же провайдера: при отказе основной (напр. 429 у free-моделей
+    # OpenRouter) клиент по очереди пробует их, пока одна не ответит. Пусто = без ротации.
+    fallback_models: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,17 @@ class RewriteConfig:
     style: str
     max_length_chars: int
     headline_variants: int
+    # LLM всё равно генерирует хэштеги (промпт не трогаем) — здесь просто решаем,
+    # включать ли их в опубликованный текст. Выключено по запросу пользователя
+    # 2026-07-03, легко включить обратно через config.yaml.
+    include_hashtags: bool = False
+
+
+@dataclass(frozen=True)
+class UniquifyConfig:
+    enabled: bool = False
+    crop_percent: float = 1.0
+    noise_sigma: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +82,7 @@ class ImagesConfig:
     providers_order: list[str]
     count_per_post: int
     target_aspect_ratio: str
+    uniquify: UniquifyConfig = field(default_factory=UniquifyConfig)
 
 
 @dataclass(frozen=True)
@@ -76,6 +92,7 @@ class WatermarkConfig:
     opacity: int
     margin_px: int
     channel_name_text: bool
+    size_ratio: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -84,6 +101,11 @@ class ScheduleConfig:
     fixed_slots: list[str]
     interval_minutes: int
     max_posts_per_day: int
+    # Жёсткий пол интервала между публикациями (защита от спама/бана) — соблюдается
+    # на слое публикации, любой вызов publish_queued_post* его уважает.
+    min_interval_minutes: int = 180
+    # Случайный разброс времени публикации (±минут) — чтобы не постить робото-ровно.
+    jitter_minutes: int = 15
 
 
 @dataclass(frozen=True)
@@ -181,6 +203,13 @@ def update_config_section(path: Path | None, section: str, **fields) -> AppConfi
     return load_config(config_path)
 
 
+def _build_images_config(raw_images: dict) -> ImagesConfig:
+    raw = dict(raw_images)
+    uniquify_raw = raw.pop("uniquify", None)
+    uniquify = UniquifyConfig(**uniquify_raw) if uniquify_raw else UniquifyConfig()
+    return ImagesConfig(**raw, uniquify=uniquify)
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or CONFIG_PATH
     if not config_path.exists():
@@ -213,7 +242,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         filters=FiltersConfig(**raw["filters"]),
         scoring_weights=ScoringWeights(**raw["scoring"]["weights"]),
         rewrite=RewriteConfig(**raw["rewrite"]),
-        images=ImagesConfig(**raw["images"]),
+        images=_build_images_config(raw["images"]),
         watermark=WatermarkConfig(**raw["watermark"]),
         publishing=publishing,
         logging=LoggingConfig(**raw["logging"]),

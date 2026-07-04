@@ -13,11 +13,11 @@ def config_copy(tmp_path):
 
 
 def test_update_config_section_persists_and_reloads(config_copy):
-    updated = update_config_section(config_copy, "filters", min_score=60)
-    assert updated.filters.min_score == 60
+    updated = update_config_section(config_copy, "filters", min_score=40)
+    assert updated.filters.min_score == 40
 
-    reloaded = update_config_section(config_copy, "filters", min_score=80)
-    assert reloaded.filters.min_score == 80
+    reloaded = update_config_section(config_copy, "filters", min_score=60)
+    assert reloaded.filters.min_score == 60
 
 
 def test_update_config_section_rejects_invalid_value(config_copy):

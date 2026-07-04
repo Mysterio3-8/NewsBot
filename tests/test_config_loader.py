@@ -7,8 +7,8 @@ def test_load_config_returns_typed_config():
     config = load_config()
 
     assert config.app.name == "AI News Rewriter"
-    assert config.llm.model == "qwen2.5:7b"
-    assert config.filters.min_score == 75
+    assert config.llm.model == "llama-3.1-8b-instant"
+    assert config.filters.min_score == 55
 
 
 def test_load_config_missing_file_raises(tmp_path):
