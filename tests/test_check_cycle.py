@@ -111,6 +111,58 @@ async def test_run_check_cycle_processes_vk_sources_using_numeric_url(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_run_check_cycle_continues_when_vk_source_fetch_raises(tmp_path, monkeypatch):
+    """Регрессия: на проде забаненный VK_USER_TOKEN приводил к необработанному
+    исключению в fetch_recent_posts, которое рушило весь run_check_cycle — из-за
+    этого headless-цикл никогда не доходил до шага публикации (та идёт ПОСЛЕ
+    run_check_cycle в headless_service.cycle_job), и публикации молчали часами
+    при полной очереди. Один сломанный источник не должен рушить остальные."""
+    repo = make_repo(tmp_path)
+    repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    repo.create_source(type="vk", name="Группа", url="12345", priority=5)
+    config = FakeAppConfig()
+    client = Mock(spec=LLMClient)
+
+    tg_fetcher = Mock()
+    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[make_post("1")])
+    vk_fetcher = Mock()
+    vk_fetcher.fetch_recent_posts = Mock(side_effect=RuntimeError("[5] User authorization failed: user is blocked"))
+
+    import app.core.check_cycle as check_cycle_module
+
+    monkeypatch.setattr(check_cycle_module, "process_fetched_post", Mock(return_value=None))
+
+    # Не должно поднять исключение наружу — цикл должен доработать до конца.
+    await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=vk_fetcher)
+
+    tg_fetcher.fetch_recent_posts.assert_awaited_once()
+    check_cycle_module.process_fetched_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_check_cycle_continues_when_tg_source_fetch_raises(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    repo.create_source(type="tg", name="Сломанный", url="https://t.me/broken", priority=8)
+    repo.create_source(type="tg", name="Рабочий", url="https://t.me/ok", priority=5)
+    config = FakeAppConfig()
+    client = Mock(spec=LLMClient)
+
+    tg_fetcher = Mock()
+    tg_fetcher.fetch_recent_posts = AsyncMock(
+        side_effect=[RuntimeError("сеть недоступна"), [make_post("1")]]
+    )
+
+    import app.core.check_cycle as check_cycle_module
+
+    monkeypatch.setattr(check_cycle_module, "process_fetched_post", Mock(return_value=None))
+
+    await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
+
+    assert tg_fetcher.fetch_recent_posts.await_count == 2
+    check_cycle_module.process_fetched_post.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_run_check_cycle_continues_after_single_post_error(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
     repo.create_source(type="tg", name="Канал", url="https://t.me/x")

@@ -31,18 +31,31 @@ async def run_check_cycle(
         for source in repo.list_sources(source_type="tg"):
             if not source.enabled:
                 continue
-            posts = await tg_fetcher.fetch_recent_posts(
-                source.url, max_age_hours=config.monitoring.max_post_age_hours
-            )
+            try:
+                posts = await tg_fetcher.fetch_recent_posts(
+                    source.url, max_age_hours=config.monitoring.max_post_age_hours
+                )
+            except Exception:
+                # Один сломанный источник (напр. забаненный VK_USER_TOKEN) не должен
+                # рушить весь цикл — иначе публикация вообще не дошла бы до своего шага,
+                # который в headless_service идёт ПОСЛЕ run_check_cycle в той же корутине
+                # (обнаружено на проде: 6+ часов без публикаций при полной очереди —
+                # каждый цикл падал на VK-фетче и никогда не доходил до pick_next_post).
+                logger.exception("Не удалось получить посты из источника %s", source.name)
+                continue
             _process_posts(repo, source, posts, llm_client, config, image_providers)
 
     if vk_fetcher is not None:
         for source in repo.list_sources(source_type="vk"):
             if not source.enabled:
                 continue
-            posts = vk_fetcher.fetch_recent_posts(
-                int(source.url), max_age_hours=config.monitoring.max_post_age_hours
-            )
+            try:
+                posts = vk_fetcher.fetch_recent_posts(
+                    int(source.url), max_age_hours=config.monitoring.max_post_age_hours
+                )
+            except Exception:
+                logger.exception("Не удалось получить посты из источника %s", source.name)
+                continue
             _process_posts(repo, source, posts, llm_client, config, image_providers)
 
 
