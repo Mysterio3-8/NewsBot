@@ -1,10 +1,17 @@
-"""24/7 headless-сервис: периодическая проверка источников + автопубликация
-(раздел 19.2 SPEC.md).
+"""24/7 headless-сервис (раздел 19.2 SPEC.md).
+
+Автономный режим: каждые `check_interval_minutes` один цикл — проверка источников →
+обработка → немедленная публикация одного лучшего поста сразу в Telegram и VK (с
+небольшой случайной паузой между сетями). Реальный темп публикации держит
+`publishing.schedule.min_interval_minutes`/`max_posts_per_day` (rate_guard) — по
+умолчанию 12 постов в сутки, по одному примерно каждые 2 часа, без пачки.
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+import random
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -17,76 +24,165 @@ from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
-from app.core.scheduler import build_triggers, pick_next_post_to_publish
+from app.core.publishing.vk_publisher import VKPublisher
+from app.core.publishing.vk_queue_service import publish_queued_post_vk
+from app.core.scheduler import pick_next_post_to_publish
 from app.db.repository import Repository
-from app.factories import build_telegram_fetcher, build_telegram_publisher, build_vk_fetcher
+from app.factories import (
+    build_image_providers,
+    build_telegram_fetcher,
+    build_telegram_publisher,
+    build_vk_fetcher,
+    build_vk_publisher,
+)
 
 logger = logging.getLogger("app")
 
 
-def build_check_job(
+def build_cycle_job(
     repo: Repository,
     config: AppConfig,
     llm_client: LLMClient,
+    *,
     tg_fetcher: TelegramFetcher | None,
     vk_fetcher: VKFetcher | None,
+    tg_publisher: TelegramPublisher | None,
+    vk_publisher: VKPublisher | None,
 ):
-    async def check_job() -> None:
-        await run_check_cycle(
-            repo, config, llm_client, tg_fetcher=tg_fetcher, vk_fetcher=vk_fetcher
-        )
-
-    return check_job
-
-
-def build_publish_job(repo: Repository, config: AppConfig, publisher: TelegramPublisher | None):
+    """Один автономный цикл: собрать свежие посты → опубликовать один лучший в обе сети."""
+    image_providers = build_image_providers()
     footer_links = build_footer_links_from_config(config.footer)
 
-    async def publish_job() -> None:
-        if publisher is None:
-            return
+    async def cycle_job() -> None:
+        await run_check_cycle(
+            repo,
+            config,
+            llm_client,
+            tg_fetcher=tg_fetcher,
+            vk_fetcher=vk_fetcher,
+            image_providers=image_providers,
+        )
+
         post = pick_next_post_to_publish(
             repo,
             max_posts_per_day=config.publishing.schedule.max_posts_per_day,
             important_score_threshold=config.filters.important_score_threshold,
         )
         if post is None:
+            logger.info("Нет постов к публикации в этом цикле")
             return
-        await publish_queued_post(
+
+        await _publish_to_all(
             repo,
-            publisher,
             post_id=post.id,
-            chat_id=config.publishing.telegram.destination,
+            config=config,
+            tg_publisher=tg_publisher,
+            vk_publisher=vk_publisher,
             footer_links=footer_links,
         )
 
-    return publish_job
+    return cycle_job
 
 
-async def run_forever(repo: Repository, config: AppConfig, llm_client: LLMClient) -> None:
+async def _publish_to_all(
+    repo: Repository,
+    *,
+    post_id: int,
+    config: AppConfig,
+    tg_publisher: TelegramPublisher | None,
+    vk_publisher: VKPublisher | None,
+    footer_links,
+) -> None:
+    """Публикует в обе сети. Статус поста ('published'/'failed') ставит publish_queued_post*,
+    поэтому в БД он опубликован, если прошла хотя бы одна сеть — этого достаточно, чтобы
+    не публиковать его снова в следующем цикле."""
+    schedule = config.publishing.schedule
+    if tg_publisher is not None and config.publishing.telegram.enabled:
+        try:
+            await publish_queued_post(
+                repo,
+                tg_publisher,
+                post_id=post_id,
+                chat_id=config.publishing.telegram.destination,
+                footer_links=footer_links,
+                max_posts_per_day=schedule.max_posts_per_day,
+                min_interval_minutes=schedule.min_interval_minutes,
+                include_hashtags=config.rewrite.include_hashtags,
+            )
+        except Exception:
+            logger.exception("Публикация в Telegram не удалась для поста %d", post_id)
+
+    if vk_publisher is not None and config.publishing.vk.enabled:
+        # Небольшая случайная пауза перед второй сетью — чтобы TG и VK не публиковались
+        # день в день секунда в секунду (антибан: не выглядеть роботом).
+        delay_seconds = random.uniform(60, 300)
+        logger.info("Пауза %.0f сек перед публикацией в VK", delay_seconds)
+        await asyncio.sleep(delay_seconds)
+        try:
+            publish_queued_post_vk(
+                repo,
+                vk_publisher,
+                post_id=post_id,
+                group_id=int(config.publishing.vk.destination),
+                footer_links=footer_links,
+                max_posts_per_day=schedule.max_posts_per_day,
+                min_interval_minutes=schedule.min_interval_minutes,
+                include_hashtags=config.rewrite.include_hashtags,
+            )
+        except Exception:
+            logger.exception("Публикация в VK не удалась для поста %d", post_id)
+
+
+async def run_forever(
+    repo: Repository,
+    config: AppConfig,
+    llm_client: LLMClient,
+    *,
+    stop_event: asyncio.Event | None = None,
+) -> None:
     tg_fetcher = build_telegram_fetcher()
     vk_fetcher = build_vk_fetcher()
     tg_publisher = build_telegram_publisher(config)
+    vk_publisher = build_vk_publisher(config)
 
     if tg_fetcher is None and vk_fetcher is None:
         logger.warning(
             "Ни TG_API_ID/TG_API_HASH, ни VK_USER_TOKEN не заданы — мониторинг источников не запущен"
         )
-    if tg_publisher is None:
-        logger.warning("TG_BOT_TOKEN не задан — автопубликация недоступна")
+    if tg_publisher is None and vk_publisher is None:
+        logger.warning("Ни TG_BOT_TOKEN, ни VK_GROUP_TOKEN не заданы — автопубликация недоступна")
 
     scheduler = AsyncIOScheduler()
+    # jitter — случайный разброс момента запуска (±jitter_minutes), чтобы публикации
+    # не выходили робото-ровно в HH:00 и меньше походили на бота (антибан).
+    jitter_seconds = config.publishing.schedule.jitter_minutes * 60
     scheduler.add_job(
-        build_check_job(repo, config, llm_client, tg_fetcher, vk_fetcher),
-        IntervalTrigger(minutes=config.monitoring.check_interval_minutes),
+        build_cycle_job(
+            repo,
+            config,
+            llm_client,
+            tg_fetcher=tg_fetcher,
+            vk_fetcher=vk_fetcher,
+            tg_publisher=tg_publisher,
+            vk_publisher=vk_publisher,
+        ),
+        IntervalTrigger(minutes=config.monitoring.check_interval_minutes, jitter=jitter_seconds),
+        # Без next_run_time IntervalTrigger ждёт первый полный интервал (до 4 часов)
+        # прежде чем сделать хоть что-то — при нажатии "Старт" пользователь ждёт
+        # первую проверку сразу, а не через несколько часов. Антиспам-стопор
+        # (rate_guard) всё равно проверяется внутри publish_queued_post*, так что
+        # немедленный первый цикл не обходит никакие ограничения на публикацию.
+        next_run_time=datetime.datetime.now(),
     )
-    publish_job = build_publish_job(repo, config, tg_publisher)
-    for trigger in build_triggers(config.publishing.schedule):
-        scheduler.add_job(publish_job, trigger)
 
     scheduler.start()
     logger.info(
-        "Планировщик запущен: проверка источников каждые %d мин",
+        "Автономный режим запущен: цикл (проверка + публикация) каждые %d мин",
         config.monitoring.check_interval_minutes,
     )
-    await asyncio.Event().wait()  # работает вечно, пока процесс не остановят
+    try:
+        # stop_event позволяет веб-лаунчеру (app/web_launcher.py) остановить цикл
+        # кнопкой "Стоп" — без него сервис работал бы вечно, пока не убьют процесс.
+        await (stop_event or asyncio.Event()).wait()
+    finally:
+        scheduler.shutdown(wait=False)

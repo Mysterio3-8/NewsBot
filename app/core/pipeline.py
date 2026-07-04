@@ -3,11 +3,13 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
-from app.config.loader import FiltersConfig, RewriteConfig, ScoringWeights
+from app.config.loader import FiltersConfig, ImagesConfig, RewriteConfig, ScoringWeights, WatermarkConfig
 from app.core.filtering.deduplication import compute_simhash, find_similar_hash
 from app.core.filtering.rules import (
     find_blacklisted_word,
@@ -15,13 +17,20 @@ from app.core.filtering.rules import (
     is_structural_non_news,
 )
 from app.core.filtering.scoring import compute_score
+from app.core.images.image_pipeline import prepare_images_for_post
+from app.core.images.providers.base import ImageProvider
+from app.core.images.providers.source_provider import SourceImageProvider
+from app.core.images.watermark import Watermarker, WatermarkError
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
 from app.core.llm.headline_generator import generate_headlines
+from app.core.llm.image_query_generator import generate_image_query
 from app.core.llm.rewriter import rewrite_post
 from app.core.monitoring.models import FetchedPost
+from app.core.video.watermark import VideoWatermarker, VideoWatermarkError
 from app.db.models import ProcessedPost, RejectedPost, Source
 from app.db.repository import Repository
+from app.paths import OUTPUT_DIR
 
 logger = logging.getLogger("monitoring")
 
@@ -42,8 +51,13 @@ def process_fetched_post(
     scoring_weights: ScoringWeights,
     rewrite_config: RewriteConfig,
     max_post_age_hours: float,
+    images_config: ImagesConfig | None = None,
+    watermark_config: WatermarkConfig | None = None,
+    image_providers: dict[str, ImageProvider] | None = None,
 ) -> ProcessingOutcome | None:
-    """None означает "пост уже видели раньше — пропускаем без записи в БД"."""
+    """None означает "пост уже видели раньше — пропускаем без записи в БД".
+    images_config/watermark_config/image_providers опциональны — без них пост
+    обрабатывается как раньше, но без картинок (обратная совместимость для тестов)."""
     if post.external_id in repo.get_existing_external_ids(source.id):
         return None
 
@@ -56,6 +70,8 @@ def process_fetched_post(
         raw_text=post.text,
         content_hash=content_hash,
         fetched_at=post.published_at,
+        media=json.dumps(post.media_urls) if post.media_urls else None,
+        video_path=post.video_path,
     )
 
     reason = _check_local_filters(post, filters, content_hash, recent_hashes)
@@ -95,12 +111,37 @@ def process_fetched_post(
         )
 
     rewritten_text = rewrite_post(
-        llm_client, text=post.text, source=source.name, style=rewrite_config.style
+        llm_client,
+        text=post.text,
+        source=source.name,
+        style=rewrite_config.style,
+        max_length=rewrite_config.max_length_chars,
+        include_hashtags=rewrite_config.include_hashtags,
     )
     headlines = generate_headlines(
-        llm_client, text=rewritten_text, count=rewrite_config.headline_variants
+        llm_client,
+        text=rewritten_text,
+        style=rewrite_config.style,
+        count=rewrite_config.headline_variants,
     )
     headline = headlines[0] if headlines else None
+
+    image_paths = _prepare_images(
+        llm_client,
+        raw_post_id=raw_post.id,
+        post_media_urls=post.media_urls,
+        rewritten_text=rewritten_text,
+        source_name=source.name,
+        images_config=images_config,
+        watermark_config=watermark_config,
+        image_providers=image_providers,
+    )
+    video_path = _prepare_video(
+        raw_post_id=raw_post.id,
+        post_video_path=post.video_path,
+        watermark_config=watermark_config,
+        images_config=images_config,
+    )
 
     processed = repo.create_processed_post(
         raw_post_id=raw_post.id,
@@ -108,9 +149,90 @@ def process_fetched_post(
         category=classification.category,
         rewritten_text=rewritten_text,
         headline=headline,
+        image_paths=image_paths,
+        video_path=video_path,
         status="queued",
     )
     return ProcessingOutcome(accepted=processed, rejected=None)
+
+
+def _prepare_images(
+    llm_client: LLMClient,
+    *,
+    raw_post_id: int,
+    post_media_urls: list[str],
+    rewritten_text: str,
+    source_name: str,
+    images_config: ImagesConfig | None,
+    watermark_config: WatermarkConfig | None,
+    image_providers: dict[str, ImageProvider] | None,
+) -> list[str] | None:
+    """Своё фото поста (SourceImageProvider) в приоритете — если его нет, для стока
+    нужен поисковый запрос (отдельный LLM-вызов), генерируем только когда он реально
+    нужен, чтобы не тратить лимит Groq впустую."""
+    if images_config is None or watermark_config is None:
+        return None
+
+    providers: dict[str, ImageProvider] = dict(image_providers or {})
+    if post_media_urls:
+        providers["source"] = SourceImageProvider(post_media_urls)
+
+    if not any(name in providers for name in images_config.providers_order):
+        return None
+
+    query = "" if post_media_urls else _safe_image_query(llm_client, rewritten_text)
+
+    try:
+        watermarker = Watermarker(watermark_config, images_config.uniquify)
+        image_paths = prepare_images_for_post(
+            providers_order=images_config.providers_order,
+            providers=providers,
+            query=query,
+            count=images_config.count_per_post,
+            post_id=raw_post_id,
+            watermarker=watermarker,
+            target_aspect_ratio=images_config.target_aspect_ratio,
+            channel_name=source_name if watermark_config.channel_name_text else None,
+            raw_output_dir=OUTPUT_DIR / "raw" / str(raw_post_id),
+        )
+    except WatermarkError as error:
+        logger.warning("Watermark не удался для raw_post %d: %s", raw_post_id, error)
+        return None
+
+    return [str(p) for p in image_paths] or None
+
+
+def _prepare_video(
+    *,
+    raw_post_id: int,
+    post_video_path: str | None,
+    watermark_config: WatermarkConfig | None,
+    images_config: ImagesConfig | None,
+) -> str | None:
+    """Своё видео поста — watermark + встроенная уникализация через ffmpeg
+    (app/core/video/watermark.py), в отличие от фото не участвует в сток-фолбэке —
+    сток-видео не подключено. Уникализация видео управляется тем же тумблером
+    images_config.uniquify.enabled, что и уникализация фото — единая настройка проекта."""
+    if not post_video_path or watermark_config is None:
+        return None
+
+    uniquify_enabled = images_config is not None and images_config.uniquify.enabled
+
+    try:
+        watermarker = VideoWatermarker(watermark_config, uniquify_enabled=uniquify_enabled)
+        output_path = watermarker.apply(Path(post_video_path), post_id=raw_post_id)
+    except VideoWatermarkError as error:
+        logger.warning("Video watermark не удался для raw_post %d: %s", raw_post_id, error)
+        return None
+
+    return str(output_path)
+
+
+def _safe_image_query(llm_client: LLMClient, rewritten_text: str) -> str:
+    try:
+        return generate_image_query(llm_client, text=rewritten_text)
+    except LLMUnavailableError:
+        return ""
 
 
 def _check_local_filters(

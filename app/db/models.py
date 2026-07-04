@@ -40,6 +40,7 @@ class RawPost(Base):
     external_id: Mapped[str] = mapped_column(String(255))
     raw_text: Mapped[str] = mapped_column(Text)
     media: Mapped[str | None] = mapped_column(Text, nullable=True)
+    video_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # локальный путь к скачанному видео
     content_hash: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fetched_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
@@ -59,6 +60,8 @@ class ProcessedPost(Base):
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     rewritten_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     headline: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_paths: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-список путей
+    video_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # путь к видео с watermark
     status: Mapped[str] = mapped_column(String(50), default="new")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow

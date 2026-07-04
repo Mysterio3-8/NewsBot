@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>AI News Rewriter</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 22px; }
+  .status { font-size: 18px; margin: 16px 0; }
+  .status.running { color: #1a7f37; }
+  .status.stopped { color: #a40e26; }
+  button { font-size: 18px; padding: 12px 28px; border-radius: 8px; border: none; cursor: pointer; margin-right: 8px; }
+  #start-btn { background: #1a7f37; color: white; }
+  #stop-btn { background: #a40e26; color: white; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  table { border-collapse: collapse; margin-top: 24px; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd; font-size: 14px; }
+  #message { margin-top: 12px; color: #555; }
+</style>
+</head>
+<body>
+  <h1>AI News Rewriter</h1>
+  <div class="status" id="status">Загрузка статуса...</div>
+  <div>
+    <button id="start-btn" onclick="callAction('/start')">Старт</button>
+    <button id="stop-btn" onclick="callAction('/stop')">Стоп</button>
+  </div>
+  <div id="message"></div>
+
+  <h2>Последние публикации (время московское)</h2>
+  <table id="recent-table">
+    <thead><tr><th>Когда опубликовано</th><th>Заголовок</th></tr></thead>
+    <tbody id="recent-body"></tbody>
+  </table>
+
+  <script>
+    async function refreshStatus() {
+      const response = await fetch('/status');
+      const data = await response.json();
+
+      const statusEl = document.getElementById('status');
+      if (data.running) {
+        statusEl.textContent = 'Запущено' + (data.started_at ? ' — с ' + data.started_at : '');
+        statusEl.className = 'status running';
+      } else {
+        statusEl.textContent = 'Остановлено';
+        statusEl.className = 'status stopped';
+      }
+      document.getElementById('start-btn').disabled = data.running;
+      document.getElementById('stop-btn').disabled = !data.running;
+
+      const body = document.getElementById('recent-body');
+      body.innerHTML = '';
+      for (const post of data.recent_published) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${post.published_at}</td><td>${post.headline || '(без заголовка)'}</td>`;
+        body.appendChild(row);
+      }
+    }
+
+    async function callAction(path) {
+      document.getElementById('message').textContent = '...';
+      const response = await fetch(path, { method: 'POST' });
+      const data = await response.json();
+      document.getElementById('message').textContent = data.message || '';
+      await refreshStatus();
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 5000);
+  </script>
+</body>
+</html>

@@ -33,6 +33,25 @@ def test_vk_post_to_fetched_post_detects_media():
     assert post.has_media is True
 
 
+def test_vk_post_to_fetched_post_extracts_largest_photo_url():
+    attachment = {
+        "type": "photo",
+        "photo": {
+            "sizes": [
+                {"type": "m", "url": "https://vk.com/small.jpg", "width": 130, "height": 87},
+                {"type": "x", "url": "https://vk.com/large.jpg", "width": 807, "height": 540},
+            ]
+        },
+    }
+    post = vk_post_to_fetched_post(make_item(attachments=[attachment]))
+    assert post.media_urls == ["https://vk.com/large.jpg"]
+
+
+def test_vk_post_to_fetched_post_no_media_urls_when_no_photo_attachments():
+    post = vk_post_to_fetched_post(make_item(attachments=[{"type": "poll"}]))
+    assert post.media_urls == []
+
+
 def test_vk_post_to_fetched_post_detects_ad():
     post = vk_post_to_fetched_post(make_item(marked_as_ads=1))
     assert post.post_type == "ad"

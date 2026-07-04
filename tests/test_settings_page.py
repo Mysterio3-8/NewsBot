@@ -31,7 +31,7 @@ def test_bind_config_populates_filters_tab(qapp, config_copy):
 
     page.bind_config(config, config_copy)
 
-    assert page.filters_tab.min_score_input.value() == 75
+    assert page.filters_tab.min_score_input.value() == 55
     assert "скидка" in page.filters_tab.stop_words_input.toPlainText()
 
 
@@ -68,11 +68,69 @@ def test_save_filters_shows_warning_when_config_validation_fails(qapp, config_co
     mock_warning.assert_called_once()
 
 
-def test_read_only_tabs_show_current_values(qapp, config_copy):
+def test_general_tab_populates_and_saves(qapp, config_copy):
     config = load_config(config_copy)
     page = SettingsPage()
-
     page.bind_config(config, config_copy)
 
-    assert page.ai_tab._layout.rowCount() == 4
-    assert page.publishing_tab._layout.rowCount() == 4
+    assert page.general_tab.name_input.text() == "AI News Rewriter"
+
+    page.general_tab.name_input.setText("My News Bot")
+    with patch("app.ui.pages.settings_page.QMessageBox.information"):
+        page.general_tab._on_save()
+
+    assert load_config(config_copy).app.name == "My News Bot"
+
+
+def test_ai_tab_populates_and_saves(qapp, config_copy):
+    config = load_config(config_copy)
+    page = SettingsPage()
+    page.bind_config(config, config_copy)
+
+    assert page.ai_tab.provider_input.currentText() == "groq"
+    assert page.ai_tab.model_input.text() == "llama-3.1-8b-instant"
+    assert page.ai_tab.api_key_env_input.text() == "GROQ_API_KEY"
+
+    page.ai_tab.model_input.setText("meta-llama/llama-3.3-70b-instruct:free")
+    page.ai_tab.provider_input.setCurrentText("openrouter")
+    page.ai_tab.temperature_input.setValue(0.5)
+    with patch("app.ui.pages.settings_page.QMessageBox.information"):
+        page.ai_tab._on_save()
+
+    reloaded = load_config(config_copy)
+    assert reloaded.llm.model == "meta-llama/llama-3.3-70b-instruct:free"
+    assert reloaded.llm.provider == "openrouter"
+    assert reloaded.llm.temperature == 0.5
+
+
+def test_publishing_tab_populates_and_saves(qapp, config_copy):
+    config = load_config(config_copy)
+    page = SettingsPage()
+    page.bind_config(config, config_copy)
+
+    assert page.publishing_tab.telegram_chat_id_input.text() == "@NewsThreeWord"
+    assert page.publishing_tab.vk_group_id_input.value() == 233689032
+
+    page.publishing_tab.telegram_chat_id_input.setText("@OtherChannel")
+    page.publishing_tab.vk_group_id_input.setValue(111)
+    with patch("app.ui.pages.settings_page.QMessageBox.information"):
+        page.publishing_tab._on_save()
+
+    reloaded = load_config(config_copy)
+    assert reloaded.publishing.telegram.destination == "@OtherChannel"
+    assert reloaded.publishing.vk.destination == "111"
+    assert reloaded.publishing.telegram.token_env == "TG_BOT_TOKEN"  # сохранился неизменным
+
+
+def test_logs_tab_populates_and_saves(qapp, config_copy):
+    config = load_config(config_copy)
+    page = SettingsPage()
+    page.bind_config(config, config_copy)
+
+    assert page.logs_tab.level_input.currentText() == "INFO"
+
+    page.logs_tab.level_input.setCurrentText("DEBUG")
+    with patch("app.ui.pages.settings_page.QMessageBox.information"):
+        page.logs_tab._on_save()
+
+    assert load_config(config_copy).logging.level == "DEBUG"

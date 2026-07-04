@@ -1,4 +1,5 @@
 import datetime
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -47,3 +48,51 @@ def test_start_stop_buttons_toggle_status(qapp):
     page.stop_button.click()
     assert page.status_label.text() == "Статус: остановлено"
     assert page.start_button.isEnabled() is True
+
+
+def test_check_now_button_calls_bound_callback_and_refreshes(qapp, tmp_path):
+    repo = make_repo(tmp_path)
+    page = HomePage()
+    page.bind_repository(repo)
+    callback = AsyncMock()
+    page.bind_check_now(callback)
+
+    page.check_now_button.click()
+
+    callback.assert_awaited_once()
+    assert "Последняя проверка: —" != page.last_check_label.text()
+
+
+def test_check_now_button_warns_when_not_bound(qapp):
+    page = HomePage()
+
+    with patch("app.ui.pages.home_page.QMessageBox.warning") as mock_warning:
+        page.check_now_button.click()
+
+    mock_warning.assert_called_once()
+
+
+def test_check_now_button_shows_warning_on_error(qapp, tmp_path):
+    repo = make_repo(tmp_path)
+    page = HomePage()
+    page.bind_repository(repo)
+    page.bind_check_now(AsyncMock(side_effect=RuntimeError("сбой сети")))
+
+    with patch("app.ui.pages.home_page.QMessageBox.warning") as mock_warning:
+        page.check_now_button.click()
+
+    mock_warning.assert_called_once()
+    assert page.check_now_button.isEnabled() is True
+
+
+def test_start_stop_buttons_call_bound_scheduler_controls(qapp):
+    page = HomePage()
+    on_start = Mock()
+    on_stop = Mock()
+    page.bind_scheduler_controls(on_start=on_start, on_stop=on_stop)
+
+    page.start_button.click()
+    on_start.assert_called_once()
+
+    page.stop_button.click()
+    on_stop.assert_called_once()

@@ -17,6 +17,8 @@ def make_message(**overrides):
         poll=None,
         pinned=False,
         action=None,
+        photo=None,
+        video=None,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -32,6 +34,24 @@ def test_message_to_post_maps_regular_text_message():
     assert post.post_type == "text"
     assert post.views == 1000
     assert post.has_media is False
+    assert post.media_urls == []
+
+
+def test_message_to_post_passes_through_downloaded_media_paths():
+    message = make_message(media=object(), photo=object())
+    post = message_to_post(message, media_paths=["output/tg_raw_media/1.jpg"])
+    assert post.media_urls == ["output/tg_raw_media/1.jpg"]
+
+
+def test_message_to_post_passes_through_downloaded_video_path():
+    message = make_message(media=object(), video=object())
+    post = message_to_post(message, video_path="output/tg_raw_media/1.mp4")
+    assert post.video_path == "output/tg_raw_media/1.mp4"
+
+
+def test_message_to_post_defaults_video_path_to_none():
+    message = make_message()
+    assert message_to_post(message).video_path is None
 
 
 def test_message_to_post_detects_media():
@@ -60,6 +80,80 @@ def test_message_to_post_detects_service_message():
 def test_message_to_post_defaults_views_to_zero_when_none():
     message = make_message(views=None)
     assert message_to_post(message).views == 0
+
+
+@pytest.mark.asyncio
+async def test_download_photo_returns_empty_when_no_photo():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock()
+
+    result = await fetcher._download_photo(make_message(photo=None))
+
+    assert result == []
+    fetcher._client.download_media.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_download_photo_downloads_and_returns_path_when_photo_present():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock(return_value="output/tg_raw_media/42.jpg")
+    message = make_message(photo=object())
+
+    result = await fetcher._download_photo(message)
+
+    assert result == ["output/tg_raw_media/42.jpg"]
+    fetcher._client.download_media.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_download_photo_returns_empty_on_download_error():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock(side_effect=Exception("сбой сети"))
+    message = make_message(photo=object())
+
+    result = await fetcher._download_photo(message)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_download_video_returns_none_when_no_video():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock()
+
+    result = await fetcher._download_video(make_message(video=None))
+
+    assert result is None
+    fetcher._client.download_media.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_download_video_downloads_and_returns_path_when_video_present():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock(return_value="output/tg_raw_media/42.mp4")
+    message = make_message(video=object())
+
+    result = await fetcher._download_video(message)
+
+    assert result == "output/tg_raw_media/42.mp4"
+    fetcher._client.download_media.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_download_video_returns_none_on_download_error():
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.download_media = AsyncMock(side_effect=Exception("сбой сети"))
+    message = make_message(video=object())
+
+    result = await fetcher._download_video(message)
+
+    assert result is None
 
 
 @pytest.mark.asyncio

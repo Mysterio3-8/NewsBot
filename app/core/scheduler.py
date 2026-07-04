@@ -56,13 +56,28 @@ def pick_next_post_to_publish(
         return None
 
     if important_score_threshold is None:
-        return queued_posts[0]
+        return _prefer_post_with_image(queued_posts)
 
     wants_important = published_today % 2 == 0
     tiered = [
         post for post in queued_posts if (post.score >= important_score_threshold) == wants_important
     ]
-    return tiered[0] if tiered else queued_posts[0]
+    return _prefer_post_with_image(tiered) if tiered else _prefer_post_with_image(queued_posts)
+
+
+def _has_image(post: ProcessedPost) -> bool:
+    return bool(post.image_paths) and post.image_paths not in ("[]", "null")
+
+
+def _prefer_post_with_image(candidates: list[ProcessedPost]) -> ProcessedPost:
+    """Пользователь требует медиа на каждом опубликованном посте: среди постов
+    одного тира (по важности) выбираем лучший по score СРЕДИ ИМЕЮЩИХ картинку,
+    а не просто самый высокий score. Падаем на лучший без картинки только если
+    в тире вообще нет постов с изображением."""
+    for post in candidates:
+        if _has_image(post):
+            return post
+    return candidates[0]
 
 
 class PublishingScheduler:

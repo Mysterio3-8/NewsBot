@@ -18,7 +18,21 @@ def vk_post_to_fetched_post(item: dict[str, Any]) -> FetchedPost:
         views=item.get("views", {}).get("count", 0),
         published_at=datetime.fromtimestamp(item["date"], tz=timezone.utc),
         has_media=bool(item.get("attachments")),
+        media_urls=_extract_photo_urls(item),
     )
+
+
+def _extract_photo_urls(item: dict[str, Any]) -> list[str]:
+    urls = []
+    for attachment in item.get("attachments", []):
+        if attachment.get("type") != "photo":
+            continue
+        sizes = attachment.get("photo", {}).get("sizes", [])
+        if not sizes:
+            continue
+        largest = max(sizes, key=lambda s: s.get("width", 0) * s.get("height", 0))
+        urls.append(largest["url"])
+    return urls
 
 
 def _classify_vk_post_type(item: dict[str, Any]) -> str:

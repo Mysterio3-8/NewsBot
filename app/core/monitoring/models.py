@@ -1,7 +1,7 @@
 """Общий DTO для постов, полученных из любого источника (TG/VK)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -13,3 +13,5 @@ class FetchedPost:
     views: int
     published_at: datetime
     has_media: bool
+    media_urls: list[str] = field(default_factory=list)
+    video_path: str | None = None  # локальный путь к скачанному видео (см. video-pipeline)

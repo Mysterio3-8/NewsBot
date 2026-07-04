@@ -7,13 +7,18 @@ from app.core.images.providers.base import ImageResult
 
 
 class SourceImageProvider:
-    """Оборачивает уже скачанные из поста файлы в единый интерфейс ImageProvider."""
+    """Оборачивает фото, уже присланные источником, в единый ImageProvider.
+    VK отдаёт прямые HTTP-URL (resolve_to_local_file их скачивает), а Telegram —
+    уже скачанные локальные пути (Telethon сам качает через сессию, URL нет)."""
 
-    def __init__(self, post_image_paths: list[Path]) -> None:
-        self._image_paths = post_image_paths
+    def __init__(self, post_images: list[str]) -> None:
+        self._images = post_images
 
     def search(self, query: str, count: int) -> list[ImageResult]:
-        return [
-            ImageResult(source_provider="source", local_path=path)
-            for path in self._image_paths[:count]
-        ]
+        return [self._to_result(item) for item in self._images[:count]]
+
+    @staticmethod
+    def _to_result(item: str) -> ImageResult:
+        if item.startswith("http://") or item.startswith("https://"):
+            return ImageResult(source_provider="source", url=item)
+        return ImageResult(source_provider="source", local_path=Path(item))

@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 
 from app.config.loader import AppConfig
+from app.core.images.providers.base import ImageProvider
 from app.core.llm.client import LLMClient
 from app.core.monitoring.models import FetchedPost
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
@@ -24,6 +25,7 @@ async def run_check_cycle(
     *,
     tg_fetcher: TelegramFetcher | None = None,
     vk_fetcher: VKFetcher | None = None,
+    image_providers: dict[str, ImageProvider] | None = None,
 ) -> None:
     if tg_fetcher is not None:
         for source in repo.list_sources(source_type="tg"):
@@ -32,7 +34,7 @@ async def run_check_cycle(
             posts = await tg_fetcher.fetch_recent_posts(
                 source.url, max_age_hours=config.monitoring.max_post_age_hours
             )
-            _process_posts(repo, source, posts, llm_client, config)
+            _process_posts(repo, source, posts, llm_client, config, image_providers)
 
     if vk_fetcher is not None:
         for source in repo.list_sources(source_type="vk"):
@@ -41,7 +43,7 @@ async def run_check_cycle(
             posts = vk_fetcher.fetch_recent_posts(
                 int(source.url), max_age_hours=config.monitoring.max_post_age_hours
             )
-            _process_posts(repo, source, posts, llm_client, config)
+            _process_posts(repo, source, posts, llm_client, config, image_providers)
 
 
 def _process_posts(
@@ -50,6 +52,7 @@ def _process_posts(
     posts: list[FetchedPost],
     llm_client: LLMClient,
     config: AppConfig,
+    image_providers: dict[str, ImageProvider] | None,
 ) -> None:
     for post in posts:
         try:
@@ -62,6 +65,9 @@ def _process_posts(
                 scoring_weights=config.scoring_weights,
                 rewrite_config=config.rewrite,
                 max_post_age_hours=config.monitoring.max_post_age_hours,
+                images_config=config.images,
+                watermark_config=config.watermark,
+                image_providers=image_providers,
             )
         except Exception:
             logger.exception(

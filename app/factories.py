@@ -4,6 +4,10 @@ from __future__ import annotations
 import os
 
 from app.config.loader import AppConfig
+from app.core.images.providers.base import ImageProvider
+from app.core.images.providers.pexels_provider import PexelsProvider
+from app.core.images.providers.pixabay_provider import PixabayProvider
+from app.core.images.providers.unsplash_provider import UnsplashProvider
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.telegram_publisher import TelegramPublisher
@@ -21,7 +25,11 @@ def build_vk_publisher(config: AppConfig) -> VKPublisher | None:
     group_token = os.environ.get(config.publishing.vk.token_env)
     if not group_token:
         return None
-    return VKPublisher(group_token)
+    # Опционально: личный токен админа группы ТОЛЬКО для загрузки фото/видео —
+    # group-токен не может (VK error 27, см. CLAUDE.md). wall.post всегда идёт через
+    # group_token. Не задан — best-effort продолжает публиковать текстом без вложения.
+    upload_token = os.environ.get("VK_PHOTO_UPLOAD_TOKEN")
+    return VKPublisher(group_token, upload_token=upload_token)
 
 
 def build_telegram_fetcher() -> TelegramFetcher | None:
@@ -38,3 +46,23 @@ def build_vk_fetcher() -> VKFetcher | None:
     if not user_token:
         return None
     return VKFetcher(user_token)
+
+
+def build_image_providers() -> dict[str, ImageProvider]:
+    """Только сток-провайдеры с заданным ключом — "source" (фото из самого поста)
+    собирается отдельно на каждый пост в pipeline.py, т.к. зависит от конкретного поста."""
+    providers: dict[str, ImageProvider] = {}
+
+    unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY")
+    if unsplash_key:
+        providers["unsplash"] = UnsplashProvider(unsplash_key)
+
+    pexels_key = os.environ.get("PEXELS_API_KEY")
+    if pexels_key:
+        providers["pexels"] = PexelsProvider(pexels_key)
+
+    pixabay_key = os.environ.get("PIXABAY_API_KEY")
+    if pixabay_key:
+        providers["pixabay"] = PixabayProvider(pixabay_key)
+
+    return providers

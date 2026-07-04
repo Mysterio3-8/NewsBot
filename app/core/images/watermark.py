@@ -5,7 +5,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.config.loader import WatermarkConfig
+from app.config.loader import UniquifyConfig, WatermarkConfig
+from app.core.images.uniquifier import uniquify
 from app.paths import OUTPUT_DIR, PROJECT_ROOT
 
 ASPECT_RATIOS = {
@@ -14,7 +15,6 @@ ASPECT_RATIOS = {
     "16:9": (16, 9),
     "9:16": (9, 16),
 }
-LOGO_WIDTH_RATIO = 0.2  # логотип занимает 20% ширины итогового изображения
 
 
 class WatermarkError(Exception):
@@ -22,8 +22,11 @@ class WatermarkError(Exception):
 
 
 class Watermarker:
-    def __init__(self, config: WatermarkConfig) -> None:
+    def __init__(
+        self, config: WatermarkConfig, uniquify_config: UniquifyConfig | None = None
+    ) -> None:
         self._config = config
+        self._uniquify_config = uniquify_config or UniquifyConfig()
 
     def apply(
         self,
@@ -35,6 +38,7 @@ class Watermarker:
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
         image = crop_to_aspect_ratio(image, target_aspect_ratio)
+        image = uniquify(image, self._uniquify_config)
         image = self._overlay_logo(image)
 
         if self._config.channel_name_text and channel_name:
@@ -48,7 +52,7 @@ class Watermarker:
             raise WatermarkError(f"Логотип не найден: {logo_path}")
 
         logo = Image.open(logo_path).convert("RGBA")
-        logo = _resize_logo(logo, image.width)
+        logo = _resize_logo(logo, image.width, self._config.size_ratio)
         logo = _apply_opacity(logo, self._config.opacity)
 
         position = _compute_position(image.size, logo.size, self._config.position, self._config.margin_px)
@@ -88,8 +92,8 @@ def crop_to_aspect_ratio(image: Image.Image, ratio_key: str) -> Image.Image:
     return image.crop((0, top, image.width, top + new_height))
 
 
-def _resize_logo(logo: Image.Image, target_image_width: int) -> Image.Image:
-    logo_width = int(target_image_width * LOGO_WIDTH_RATIO)
+def _resize_logo(logo: Image.Image, target_image_width: int, size_ratio: float) -> Image.Image:
+    logo_width = int(target_image_width * size_ratio)
     logo_height = int(logo.height * (logo_width / logo.width))
     return logo.resize((logo_width, logo_height))
 

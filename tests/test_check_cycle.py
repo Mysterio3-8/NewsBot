@@ -30,6 +30,8 @@ class FakeAppConfig:
         )
         self.scoring_weights = WEIGHTS
         self.rewrite = RewriteConfig(style="viral", max_length_chars=900, headline_variants=3)
+        self.images = Mock()
+        self.watermark = Mock()
 
 
 def make_repo(tmp_path) -> Repository:

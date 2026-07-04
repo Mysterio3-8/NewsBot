@@ -117,6 +117,35 @@ def test_pick_next_post_alternates_important_and_regular_tiers(tmp_path):
     assert picked_4.id == regular_low
 
 
+def test_pick_next_post_prefers_post_with_image_over_higher_score_without_image(tmp_path):
+    """Пользователь требует медиа на КАЖДОМ опубликованном посте — среди постов
+    одного тира берём лучший по score среди тех, у кого есть картинка, а не
+    просто самый высокий score без картинки."""
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    raw_a = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
+    raw_b = repo.create_raw_post(source_id=source.id, external_id="2", raw_text="b")
+    repo.create_processed_post(raw_post_id=raw_a.id, score=95, status="queued")  # без картинки
+    with_image = repo.create_processed_post(
+        raw_post_id=raw_b.id, score=80, status="queued", image_paths=["output/images/1/photo.jpg"]
+    )
+
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12)
+
+    assert picked.id == with_image.id
+
+
+def test_pick_next_post_falls_back_to_no_image_when_none_have_images(tmp_path):
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
+    only_post = repo.create_processed_post(raw_post_id=raw.id, score=95, status="queued")
+
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12)
+
+    assert picked.id == only_post.id
+
+
 def test_pick_next_post_falls_back_when_tier_has_no_candidates(tmp_path):
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")

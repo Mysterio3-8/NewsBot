@@ -6,6 +6,7 @@ Bot API не подходит: он не может получить истор�
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,6 +16,14 @@ import socks
 from telethon import TelegramClient
 
 from app.core.monitoring.models import FetchedPost
+from app.paths import OUTPUT_DIR
+
+logger = logging.getLogger("monitoring")
+
+# Telegram не даёт прямых HTTP-URL на медиа (в отличие от VK) — только скачивание
+# через саму Telethon-сессию. Скачиваем сюда, дальше SourceImageProvider читает
+# как обычный local_path (та же цепочка watermark/уникализации, что и для VK-фото).
+TG_MEDIA_DIR = OUTPUT_DIR / "tg_raw_media"
 
 
 def detect_telethon_proxy() -> tuple[int, str, int] | None:
@@ -28,8 +37,12 @@ def detect_telethon_proxy() -> tuple[int, str, int] | None:
     return (socks.HTTP, parsed.hostname, parsed.port)
 
 
-def message_to_post(message: Any) -> FetchedPost:
-    """Преобразование Telethon Message в FetchedPost. Чистая функция — тестируется без сети."""
+def message_to_post(
+    message: Any, *, media_paths: list[str] | None = None, video_path: str | None = None
+) -> FetchedPost:
+    """Преобразование Telethon Message в FetchedPost. Чистая функция — тестируется без сети.
+    media_paths/video_path — уже скачанные локальные пути (см. TelegramFetcher._download_photo/
+    _download_video), передаются отдельно, т.к. скачивание асинхронное и требует клиента."""
     return FetchedPost(
         external_id=str(message.id),
         text=message.message or "",
@@ -37,6 +50,8 @@ def message_to_post(message: Any) -> FetchedPost:
         views=getattr(message, "views", None) or 0,
         published_at=message.date,
         has_media=getattr(message, "media", None) is not None,
+        media_urls=media_paths or [],
+        video_path=video_path,
     )
 
 
@@ -66,6 +81,35 @@ class TelegramFetcher:
             async for message in self._client.iter_messages(channel_url, limit=limit):
                 if message.date < cutoff:
                     break  # iter_messages отдаёт от новых к старым — дальше только старее
-                posts.append(message_to_post(message))
+                media_paths = await self._download_photo(message)
+                video_path = await self._download_video(message)
+                posts.append(
+                    message_to_post(message, media_paths=media_paths, video_path=video_path)
+                )
 
         return posts
+
+    async def _download_photo(self, message: Any) -> list[str]:
+        if message.photo is None:
+            return []
+        TG_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            path = await self._client.download_media(message, file=str(TG_MEDIA_DIR) + os.sep)
+        except Exception as error:
+            logger.warning("Не удалось скачать фото из TG-сообщения %d: %s", message.id, error)
+            return []
+        return [path] if path else []
+
+    async def _download_video(self, message: Any) -> str | None:
+        """Telethon download_media работает одинаково для фото и видео — отличается
+        только проверка типа медиа. Дальнейшая обработка (watermark, публикация)
+        для видео — отдельный пайплайн, см. app/core/video/."""
+        if message.video is None:
+            return None
+        TG_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            path = await self._client.download_media(message, file=str(TG_MEDIA_DIR) + os.sep)
+        except Exception as error:
+            logger.warning("Не удалось скачать видео из TG-сообщения %d: %s", message.id, error)
+            return None
+        return path

@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from app.core.images.providers.local_ai_provider import LocalAIImageProvider
@@ -8,12 +9,20 @@ from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.providers.unsplash_provider import UnsplashProvider
 
 
-def test_source_provider_returns_up_to_count_paths():
-    provider = SourceImageProvider(["a.jpg", "b.jpg", "c.jpg"])
+def test_source_provider_returns_up_to_count_urls():
+    provider = SourceImageProvider(["https://vk.com/a.jpg", "https://vk.com/b.jpg", "https://vk.com/c.jpg"])
     results = provider.search("query", count=2)
     assert len(results) == 2
     assert results[0].source_provider == "source"
-    assert results[0].local_path == "a.jpg"
+    assert results[0].url == "https://vk.com/a.jpg"
+
+
+def test_source_provider_treats_non_url_items_as_local_paths():
+    """TG-фото скачиваются локально (Telethon не даёт HTTP-URL), в отличие от VK."""
+    provider = SourceImageProvider(["output/tg_raw_media/photo1.jpg"])
+    results = provider.search("query", count=1)
+    assert results[0].url is None
+    assert results[0].local_path == Path("output/tg_raw_media/photo1.jpg")
 
 
 def test_unsplash_provider_maps_results():

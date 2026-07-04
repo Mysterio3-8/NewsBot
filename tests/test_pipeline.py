@@ -1,7 +1,11 @@
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock
 
-from app.config.loader import FiltersConfig, RewriteConfig, ScoringWeights
+from PIL import Image
+
+from app.config.loader import FiltersConfig, RewriteConfig, ScoringWeights, WatermarkConfig
 from app.core.llm.classifier import ClassificationError, ClassificationResult
 from app.core.llm.client import LLMClient
 from app.core.pipeline import process_fetched_post
@@ -92,6 +96,76 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
     assert outcome.accepted.headline == "Заголовок один"
     queued = repo.list_processed_posts(status="queued")
     assert len(queued) == 1
+
+
+def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):
+    """Реальный ffmpeg-вызов (не мок) — история проекта уже показала, что моки
+    пропускают баги, которые ловит только реальный внешний инструмент."""
+    import app.core.video.watermark as video_watermark_module
+
+    monkeypatch.setattr(video_watermark_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(video_watermark_module, "OUTPUT_DIR", tmp_path / "output")
+
+    (tmp_path / "assets").mkdir()
+    Image.new("RGBA", (200, 100), color=(255, 0, 0, 255)).save(tmp_path / "assets" / "logo.png")
+
+    video_path = tmp_path / "source.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=10",
+            "-pix_fmt", "yuv420p", str(video_path),
+        ],
+        check=True, capture_output=True,
+    )
+
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    client = Mock(spec=LLMClient)
+    client.load_prompt.side_effect = lambda name: f"<{name}>"
+
+    import app.core.pipeline as pipeline_module
+
+    original_classify = pipeline_module.classify_post
+    original_rewrite = pipeline_module.rewrite_post
+    original_headlines = pipeline_module.generate_headlines
+    pipeline_module.classify_post = Mock(
+        return_value=ClassificationResult(
+            is_news=True, category="политика", score=90, reasons=["важно"], reject_reason=None
+        )
+    )
+    pipeline_module.rewrite_post = Mock(return_value="Переписанный текст новости")
+    pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
+
+    watermark_config = WatermarkConfig(
+        logo_path="assets/logo.png",
+        position="top-right",
+        opacity=65,
+        margin_px=20,
+        channel_name_text=False,
+        size_ratio=0.2,
+    )
+
+    try:
+        outcome = process_fetched_post(
+            repo,
+            source,
+            make_post(video_path=str(video_path)),
+            llm_client=client,
+            filters=make_filters(),
+            scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG,
+            max_post_age_hours=24,
+            watermark_config=watermark_config,
+        )
+    finally:
+        pipeline_module.classify_post = original_classify
+        pipeline_module.rewrite_post = original_rewrite
+        pipeline_module.generate_headlines = original_headlines
+
+    assert outcome is not None
+    assert outcome.accepted is not None
+    assert outcome.accepted.video_path is not None
+    assert Path(outcome.accepted.video_path).exists()
 
 
 def test_process_fetched_post_skips_already_seen_external_id(tmp_path):

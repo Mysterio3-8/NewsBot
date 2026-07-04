@@ -2,15 +2,29 @@
 from __future__ import annotations
 
 import datetime
+import json
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, ProcessedPost, PostHistory, RawPost, RejectedPost, Setting, Source
 from app.paths import DATA_DIR
 
 DEFAULT_DB_PATH = DATA_DIR / "app.db"
+
+_UINT64_BOUNDARY = 1 << 63
+_UINT64_MODULUS = 1 << 64
+
+
+def _to_signed_64(value: int) -> int:
+    """SimHash отдаёт беззнаковое 64-битное число, а SQLite INTEGER — знаковый
+    64-битный (sqlite3 бросает OverflowError на значениях >= 2**63)."""
+    return value - _UINT64_MODULUS if value >= _UINT64_BOUNDARY else value
+
+
+def _from_signed_64(value: int) -> int:
+    return value + _UINT64_MODULUS if value < 0 else value
 
 
 def make_engine(db_path: Path | None = None):
@@ -20,7 +34,31 @@ def make_engine(db_path: Path | None = None):
 
 
 def init_db(engine) -> None:
+    """`create_all` создаёт только отсутствующие таблицы, не меняет существующие —
+    поэтому дополнительно доливаем колонки, добавленные в модели позже (лёгкая
+    миграция без Alembic, т.к. схема пока меняется нечасто).
+    """
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
+
+
+def _add_missing_columns(engine) -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    with engine.connect() as connection:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing_columns:
+                    continue
+                column_type = column.type.compile(engine.dialect)
+                connection.execute(
+                    text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {column_type}")
+                )
+        connection.commit()
 
 
 class Repository:
@@ -79,6 +117,7 @@ class Repository:
         external_id: str,
         raw_text: str,
         media: str | None = None,
+        video_path: str | None = None,
         content_hash: int | None = None,
         fetched_at: datetime.datetime | None = None,
     ) -> RawPost:
@@ -88,7 +127,8 @@ class Repository:
                 external_id=external_id,
                 raw_text=raw_text,
                 media=media,
-                content_hash=content_hash,
+                video_path=video_path,
+                content_hash=_to_signed_64(content_hash) if content_hash is not None else None,
                 fetched_at=fetched_at or datetime.datetime.utcnow(),
             )
             session.add(raw_post)
@@ -110,7 +150,7 @@ class Repository:
                 .limit(limit)
                 .all()
             )
-            return [row[0] for row in rows]
+            return [_from_signed_64(row[0]) for row in rows]
 
     def create_rejected_post(
         self, *, raw_post_id: int, reason: str, score: float = 0.0
@@ -130,6 +170,8 @@ class Repository:
         category: str | None = None,
         rewritten_text: str | None = None,
         headline: str | None = None,
+        image_paths: list[str] | None = None,
+        video_path: str | None = None,
         status: str = "queued",
     ) -> ProcessedPost:
         with self._session_factory() as session:
@@ -139,6 +181,8 @@ class Repository:
                 category=category,
                 rewritten_text=rewritten_text,
                 headline=headline,
+                image_paths=json.dumps(image_paths) if image_paths else None,
+                video_path=video_path,
                 status=status,
             )
             session.add(processed)
@@ -174,6 +218,16 @@ class Repository:
                 query = query.filter(ProcessedPost.status == status)
             return query.order_by(ProcessedPost.score.desc()).all()
 
+    def list_recent_published(self, limit: int = 10) -> list[ProcessedPost]:
+        with self._session_factory() as session:
+            return (
+                session.query(ProcessedPost)
+                .filter(ProcessedPost.status == "published")
+                .order_by(ProcessedPost.published_at.desc())
+                .limit(limit)
+                .all()
+            )
+
     def count_published_since(self, since: datetime.datetime) -> int:
         with self._session_factory() as session:
             return (
@@ -181,6 +235,19 @@ class Repository:
                 .filter(ProcessedPost.status == "published", ProcessedPost.published_at >= since)
                 .count()
             )
+
+    def get_last_published_at(self) -> datetime.datetime | None:
+        with self._session_factory() as session:
+            row = (
+                session.query(ProcessedPost.published_at)
+                .filter(
+                    ProcessedPost.status == "published",
+                    ProcessedPost.published_at.is_not(None),
+                )
+                .order_by(ProcessedPost.published_at.desc())
+                .first()
+            )
+            return row[0] if row else None
 
     def get_raw_post(self, raw_post_id: int) -> RawPost | None:
         with self._session_factory() as session:
