@@ -72,15 +72,28 @@ class TelegramFetcher:
         )
 
     async def fetch_recent_posts(
-        self, channel_url: str, *, max_age_hours: float, limit: int = 50
+        self,
+        channel_url: str,
+        *,
+        max_age_hours: float,
+        limit: int = 50,
+        known_external_ids: set[str] | None = None,
     ) -> list[FetchedPost]:
+        """known_external_ids — уже обработанные ID этого источника (см.
+        Repository.get_existing_external_ids). max_post_age_hours может достигать
+        7 дней при check_interval_minutes=10 — без этого фильтра одни и те же
+        сообщения скачивались бы заново на КАЖДОМ цикле проверки; на проде это
+        раздуло диск до 100% (один файл скачан 245 раз) прежде чем нашли причину."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        known_ids = known_external_ids or set()
         posts: list[FetchedPost] = []
 
         async with self._client:
             async for message in self._client.iter_messages(channel_url, limit=limit):
                 if message.date < cutoff:
                     break  # iter_messages отдаёт от новых к старым — дальше только старее
+                if str(message.id) in known_ids:
+                    continue
                 media_paths = await self._download_photo(message)
                 video_path = await self._download_video(message)
                 posts.append(

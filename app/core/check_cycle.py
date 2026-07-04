@@ -33,7 +33,9 @@ async def run_check_cycle(
                 continue
             try:
                 posts = await tg_fetcher.fetch_recent_posts(
-                    source.url, max_age_hours=config.monitoring.max_post_age_hours
+                    source.url,
+                    max_age_hours=config.monitoring.max_post_age_hours,
+                    known_external_ids=repo.get_existing_external_ids(source.id),
                 )
             except Exception:
                 # Один сломанный источник (напр. забаненный VK_USER_TOKEN) не должен

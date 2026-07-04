@@ -178,3 +178,33 @@ async def test_fetch_recent_posts_stops_at_cutoff():
     posts = await fetcher.fetch_recent_posts("https://t.me/test", max_age_hours=24)
 
     assert [p.external_id for p in posts] == ["3", "2"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_posts_skips_download_for_known_external_ids():
+    """Регрессия: без этого фильтра каждый цикл проверки (каждые 10 мин, окно до
+    7 дней) заново скачивал медиа уже известных сообщений — на проде один файл
+    скачался 245 раз и забил диск на 100% прежде чем нашли причину."""
+    now = datetime.now(timezone.utc)
+    messages = [
+        make_message(id=3, date=now, photo=object()),
+        make_message(id=2, date=now, photo=object()),  # уже известен
+    ]
+
+    async def fake_iter_messages(*args, **kwargs):
+        for message in messages:
+            yield message
+
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.iter_messages = fake_iter_messages
+    fetcher._client.download_media = AsyncMock(return_value="output/tg_raw_media/x.jpg")
+    fetcher._client.__aenter__ = AsyncMock(return_value=fetcher._client)
+    fetcher._client.__aexit__ = AsyncMock(return_value=False)
+
+    posts = await fetcher.fetch_recent_posts(
+        "https://t.me/test", max_age_hours=24, known_external_ids={"2"}
+    )
+
+    assert [p.external_id for p in posts] == ["3"]
+    fetcher._client.download_media.assert_awaited_once()  # только для сообщения id=3

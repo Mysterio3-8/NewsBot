@@ -71,7 +71,9 @@ async def test_run_check_cycle_processes_telegram_sources(tmp_path, monkeypatch)
 
     await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
 
-    tg_fetcher.fetch_recent_posts.assert_awaited_once_with("https://t.me/x", max_age_hours=24)
+    tg_fetcher.fetch_recent_posts.assert_awaited_once_with(
+        "https://t.me/x", max_age_hours=24, known_external_ids=set()
+    )
     check_cycle_module.process_fetched_post.assert_called_once()
 
 
