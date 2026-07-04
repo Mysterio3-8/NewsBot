@@ -80,10 +80,10 @@ class TelegramFetcher:
         known_external_ids: set[str] | None = None,
     ) -> list[FetchedPost]:
         """known_external_ids — уже обработанные ID этого источника (см.
-        Repository.get_existing_external_ids). max_post_age_hours может достигать
-        7 дней при check_interval_minutes=10 — без этого фильтра одни и те же
-        сообщения скачивались бы заново на КАЖДОМ цикле проверки; на проде это
-        раздуло диск до 100% (один файл скачан 245 раз) прежде чем нашли причину."""
+        Repository.get_existing_external_ids). Без этого фильтра одни и те же
+        сообщения скачивались бы заново на КАЖДОМ цикле проверки, пока они попадают
+        в окно max_age_hours — на проде это раздуло диск до 100% (один файл скачан
+        245 раз) прежде чем нашли причину."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         known_ids = known_external_ids or set()
         posts: list[FetchedPost] = []

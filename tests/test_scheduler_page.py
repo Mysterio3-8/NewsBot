@@ -44,7 +44,7 @@ def test_bind_config_populates_fields(qapp, config_copy):
     assert page.max_posts_per_day_input.value() == 12
     assert page.important_score_threshold_input.value() == 65
     assert page.min_interval_minutes_input.value() == 110
-    assert page.jitter_minutes_input.value() == 2
+    assert page.jitter_minutes_input.value() == 5
     assert page.include_hashtags_input.isChecked() is False
     assert "08:00" in page.fixed_slots_input.toPlainText()
 
