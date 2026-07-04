@@ -1,24 +1,41 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-
+  # Дефолт: 24/7 пайплайн без управления. Запуск: docker compose up -d
   app:
     build: .
-    depends_on:
-      - ollama
     env_file:
       - .env
-    # ВАЖНО: llm.host в app/config/config.yaml должен быть "http://ollama:11434"
-    # (имя сервиса compose), а не "http://localhost:11434" — иначе LLMClient
-    # не найдёт Ollama внутри сети docker compose.
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./output:/app/output
       - ./app/config/config.yaml:/app/app/config/config.yaml
+    restart: unless-stopped
+
+  # Управление через Telegram-бота (/run /stop /status /publish + AI-уникализатор).
+  # AUTOSTART_SERVICE=1 — пайплайн стартует сразу вместе с ботом (24/7 + управление).
+  # Запуск ВМЕСТО app (не одновременно, иначе два пайплайна): docker compose --profile bot up -d bot
+  bot:
+    build: .
+    profiles: ["bot"]
+    command: ["python", "-m", "app.control_bot"]
+    environment:
+      - AUTOSTART_SERVICE=1
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./app/config/config.yaml:/app/app/config/config.yaml
+    restart: unless-stopped
+
+  # Опционально — только если в config.yaml llm.provider: "ollama" (нужна GPU/RAM).
+  # Запуск: docker compose --profile ollama up. llm.host в config.yaml → "http://ollama:11434".
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
 volumes:

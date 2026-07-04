@@ -4,16 +4,39 @@ app:
   timezone: "Europe/Moscow"
 
 llm:
-  provider: "ollama"
-  host: "http://localhost:11434"
-  model: "qwen2.5:7b"
+  # Дефолт — Groq: на этой машине (8 ГБ RAM, без дискретной GPU, i3-1215U) локальная
+  # Ollama гоняет модель на CPU и выдаёт >60с на вызов — непригодно для боевого режима.
+  # Ollama вернётся дефолтом, когда появится сервер с GPU (см. Инварианты в CLAUDE.md).
+  provider: "groq"
+  host: "http://localhost:11434"    # используется только при provider: "ollama"
+  model: "llama-3.1-8b-instant"
+  api_key_env: "GROQ_API_KEY"       # gemini/openrouter -> GEMINI_API_KEY/OPENROUTER_API_KEY
+  # Резервные модели ТОГО ЖЕ провайдера: при отказе основной (429/лимит) клиент
+  # по очереди пробует их. Список должен соответствовать активному provider.
+  fallback_models:
+    - "llama-3.3-70b-versatile"
   temperature: 0.7
   top_p: 0.9
   timeout_seconds: 60
   retries: 1
+  # --- Пример для OpenRouter (бесплатные модели часто отдают 429 — ротация помогает):
+  # provider: "openrouter"
+  # model: "meta-llama/llama-3.3-70b-instruct:free"
+  # api_key_env: "OPENROUTER_API_KEY"
+  # fallback_models:
+  #   - "qwen/qwen3-next-80b-a3b-instruct:free"
+  #   - "openai/gpt-oss-120b:free"
+  #   - "google/gemma-4-31b-it:free"
+  #   - "nvidia/nemotron-3-super-120b-a12b:free"
 
 monitoring:
-  check_interval_minutes: 240
+  # Проверка почти в реальном времени (2026-07-04, по запросу пользователя — "если
+  # пост появляется в канале, софт это видит и сразу публикует"). LLM-вызовы это НЕ
+  # умножает — они идут только на реально НОВЫЕ посты (по external_id), которых
+  # за 10 минут обычно 0-1, а не за раз пачкой раз в 4 часа. Фактический темп
+  # публикации всё равно держат publishing.schedule.max_posts_per_day/min_interval_minutes
+  # ниже — эта частая проверка только сокращает задержку "новость вышла → мы её увидели".
+  check_interval_minutes: 10
   max_post_age_hours: 168  # 7 дней
   fetch_batch_size: 50
 
@@ -22,8 +45,13 @@ sources:
   vk: []
 
 filters:
-  min_score: 75
-  important_score_threshold: 88  # выше — «главные» посты (6/день), ниже — «обычные» (6/день)
+  # Порог был откалиброван в предположении, что keyword_match (25% веса) почти всегда
+  # даёт вклад — но при пустом/неполном совпадении whitelist_keywords реальный потолок
+  # скора без совпадения ~70-75 даже для действительно хороших новостей (подтверждено
+  # эмпирически 2026-07-02: реальный пост с news_value~90 набрал только 66.38). Снижено
+  # до реалистичного порога.
+  min_score: 55
+  important_score_threshold: 65  # выше — «главные» посты (6/день), ниже — «обычные» (6/день)
   duplicate_similarity_threshold: 0.85
   min_views: 500
   stop_words:
@@ -52,7 +80,45 @@ filters:
     - "без вложений"
     - "партнёрские ссылки"
   required_keywords_boost: true
-  whitelist_keywords: []
+  # базовый список из раздела 8.2 SPEC.md + тематика реальных источников проекта
+  # (без него keyword_match всегда 0 — это 25% веса скоринга, недостижимый min_score)
+  whitelist_keywords:
+    - "Россия"
+    - "Москва"
+    - "Кремль"
+    - "Путин"
+    - "Президент"
+    - "Правительство"
+    - "Госдума"
+    - "Армия"
+    - "Минобороны"
+    - "Экономика"
+    - "Санкции"
+    - "Рубль"
+    - "Доллар"
+    - "Нефть"
+    - "Газ"
+    - "НАТО"
+    - "США"
+    - "Европа"
+    - "Китай"
+    - "Закон"
+    - "Суд"
+    - "МВД"
+    - "ФСБ"
+    - "МЧС"
+    - "Катастрофа"
+    - "Происшествие"
+    - "Apple"
+    - "iPhone"
+    - "Samsung"
+    - "Google"
+    - "Microsoft"
+    - "VK"
+    - "Telegram"
+    - "смартфон"
+    - "чип"
+    - "процессор"
   blacklist_keywords: []
 
 scoring:
@@ -67,17 +133,29 @@ rewrite:
   style: "viral"
   max_length_chars: 900
   headline_variants: 3
+  include_hashtags: false  # LLM их всё равно генерирует, просто не публикуем — можно включить
 
 images:
   providers_order: ["source", "unsplash", "pexels", "pixabay"]
   count_per_post: 3
   target_aspect_ratio: "4:5"
+  # Уникализация при репосте: фото — лёгкий кроп + шум + удаление метаданных (EXIF);
+  # видео — микро eq (яркость/контраст/насыщенность/гамма) + крошечный кроп-и-масштаб
+  # обратно, детерминированно по post_id (см. app/core/media/uniquifier.py) — встроено
+  # в тот же ffmpeg-проход, что и watermark, качество не теряется дважды. Один тумблер
+  # на оба типа медиа. Цель — снизить перцептивное совпадение с оригиналом поста.
+  # Значения намеренно малы (глазом не видны). enabled: false — только watermark.
+  uniquify:
+    enabled: true
+    crop_percent: 1.0
+    noise_sigma: 3.0
 
 watermark:
   logo_path: "assets/logo.png"
-  position: "bottom-right"
-  opacity: 70
-  margin_px: 24
+  position: "top-right"
+  opacity: 65
+  margin_px: 20
+  size_ratio: 0.13
   channel_name_text: true
 
 publishing:
@@ -92,13 +170,19 @@ publishing:
       group_id: 233689032
   schedule:
     mode: "fixed_slots"
-    # 12 слотов, размазанные по всему дню каждые ~80 минут (08:00-22:40);
-    # нечётные по счёту публикации дня — «главные» посты, чётные — «обычные»
+    # 12 слотов каждые 2 часа, ровно по всем суткам (запрос пользователя 2026-07-04 —
+    # "раскачать канал", 12 постов/день); нечётные по счёту публикации дня — «главные»
+    # посты, чётные — «обычные». headless-режим использует check_interval_minutes
+    # (interval-триггер), а не эти слоты — они для справки и режима mode: "fixed_slots"
+    # отдельного планировщика.
     fixed_slots:
-      ["08:00", "09:20", "10:40", "12:00", "13:20", "14:40",
-       "16:00", "17:20", "18:40", "20:00", "21:20", "22:40"]
-    interval_minutes: 40
+      ["00:00", "02:00", "04:00", "06:00", "08:00", "10:00",
+       "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"]
+    interval_minutes: 120
     max_posts_per_day: 12
+    min_interval_minutes: 110  # жёсткий пол: держит ~2ч между постами (чуть меньше 120,
+    # чтобы 10-минутный check_interval не срезал 12-й пост дня из-за округления) — антиспам
+    jitter_minutes: 2          # ±2 мин разброса цикла ПРОВЕРКИ (не публикации — см. min_interval_minutes)
 
 logging:
   level: "INFO"
@@ -106,7 +190,10 @@ logging:
   backup_count: 5
 
 footer:
-  enabled: true
+  # Выключено по запросу пользователя 2026-07-04: VK-скобочная разметка [url|текст]
+  # не создаёт кликабельную ссылку для внешних доменов (t.me) — показывает как есть.
+  # Пока публикуем только медиа+текст, без ссылок вообще (в любую сеть).
+  enabled: false
   label: "Подписывайтесь на нас"
   telegram_url: "https://t.me/NewsThreeWord"
   vk_url: "https://vk.com/club233689032"
