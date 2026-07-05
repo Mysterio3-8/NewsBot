@@ -138,9 +138,18 @@ class TelegramPublisher:
                 chat_id, FSInputFile(image_paths[0]), caption=caption, parse_mode=parse_mode
             )
         else:
-            media = [InputMediaPhoto(media=FSInputFile(p)) for p in image_paths]
-            media[0].caption = caption
-            media[0].parse_mode = parse_mode
+            # InputMediaPhoto — frozen Pydantic-модель в aiogram v3: caption/parse_mode
+            # нужно передать в конструктор, присвоение полей ПОСЛЕ падает с
+            # "Instance is frozen" (найдено 2026-07-05 на реальном посте с 3 фото —
+            # раньше почти все посты уходили с 1 фото, эта ветка не проверялась вживую).
+            media = [
+                InputMediaPhoto(
+                    media=FSInputFile(path),
+                    caption=caption if index == 0 else None,
+                    parse_mode=parse_mode if index == 0 else None,
+                )
+                for index, path in enumerate(image_paths)
+            ]
             messages = await self._bot.send_media_group(chat_id, media)
             message = messages[0]
 

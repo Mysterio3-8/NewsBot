@@ -82,6 +82,39 @@ async def test_publish_with_single_image_sends_photo(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_publish_with_multiple_images_sends_media_group(tmp_path):
+    """Регрессия: media[0].caption = ... / media[0].parse_mode = ... падало с
+    '1 validation error for InputMediaPhoto: Instance is frozen' — aiogram v3
+    строит InputMediaPhoto как frozen Pydantic-модель, присвоение полей ПОСЛЕ
+    конструктора запрещено. Не ловилось раньше, т.к. большинство постов раньше
+    шли с 1 фото (send_photo, другая ветка) — всплыло только когда сток-фолбэк
+    впервые реально отдал несколько фото (найдено 2026-07-05, живой прод-баг:
+    пост 170 не смог уйти в TG 4 попытки подряд, ушёл только в VK)."""
+    publisher = TelegramPublisher(FAKE_TOKEN)
+    publisher._bot.send_media_group = AsyncMock(
+        return_value=[SimpleNamespace(message_id=5)]
+    )
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"photo_{i}.jpg"
+        p.write_bytes(b"fake image bytes")
+        paths.append(p)
+
+    result = await publisher.publish(
+        chat_id="@channel", text="подпись", image_paths=paths, parse_mode="HTML"
+    )
+
+    assert result.success is True
+    assert result.message_id == 5
+    publisher._bot.send_media_group.assert_awaited_once()
+    sent_media = publisher._bot.send_media_group.await_args.args[1]
+    assert len(sent_media) == 3
+    assert sent_media[0].caption == "подпись"
+    assert sent_media[0].parse_mode == "HTML"
+    assert sent_media[1].caption is None
+
+
+@pytest.mark.asyncio
 async def test_publish_falls_back_to_text_when_image_missing_on_disk(tmp_path):
     """Регрессия: image_paths, скопированные с другой машины (напр. перенос БД на
     VPS), могут не существовать на диске — публикация должна уйти текстом, а не
