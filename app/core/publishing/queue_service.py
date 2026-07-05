@@ -64,6 +64,7 @@ async def publish_queued_post(
 
     if result.success:
         repo.mark_published(post_id, "tg", datetime.datetime.utcnow())
+        logger.info("Пост %d опубликован в TG (message_id=%s)", post_id, result.message_id)
     elif not _already_published(repo, post_id):
         # Не понижаем статус, если пост уже опубликован в другой сети (напр. VK прошёл,
         # а TG упал) — иначе успешная публикация в одной сети выглядела бы как провал

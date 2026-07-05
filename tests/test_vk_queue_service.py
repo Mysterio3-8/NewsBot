@@ -15,7 +15,7 @@ def make_repo(tmp_path) -> Repository:
     return Repository(engine)
 
 
-def test_publish_queued_post_vk_marks_published_on_success(tmp_path):
+def test_publish_queued_post_vk_marks_published_on_success(tmp_path, caplog):
     repo = make_repo(tmp_path)
     source = repo.create_source(type="vk", name="Группа", url="-123")
     raw_post = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="новость")
@@ -30,12 +30,16 @@ def test_publish_queued_post_vk_marks_published_on_success(tmp_path):
     publisher = Mock(spec=VKPublisher)
     publisher.publish.return_value = VKPublishResult(success=True, post_id=681, error=None)
 
-    result = publish_queued_post_vk(repo, publisher, post_id=processed.id, group_id=123)
+    with caplog.at_level("INFO", logger="publishing"):
+        result = publish_queued_post_vk(repo, publisher, post_id=processed.id, group_id=123)
 
     assert result.success is True
     publisher.publish.assert_called_once_with(
         group_id=123, text="Текст новости", image_paths=[]
     )
+    assert repo.get_published_network_at(processed.id, "vk") is not None
+    assert repo.get_published_network_at(processed.id, "tg") is None
+    assert "опубликован в VK" in caplog.text
     assert repo.list_processed_posts(status="published")[0].id == processed.id
 
 
