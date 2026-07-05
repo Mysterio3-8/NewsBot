@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from app.config.loader import UniquifyConfig, WatermarkConfig
 from app.core.images.uniquifier import uniquify
@@ -16,12 +16,12 @@ ASPECT_RATIOS = {
     "9:16": (9, 16),
 }
 
-# Не резать больше 15% исходной ширины/высоты ради точного целевого соотношения —
+# Не резать больше 2% исходной ширины/высоты ради точного целевого соотношения —
 # иначе landscape-фото (типичный источник TG/VK) при "4:5" теряло ~40% кадра,
-# вырезая важную часть сюжета (жалоба пользователя 2026-07-05). Если точного
-# соотношения не достичь в рамках этого лимита — отдаём максимально близкое,
-# но не режем сильнее.
-MAX_CROP_FRACTION = 0.15
+# вырезая важную часть сюжета (жалоба пользователя 2026-07-05, ужесточено до 1-2%
+# по повторному запросу пользователя в тот же день). Если точного соотношения не
+# достичь в рамках этого лимита — отдаём максимально близкое, но не режем сильнее.
+MAX_CROP_FRACTION = 0.02
 
 
 class WatermarkError(Exception):
@@ -41,16 +41,11 @@ class Watermarker:
         *,
         target_aspect_ratio: str,
         post_id: int,
-        channel_name: str | None = None,
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
         image = crop_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
         image = self._overlay_logo(image)
-
-        if self._config.channel_name_text and channel_name:
-            image = self._overlay_text(image, channel_name)
-
         return self._save(image, image_path, post_id)
 
     def _overlay_logo(self, image: Image.Image) -> Image.Image:
@@ -64,13 +59,6 @@ class Watermarker:
 
         position = _compute_position(image.size, logo.size, self._config.position, self._config.margin_px)
         image.alpha_composite(logo, dest=position)
-        return image
-
-    def _overlay_text(self, image: Image.Image, channel_name: str) -> Image.Image:
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-        margin = self._config.margin_px
-        draw.text((margin, margin), channel_name, font=font, fill=(255, 255, 255, 220))
         return image
 
     def _save(self, image: Image.Image, original_path: Path, post_id: int) -> Path:

@@ -5,7 +5,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -58,7 +57,6 @@ class ImagesPage(QWidget):
         self.size_ratio_input = QSpinBox()
         self.size_ratio_input.setRange(1, 100)
         self.size_ratio_input.setSuffix("% от ширины изображения")
-        self.channel_name_text_input = QCheckBox("Показывать название канала на изображении")
 
         self.save_button = QPushButton("Сохранить")
         self.save_button.clicked.connect(self._on_save)
@@ -75,7 +73,6 @@ class ImagesPage(QWidget):
         form.addRow("Прозрачность (%)", self.opacity_input)
         form.addRow("Отступ (px)", self.margin_input)
         form.addRow("Размер логотипа", self.size_ratio_input)
-        form.addRow("", self.channel_name_text_input)
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Провайдеры изображений (галочка = включён, порядок = приоритет)"))
@@ -115,7 +112,6 @@ class ImagesPage(QWidget):
         self.opacity_input.setValue(config.watermark.opacity)
         self.margin_input.setValue(config.watermark.margin_px)
         self.size_ratio_input.setValue(round(config.watermark.size_ratio * 100))
-        self.channel_name_text_input.setChecked(config.watermark.channel_name_text)
 
     def _current_providers_order(self) -> list[str]:
         order = []
@@ -144,7 +140,6 @@ class ImagesPage(QWidget):
                 opacity=self.opacity_input.value(),
                 margin_px=self.margin_input.value(),
                 size_ratio=self.size_ratio_input.value() / 100,
-                channel_name_text=self.channel_name_text_input.isChecked(),
             )
         except ConfigValidationError as error:
             QMessageBox.warning(self, "Некорректные настройки", str(error))

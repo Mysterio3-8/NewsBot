@@ -94,7 +94,6 @@ class WatermarkConfig:
     position: str
     opacity: int
     margin_px: int
-    channel_name_text: bool
     size_ratio: float = 0.2
 
 

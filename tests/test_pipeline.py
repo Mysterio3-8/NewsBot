@@ -219,7 +219,6 @@ def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_pat
         position="top-right",
         opacity=65,
         margin_px=20,
-        channel_name_text=False,
         size_ratio=0.2,
     )
 

@@ -132,7 +132,6 @@ def process_fetched_post(
         raw_post_id=raw_post.id,
         post_media_urls=post.media_urls,
         rewritten_text=rewritten_text,
-        source_name=source.name,
         images_config=images_config,
         watermark_config=watermark_config,
         image_providers=image_providers,
@@ -163,7 +162,6 @@ def _prepare_images(
     raw_post_id: int,
     post_media_urls: list[str],
     rewritten_text: str,
-    source_name: str,
     images_config: ImagesConfig | None,
     watermark_config: WatermarkConfig | None,
     image_providers: dict[str, ImageProvider] | None,
@@ -196,7 +194,6 @@ def _prepare_images(
             post_id=raw_post_id,
             watermarker=watermarker,
             target_aspect_ratio=images_config.target_aspect_ratio,
-            channel_name=source_name if watermark_config.channel_name_text else None,
             raw_output_dir=OUTPUT_DIR / "raw" / str(raw_post_id),
         )
     except WatermarkError as error:

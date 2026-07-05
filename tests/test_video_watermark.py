@@ -25,7 +25,6 @@ def make_config(**overrides) -> WatermarkConfig:
         position="top-right",
         opacity=65,
         margin_px=20,
-        channel_name_text=False,
         size_ratio=0.2,
     )
     defaults.update(overrides)

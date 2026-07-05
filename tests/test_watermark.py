@@ -11,15 +11,14 @@ def make_config(**overrides) -> WatermarkConfig:
         position="bottom-right",
         opacity=70,
         margin_px=10,
-        channel_name_text=True,
     )
     defaults.update(overrides)
     return WatermarkConfig(**defaults)
 
 
 def test_crop_to_aspect_ratio_matches_target_when_within_crop_cap():
-    # 1050x1000 (ratio 1.05) -> "1:1" needs ~4.8% width crop, well under the 15% cap.
-    image = Image.new("RGBA", (1050, 1000))
+    # 1015x1000 (ratio 1.015) -> "1:1" needs ~1.5% width crop, under the 2% cap.
+    image = Image.new("RGBA", (1015, 1000))
     cropped = crop_to_aspect_ratio(image, "1:1")
     assert cropped.width / cropped.height == pytest.approx(1.0, rel=0.02)
 
@@ -27,11 +26,11 @@ def test_crop_to_aspect_ratio_matches_target_when_within_crop_cap():
 @pytest.mark.parametrize("ratio_key", ["4:5", "16:9", "9:16"])
 def test_crop_to_aspect_ratio_never_crops_more_than_cap(ratio_key):
     # A square source is far from all of these ratios — cropping to the exact
-    # target would cut ~20-44% of a dimension. Must clamp to <=15%, not force it.
+    # target would cut ~20-44% of a dimension. Must clamp to <=2%, not force it.
     image = Image.new("RGBA", (1000, 1000))
     cropped = crop_to_aspect_ratio(image, ratio_key)
-    assert cropped.width >= 1000 * 0.85 - 1
-    assert cropped.height >= 1000 * 0.85 - 1
+    assert cropped.width >= 1000 * 0.98 - 1
+    assert cropped.height >= 1000 * 0.98 - 1
 
 
 def test_crop_to_aspect_ratio_does_not_crop_when_already_target_ratio():
@@ -70,16 +69,14 @@ def test_watermarker_applies_logo_and_saves_output(tmp_path, monkeypatch):
     Image.new("RGB", (800, 600), color="blue").save(source_image_path)
 
     watermarker = Watermarker(make_config(logo_path="assets/logo.png"))
-    output_path = watermarker.apply(
-        source_image_path, target_aspect_ratio="4:5", post_id=42, channel_name="Мой канал"
-    )
+    output_path = watermarker.apply(source_image_path, target_aspect_ratio="4:5", post_id=42)
 
     assert output_path.exists()
     result_image = Image.open(output_path)
-    # 800x600 source (4:3) cropped toward "4:5" is capped at 15% max crop (see
+    # 800x600 source (4:3) cropped toward "4:5" is capped at 2% max crop (see
     # MAX_CROP_FRACTION) rather than forced to exactly 0.8 — that would have cut
-    # ~40% of the width. Expect the capped width (800 * 0.85 = 680), not the exact ratio.
-    assert result_image.width == 680
+    # ~40% of the width. Expect the capped width (800 * 0.98 = 784), not the exact ratio.
+    assert result_image.width == 784
     assert result_image.height == 600
     assert output_path.parent == tmp_path / "output" / "images" / "42"
 

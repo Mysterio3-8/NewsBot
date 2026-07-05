@@ -17,7 +17,6 @@ def prepare_images_for_post(
     post_id: int,
     watermarker: Watermarker,
     target_aspect_ratio: str,
-    channel_name: str | None,
     raw_output_dir: Path,
 ) -> list[Path]:
     """Пробует провайдеров по порядку приоритета, останавливаясь на первом с результатами.
@@ -38,7 +37,6 @@ def prepare_images_for_post(
                 resolve_to_local_file(result, raw_output_dir / f"raw_{index}.jpg"),
                 target_aspect_ratio=target_aspect_ratio,
                 post_id=post_id,
-                channel_name=channel_name,
             )
             for index, result in enumerate(results)
         ]

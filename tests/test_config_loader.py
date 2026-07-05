@@ -29,7 +29,7 @@ filters: {min_score: 150, duplicate_similarity_threshold: 0.85, min_views: 500, 
 scoring: {weights: {news_value: 0.35, keyword_match: 0.25, source_views: 0.20, freshness: 0.10, source_priority: 0.10}}
 rewrite: {style: viral, max_length_chars: 900, headline_variants: 3}
 images: {providers_order: [source], count_per_post: 3, target_aspect_ratio: "4:5"}
-watermark: {logo_path: x, position: bottom-right, opacity: 70, margin_px: 24, channel_name_text: true}
+watermark: {logo_path: x, position: bottom-right, opacity: 70, margin_px: 24}
 publishing:
   targets:
     telegram: {enabled: true, bot_token_env: TG_BOT_TOKEN, chat_id: "@x"}

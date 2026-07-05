@@ -22,7 +22,6 @@ def make_watermarker(tmp_path, monkeypatch) -> Watermarker:
         position="bottom-right",
         opacity=70,
         margin_px=10,
-        channel_name_text=False,
     )
     return Watermarker(config)
 
@@ -48,7 +47,6 @@ def test_prepare_images_uses_first_provider_with_results(tmp_path, monkeypatch):
         post_id=7,
         watermarker=watermarker,
         target_aspect_ratio="4:5",
-        channel_name=None,
         raw_output_dir=tmp_path / "raw",
     )
 
@@ -77,7 +75,6 @@ def test_prepare_images_falls_through_to_next_provider(tmp_path, monkeypatch):
         post_id=8,
         watermarker=watermarker,
         target_aspect_ratio="1:1",
-        channel_name=None,
         raw_output_dir=tmp_path / "raw",
     )
 
@@ -98,7 +95,6 @@ def test_prepare_images_returns_empty_when_no_provider_finds_anything(tmp_path, 
         post_id=9,
         watermarker=watermarker,
         target_aspect_ratio="1:1",
-        channel_name=None,
         raw_output_dir=tmp_path / "raw",
     )
 
