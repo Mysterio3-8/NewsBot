@@ -30,6 +30,19 @@ logger = logging.getLogger("app")
 
 TEST_SOURCE_NAME = "test_manual"
 
+# По прямому запросу пользователя (2026-07-05: "должен быть обход, потому что
+# тестовые посты должны всегда выкладываться") тестовые посты не ждут дневной
+# лимит/интервал rate_guard — это единственное место, где эти цифры не берутся
+# из config.publishing.schedule. Основной автоматический цикл (check_cycle.py →
+# queue_service.py) этот обход не трогает и продолжает использовать реальные
+# лимиты — инвариант "антиспам-стопор нельзя ослаблять без явного запроса
+# пользователя" (CLAUDE.md) соблюдён явным запросом, но не расширен на прод-цикл.
+# Проверка "пост уже публиковался в эту сеть" (rate_guard.check_publish_allowed)
+# при этом всё равно действует — тестовый пост нельзя повторно опубликовать в
+# ту же сеть дважды.
+TEST_POST_MAX_PER_DAY = 10**9
+TEST_POST_MIN_INTERVAL_MINUTES = 0
+
 _WALL_RE = re.compile(r"wall(-?\d+)_(\d+)")
 _PHOTO_RE = re.compile(r"photo(-?\d+)_(\d+)")
 
@@ -170,7 +183,6 @@ async def test_post_now(
 
 async def _publish_test_post(repo: Repository, config: AppConfig, post_id: int) -> str:
     footer_links = build_footer_links_from_config(config.footer)
-    schedule = config.publishing.schedule
     results: list[str] = []
 
     tg_publisher = build_telegram_publisher(config)
@@ -179,8 +191,8 @@ async def _publish_test_post(repo: Repository, config: AppConfig, post_id: int) 
             repo, tg_publisher, post_id=post_id,
             chat_id=config.publishing.telegram.destination,
             footer_links=footer_links,
-            max_posts_per_day=schedule.max_posts_per_day,
-            min_interval_minutes=schedule.min_interval_minutes,
+            max_posts_per_day=TEST_POST_MAX_PER_DAY,
+            min_interval_minutes=TEST_POST_MIN_INTERVAL_MINUTES,
             include_hashtags=config.rewrite.include_hashtags,
         )
         results.append("TG: ✅" if result.success else f"TG: ❌ {result.error}")
@@ -191,8 +203,8 @@ async def _publish_test_post(repo: Repository, config: AppConfig, post_id: int) 
             repo, vk_publisher, post_id=post_id,
             group_id=int(config.publishing.vk.destination),
             footer_links=footer_links,
-            max_posts_per_day=schedule.max_posts_per_day,
-            min_interval_minutes=schedule.min_interval_minutes,
+            max_posts_per_day=TEST_POST_MAX_PER_DAY,
+            min_interval_minutes=TEST_POST_MIN_INTERVAL_MINUTES,
             include_hashtags=config.rewrite.include_hashtags,
         )
         results.append("VK: ✅" if result.success else f"VK: ❌ {result.error}")

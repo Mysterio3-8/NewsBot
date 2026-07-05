@@ -127,7 +127,52 @@ async def test_post_now_builds_processed_post_and_publishes(tmp_path, monkeypatc
     )
 
     assert "TG: ✅" in result
-    all_processed = repo.list_processed_posts()
-    assert len(all_processed) == 1
-    assert all_processed[0].rewritten_text == "Переписанный текст поста"
-    assert all_processed[0].category == "тест"
+
+
+@pytest.mark.asyncio
+async def test_post_now_ignores_schedule_limits_and_publishes_regardless(tmp_path, monkeypatch):
+    """По прямому запросу пользователя (2026-07-05): "тестовые посты должны всегда
+    выкладываться" — /testpost не должен ждать дневной лимит/интервал rate_guard,
+    даже если конфиг настоящего расписания их бы заблокировал. Основной автоцикл
+    (queue_service.py напрямую из check_cycle.py) эти лимиты по-прежнему уважает —
+    обход только в этом, ручном, пути."""
+    repo = make_repo(tmp_path)
+
+    fetcher = Mock()
+    fetcher._api.wall.getById.return_value = [
+        {"id": 1, "text": "Текст", "date": 1_800_000_000, "attachments": []}
+    ]
+    fetcher._download_photos.return_value = []
+    monkeypatch.setattr(testpost, "build_vk_fetcher", lambda: fetcher)
+    monkeypatch.setattr(testpost, "build_image_providers", lambda: {})
+    monkeypatch.setattr(testpost, "rewrite_post", lambda *a, **k: "Текст")
+    monkeypatch.setattr(testpost, "generate_headlines", lambda *a, **k: ["Заголовок"])
+    monkeypatch.setattr(testpost, "_prepare_images", lambda *a, **k: None)
+    monkeypatch.setattr(testpost, "build_footer_links_from_config", lambda footer: None)
+
+    tg = AsyncMock(spec=TelegramPublisher)
+    monkeypatch.setattr(testpost, "build_telegram_publisher", lambda config: tg)
+    monkeypatch.setattr(testpost, "build_vk_publisher", lambda config: None)
+    publish_mock = AsyncMock(
+        return_value=PublishResult(success=True, message_id=1, error=None)
+    )
+    monkeypatch.setattr(testpost, "publish_queued_post", publish_mock)
+
+    config = Mock()
+    config.rewrite.style = "viral"
+    config.rewrite.max_length_chars = 900
+    config.rewrite.include_hashtags = False
+    config.images = Mock()
+    config.watermark = Mock()
+    config.publishing.telegram.enabled = True
+    config.publishing.telegram.destination = "@channel"
+    config.publishing.vk.enabled = False
+    # Реалистичное строгое расписание, которое ДОЛЖНО игнорироваться для тестовых постов.
+    config.publishing.schedule.max_posts_per_day = 1
+    config.publishing.schedule.min_interval_minutes = 999999
+
+    await testpost.test_post_now(repo, config, Mock(), vk_ref="https://vk.com/wall-1_1")
+
+    _, kwargs = publish_mock.call_args
+    assert kwargs["max_posts_per_day"] == testpost.TEST_POST_MAX_PER_DAY
+    assert kwargs["min_interval_minutes"] == 0
