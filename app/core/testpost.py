@@ -11,6 +11,7 @@ import time
 
 from app.config.loader import AppConfig
 from app.core.llm.client import LLMClient
+from app.core.llm.headline_generator import generate_headlines
 from app.core.llm.rewriter import rewrite_post
 from app.core.monitoring.vk_fetcher import VKFetcher, vk_post_to_fetched_post
 from app.core.pipeline import _prepare_images
@@ -133,14 +134,23 @@ async def test_post_now(
         max_length=min(config.rewrite.max_length_chars, max(len(fetched.text), 1)),
         include_hashtags=config.rewrite.include_hashtags,
     )
+    headlines = generate_headlines(
+        llm_client,
+        text=rewritten,
+        style=config.rewrite.style,
+        count=config.rewrite.headline_variants,
+    )
+    headline = headlines[0] if headlines else None
 
     image_paths = _prepare_images(
         llm_client,
         raw_post_id=raw_post.id,
         post_media_urls=local_media,
         rewritten_text=rewritten,
+        headline=headline,
         images_config=config.images,
         watermark_config=config.watermark,
+        headline_card_config=config.headline_card,
         image_providers=build_image_providers(),
     )
 
@@ -149,7 +159,7 @@ async def test_post_now(
         score=100.0,
         category="тест",
         rewritten_text=rewritten,
-        headline=None,
+        headline=headline,
         image_paths=image_paths,
         video_path=None,
         status="queued",

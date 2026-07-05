@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config.loader import FiltersConfig, ImagesConfig, RewriteConfig, ScoringWeights, WatermarkConfig
+from app.config.loader import (
+    FiltersConfig,
+    HeadlineCardConfig,
+    ImagesConfig,
+    RewriteConfig,
+    ScoringWeights,
+    WatermarkConfig,
+)
 from app.core.filtering.deduplication import compute_simhash, find_similar_hash
 from app.core.filtering.rules import (
     find_blacklisted_word,
@@ -54,6 +61,7 @@ def process_fetched_post(
     max_post_age_hours: float,
     images_config: ImagesConfig | None = None,
     watermark_config: WatermarkConfig | None = None,
+    headline_card_config: HeadlineCardConfig | None = None,
     image_providers: dict[str, ImageProvider] | None = None,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
@@ -132,8 +140,10 @@ def process_fetched_post(
         raw_post_id=raw_post.id,
         post_media_urls=post.media_urls,
         rewritten_text=rewritten_text,
+        headline=headline,
         images_config=images_config,
         watermark_config=watermark_config,
+        headline_card_config=headline_card_config,
         image_providers=image_providers,
     )
     video_path = _prepare_video(
@@ -162,8 +172,10 @@ def _prepare_images(
     raw_post_id: int,
     post_media_urls: list[str],
     rewritten_text: str,
+    headline: str | None = None,
     images_config: ImagesConfig | None,
     watermark_config: WatermarkConfig | None,
+    headline_card_config: HeadlineCardConfig | None = None,
     image_providers: dict[str, ImageProvider] | None,
 ) -> list[str] | None:
     """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
@@ -185,13 +197,14 @@ def _prepare_images(
     query = "" if own_photos else _safe_image_query(llm_client, rewritten_text)
 
     try:
-        watermarker = Watermarker(watermark_config, images_config.uniquify)
+        watermarker = Watermarker(watermark_config, images_config.uniquify, headline_card_config)
         image_paths = prepare_images_for_post(
             providers_order=images_config.providers_order,
             providers=providers,
             query=query,
             count=images_config.count_per_post,
             post_id=raw_post_id,
+            headline=headline,
             watermarker=watermarker,
             target_aspect_ratio=images_config.target_aspect_ratio,
             raw_output_dir=OUTPUT_DIR / "raw" / str(raw_post_id),

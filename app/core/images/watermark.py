@@ -5,7 +5,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.config.loader import UniquifyConfig, WatermarkConfig
+from app.config.loader import HeadlineCardConfig, UniquifyConfig, WatermarkConfig
+from app.core.images.headline_card import apply_duotone, overlay_headline
 from app.core.images.uniquifier import uniquify
 from app.paths import OUTPUT_DIR, PROJECT_ROOT
 
@@ -30,10 +31,14 @@ class WatermarkError(Exception):
 
 class Watermarker:
     def __init__(
-        self, config: WatermarkConfig, uniquify_config: UniquifyConfig | None = None
+        self,
+        config: WatermarkConfig,
+        uniquify_config: UniquifyConfig | None = None,
+        headline_card_config: HeadlineCardConfig | None = None,
     ) -> None:
         self._config = config
         self._uniquify_config = uniquify_config or UniquifyConfig()
+        self._headline_card_config = headline_card_config or HeadlineCardConfig()
 
     def apply(
         self,
@@ -41,10 +46,18 @@ class Watermarker:
         *,
         target_aspect_ratio: str,
         post_id: int,
+        headline: str | None = None,
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
         image = crop_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
+        if self._headline_card_config.enabled and headline:
+            image = apply_duotone(
+                image,
+                tuple(self._headline_card_config.duotone_dark),
+                tuple(self._headline_card_config.duotone_light),
+            )
+            image = overlay_headline(image, headline, self._headline_card_config)
         image = self._overlay_logo(image)
         return self._save(image, image_path, post_id)
 

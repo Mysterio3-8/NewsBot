@@ -1,7 +1,7 @@
 import pytest
 from PIL import Image
 
-from app.config.loader import UniquifyConfig, WatermarkConfig
+from app.config.loader import HeadlineCardConfig, UniquifyConfig, WatermarkConfig
 from app.core.images.watermark import Watermarker, WatermarkError, crop_to_aspect_ratio
 
 
@@ -128,3 +128,58 @@ def test_watermarker_uniquify_changes_pixels_vs_disabled(tmp_path, monkeypatch):
     assert not np.array_equal(
         np.asarray(Image.open(plain_out)), np.asarray(Image.open(uniq_out))
     )
+
+
+def test_watermarker_applies_headline_card_when_enabled_and_headline_given(tmp_path, monkeypatch):
+    import shutil
+
+    import app.core.images.watermark as watermark_module
+
+    monkeypatch.setattr(watermark_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(watermark_module, "OUTPUT_DIR", tmp_path / "output")
+
+    (tmp_path / "assets" / "fonts").mkdir(parents=True)
+    Image.new("RGBA", (200, 100), color=(255, 0, 0, 255)).save(tmp_path / "assets" / "logo.png")
+    shutil.copy(
+        "assets/fonts/DejaVuSans-Bold.ttf", tmp_path / "assets" / "fonts" / "DejaVuSans-Bold.ttf"
+    )
+    source_image_path = tmp_path / "source.jpg"
+    Image.new("RGB", (800, 600), color="blue").save(source_image_path)
+
+    import numpy as np
+
+    plain = Watermarker(make_config(logo_path="assets/logo.png"))
+    plain_out = plain.apply(source_image_path, target_aspect_ratio="4:5", post_id=1)
+
+    with_card = Watermarker(
+        make_config(logo_path="assets/logo.png"),
+        headline_card_config=HeadlineCardConfig(enabled=True),
+    )
+    card_out = with_card.apply(
+        source_image_path, target_aspect_ratio="4:5", post_id=2, headline="Тестовый заголовок"
+    )
+
+    assert not np.array_equal(
+        np.asarray(Image.open(plain_out)), np.asarray(Image.open(card_out))
+    )
+
+
+def test_watermarker_skips_headline_card_when_no_headline_given(tmp_path, monkeypatch):
+    import app.core.images.watermark as watermark_module
+
+    monkeypatch.setattr(watermark_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(watermark_module, "OUTPUT_DIR", tmp_path / "output")
+
+    (tmp_path / "assets").mkdir()
+    Image.new("RGBA", (200, 100), color=(255, 0, 0, 255)).save(tmp_path / "assets" / "logo.png")
+    source_image_path = tmp_path / "source.jpg"
+    Image.new("RGB", (800, 600), color="blue").save(source_image_path)
+
+    watermarker = Watermarker(
+        make_config(logo_path="assets/logo.png"),
+        headline_card_config=HeadlineCardConfig(enabled=True),
+    )
+    # headline=None — карточка не должна применяться, даже если enabled=True,
+    # значит шрифт (которого тут нет на диске) не понадобится и не упадёт с ошибкой.
+    output_path = watermarker.apply(source_image_path, target_aspect_ratio="4:5", post_id=1)
+    assert output_path.exists()

@@ -86,6 +86,7 @@ def _process_posts(
                 max_post_age_hours=config.monitoring.max_post_age_hours,
                 images_config=config.images,
                 watermark_config=config.watermark,
+                headline_card_config=config.headline_card,
                 image_providers=image_providers,
             )
         except Exception:

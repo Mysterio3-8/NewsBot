@@ -165,6 +165,20 @@ watermark:
   margin_px: 20
   size_ratio: 0.17
 
+# Карточка "заголовок на фото" (запрос пользователя 2026-07-05, реф. в стиле
+# "P|" карточек) — дуотон-тонировка + крупный жирный заголовок белым внизу,
+# отдельная опция от логотипа-вотермарка выше. enabled: false — только логотип,
+# как раньше.
+headline_card:
+  enabled: true
+  duotone_dark: [10, 40, 30]     # тёмно-зелёный/изумрудный (выбор пользователя)
+  duotone_light: [210, 255, 230]
+  font_path: "assets/fonts/DejaVuSans-Bold.ttf"
+  font_size_ratio: 0.065
+  band_height_ratio: 0.35
+  margin_px: 32
+  text_color: [255, 255, 255]
+
 publishing:
   targets:
     telegram:

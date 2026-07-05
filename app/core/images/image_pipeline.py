@@ -18,6 +18,7 @@ def prepare_images_for_post(
     watermarker: Watermarker,
     target_aspect_ratio: str,
     raw_output_dir: Path,
+    headline: str | None = None,
 ) -> list[Path]:
     """Пробует провайдеров по порядку приоритета, останавливаясь на первом с результатами.
     Пустой список — ни один провайдер не нашёл изображений, пост публикуется без фото.
@@ -37,6 +38,7 @@ def prepare_images_for_post(
                 resolve_to_local_file(result, raw_output_dir / f"raw_{index}.jpg"),
                 target_aspect_ratio=target_aspect_ratio,
                 post_id=post_id,
+                headline=headline,
             )
             for index, result in enumerate(results)
         ]

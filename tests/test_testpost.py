@@ -95,6 +95,9 @@ async def test_post_now_builds_processed_post_and_publishes(tmp_path, monkeypatc
     monkeypatch.setattr(
         testpost, "rewrite_post", lambda *a, **k: "Переписанный текст поста"
     )
+    monkeypatch.setattr(
+        testpost, "generate_headlines", lambda *a, **k: ["Заголовок теста"]
+    )
     monkeypatch.setattr(testpost, "_prepare_images", lambda *a, **k: None)
     monkeypatch.setattr(testpost, "build_footer_links_from_config", lambda footer: None)
 

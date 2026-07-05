@@ -98,6 +98,23 @@ class WatermarkConfig:
 
 
 @dataclass(frozen=True)
+class HeadlineCardConfig:
+    """Заголовок на фото + дуотон-тонировка (запрос пользователя 2026-07-05) —
+    отдельная опция от логотипа-вотермарка, см. app/core/images/headline_card.py.
+    По умолчанию выключено (enabled=False), чтобы не менять существующие фото
+    без явного включения в config.yaml."""
+
+    enabled: bool = False
+    duotone_dark: list[int] = field(default_factory=lambda: [10, 40, 30])
+    duotone_light: list[int] = field(default_factory=lambda: [210, 255, 230])
+    font_path: str = "assets/fonts/DejaVuSans-Bold.ttf"
+    font_size_ratio: float = 0.065
+    band_height_ratio: float = 0.35
+    margin_px: int = 32
+    text_color: list[int] = field(default_factory=lambda: [255, 255, 255])
+
+
+@dataclass(frozen=True)
 class ScheduleConfig:
     mode: str
     fixed_slots: list[str]
@@ -149,6 +166,7 @@ class AppConfig:
     rewrite: RewriteConfig
     images: ImagesConfig
     watermark: WatermarkConfig
+    headline_card: HeadlineCardConfig
     publishing: PublishingConfig
     logging: LoggingConfig
     footer: FooterConfig
@@ -212,6 +230,11 @@ def _build_images_config(raw_images: dict) -> ImagesConfig:
     return ImagesConfig(**raw, uniquify=uniquify)
 
 
+def _build_headline_card_config(raw: dict) -> HeadlineCardConfig:
+    headline_card_raw = raw.get("headline_card")
+    return HeadlineCardConfig(**headline_card_raw) if headline_card_raw else HeadlineCardConfig()
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or CONFIG_PATH
     if not config_path.exists():
@@ -246,6 +269,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         rewrite=RewriteConfig(**raw["rewrite"]),
         images=_build_images_config(raw["images"]),
         watermark=WatermarkConfig(**raw["watermark"]),
+        headline_card=_build_headline_card_config(raw),
         publishing=publishing,
         logging=LoggingConfig(**raw["logging"]),
         footer=FooterConfig(**raw["footer"]),
