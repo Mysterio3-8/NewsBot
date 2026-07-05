@@ -211,6 +211,30 @@ class Repository:
         with self._session_factory() as session:
             return session.get(ProcessedPost, post_id)
 
+    def mark_published(
+        self, post_id: int, network: str, published_at: datetime.datetime
+    ) -> None:
+        """Помечает публикацию в КОНКРЕТНУЮ сеть (network="tg"/"vk") — раздельно от
+        общего published_at/status, чтобы rate_guard мог отличить законный кросс-пост
+        (уже ушло в TG, теперь публикуем в VK) от повторной попытки в ТУ ЖЕ сеть."""
+        column = f"published_{network}_at"
+        with self._session_factory() as session:
+            fields: dict = {column: published_at, "status": "published"}
+            existing = session.get(ProcessedPost, post_id)
+            if existing is not None and existing.published_at is None:
+                fields["published_at"] = published_at
+            session.query(ProcessedPost).filter(ProcessedPost.id == post_id).update(fields)
+            session.commit()
+        self.add_post_history(post_id=post_id, status="published")
+
+    def get_published_network_at(
+        self, post_id: int, network: str
+    ) -> datetime.datetime | None:
+        post = self.get_processed_post(post_id)
+        if post is None:
+            return None
+        return getattr(post, f"published_{network}_at", None)
+
     def list_processed_posts(self, *, status: str | None = None) -> list[ProcessedPost]:
         with self._session_factory() as session:
             query = session.query(ProcessedPost)

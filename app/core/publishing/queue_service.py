@@ -42,6 +42,7 @@ async def publish_queued_post(
     blocked = check_publish_allowed(
         repo,
         post_id,
+        network="tg",
         max_posts_per_day=max_posts_per_day,
         min_interval_minutes=min_interval_minutes,
     )
@@ -62,9 +63,7 @@ async def publish_queued_post(
     result = await publisher.publish(**publish_kwargs)
 
     if result.success:
-        repo.update_processed_post_status(
-            post_id, "published", published_at=datetime.datetime.utcnow()
-        )
+        repo.mark_published(post_id, "tg", datetime.datetime.utcnow())
     elif not _already_published(repo, post_id):
         # Не понижаем статус, если пост уже опубликован в другой сети (напр. VK прошёл,
         # а TG упал) — иначе успешная публикация в одной сети выглядела бы как провал

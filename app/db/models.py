@@ -67,6 +67,13 @@ class ProcessedPost(Base):
         DateTime, default=datetime.datetime.utcnow
     )
     published_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Раздельно от общего published_at/status — иначе rate_guard не может отличить
+    # "уже ушло в TG, теперь публикуем в VK" (законный кросс-пост) от "уже ушло в TG,
+    # повторно пытаемся ТУДА ЖЕ" (баг, который на проде 2026-07-05 разослал один и тот
+    # же пост 28 раз подряд в один канал — check_publish_allowed видел status='published'
+    # и пропускал ЛЮБУЮ повторную попытку без проверки конкретной сети).
+    published_tg_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    published_vk_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
 
     raw_post: Mapped["RawPost"] = relationship(back_populates="processed")
     history: Mapped[list["PostHistory"]] = relationship(back_populates="post")

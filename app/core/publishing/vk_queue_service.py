@@ -40,6 +40,7 @@ def publish_queued_post_vk(
     blocked = check_publish_allowed(
         repo,
         post_id,
+        network="vk",
         max_posts_per_day=max_posts_per_day,
         min_interval_minutes=min_interval_minutes,
     )
@@ -59,9 +60,7 @@ def publish_queued_post_vk(
     result = publisher.publish(**publish_kwargs)
 
     if result.success:
-        repo.update_processed_post_status(
-            post_id, "published", published_at=datetime.datetime.utcnow()
-        )
+        repo.mark_published(post_id, "vk", datetime.datetime.utcnow())
     elif not _already_published(repo, post_id):
         # Не понижаем статус, если пост уже опубликован в другой сети (напр. TG прошёл,
         # а VK упал) — см. тот же фикс в queue_service.py.
