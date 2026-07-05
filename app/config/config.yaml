@@ -162,7 +162,7 @@ images:
 
 watermark:
   logo_path: "assets/logo.png"
-  position: "top-left"
+  position: "top-right"
   opacity: 65
   margin_px: 20
   size_ratio: 0.17
