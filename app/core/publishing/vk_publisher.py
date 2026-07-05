@@ -46,13 +46,23 @@ class VKPublisher:
         # токен не имеет доступа к photos.getWallUploadServer — ошибка 27), публикуем
         # текст без него, а не роняем весь пост. Цель — пост всё равно уходит в VK.
         attachments = self._build_attachments(group_id, image_paths, video_path)
+        # КРИТИЧНО (найдено 2026-07-05): photos.saveWallPhoto через личный upload_token
+        # сохраняет фото за ЛИЧНЫМ owner_id (не за группой) — групповой _api не имеет
+        # доступа к этому объекту (подтверждено вживую: photos.getById той же фотки той
+        # же учёткой сразу после аплоада — "[200] Access denied"). wall.post групповым
+        # токеном с таким attachment молча публикует пост БЕЗ вложения (VK не роняет
+        # запрос ошибкой) — отсюда посты "без медиа" при формально успешной загрузке.
+        # Постить с вложением нужно ТЕМ ЖЕ токеном, что и грузил фото; from_group=1
+        # всё равно публикует от имени группы. Без вложений — как раньше, group_token
+        # (минимизирует, что личный аккаунт делает в автоматическом режиме).
+        poster_api = self._upload_api if attachments else self._api
         last_error: Exception | None = None
 
         for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
             if delay:
                 time.sleep(delay)
             try:
-                response = self._api.wall.post(
+                response = poster_api.wall.post(
                     owner_id=-abs(group_id),
                     message=text,
                     attachments=",".join(attachments) if attachments else None,

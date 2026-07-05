@@ -91,14 +91,13 @@ def test_publish_posts_text_only_when_photo_upload_fails():
 
 def test_upload_photo_uses_separate_upload_token_when_configured():
     """group-токен не умеет photos.* (ошибка 27) — если задан отдельный upload_token
-    (личный аккаунт-админ группы), загрузка ДОЛЖНА идти через него, а wall.post —
-    всегда через group_token, чтобы минимизировать автоматизацию на личном аккаунте."""
+    (личный аккаунт-админ группы), загрузка ДОЛЖНА идти через него."""
     publisher = VKPublisher.__new__(VKPublisher)
-    publisher._api = MagicMock()  # group token — только для wall.post
+    publisher._api = MagicMock()  # group token
     publisher._upload_api = MagicMock()  # отдельный upload token
     publisher._upload_api.photos.getWallUploadServer.return_value = {"upload_url": "http://upload"}
     publisher._upload_api.photos.saveWallPhoto.return_value = [{"owner_id": -123, "id": 999}]
-    publisher._api.wall.post.return_value = {"post_id": 58}
+    publisher._upload_api.wall.post.return_value = {"post_id": 58}
 
     upload_response = MagicMock()
     upload_response.json.return_value = {"photo": "p", "server": 1, "hash": "h"}
@@ -113,8 +112,40 @@ def test_upload_photo_uses_separate_upload_token_when_configured():
     assert result.success is True
     publisher._upload_api.photos.getWallUploadServer.assert_called_once()
     publisher._api.photos.getWallUploadServer.assert_not_called()
-    _, kwargs = publisher._api.wall.post.call_args
+    _, kwargs = publisher._upload_api.wall.post.call_args
     assert kwargs["attachments"] == "photo-123_999"
+
+
+def test_publish_with_attachment_posts_via_upload_token_not_group_token():
+    """КРИТИЧНО, найдено 2026-07-05 на реальном посте (id=170): photos.saveWallPhoto
+    через личный upload_token сохраняет фото за ЛИЧНЫМ owner_id — групповой _api не
+    имеет доступа к этому объекту (подтверждено вживую: photos.getById той же фоткой
+    тем же токеном сразу после аплоада вернул "[200] Access denied"). wall.post
+    групповым токеном с таким attachment не падает ошибкой — просто молча публикует
+    БЕЗ вложения. Пост должен уйти через upload_token, когда есть вложение."""
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()  # group token — НЕ должен звать wall.post при наличии фото
+    publisher._upload_api = MagicMock()
+    publisher._upload_api.photos.getWallUploadServer.return_value = {"upload_url": "http://upload"}
+    publisher._upload_api.photos.saveWallPhoto.return_value = [{"owner_id": 861061590, "id": 999}]
+    publisher._upload_api.wall.post.return_value = {"post_id": 59}
+
+    upload_response = MagicMock()
+    upload_response.json.return_value = {"photo": "p", "server": 1, "hash": "h"}
+    upload_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
+        patch("builtins.open", mock_open(read_data=b"fake-image-bytes")),
+    ):
+        result = publisher.publish(group_id=123, text="новость", image_paths=["fake.jpg"])
+
+    assert result.success is True
+    publisher._upload_api.wall.post.assert_called_once()
+    publisher._api.wall.post.assert_not_called()
+    _, kwargs = publisher._upload_api.wall.post.call_args
+    assert kwargs["owner_id"] == -123
+    assert kwargs["from_group"] == 1
 
 
 def test_init_without_upload_token_reuses_group_api_for_uploads():
