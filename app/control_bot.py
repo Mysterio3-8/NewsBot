@@ -20,6 +20,7 @@ from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.scheduler import pick_next_post_to_publish
+from app.core.testpost import test_post_now
 from app.db.repository import Repository
 from app.moscow_time import format_moscow_time
 from app.factories import build_telegram_publisher, build_vk_publisher
@@ -47,6 +48,10 @@ HELP_TEXT = (
     "/stop — остановить сервис\n"
     "/status — статус + последние публикации\n"
     "/publish — опубликовать лучший пост из очереди сейчас\n"
+    "/testpost <ссылка на VK-пост> — взять конкретный пост по ссылке (в обход "
+    "скоринга/фильтров — это ручной тест конкретного контента), прогнать через "
+    "реальный рерайт+фото+вотермарк и опубликовать сейчас (антиспам-стопор "
+    "по-прежнему действует)\n"
     "/queue — сколько постов в очереди\n"
     "/provider <groq|openrouter|gemini|ollama> — сменить LLM\n"
     "\nУправление VK Nature Bot (отдельный процесс, свой репозиторий):\n"
@@ -314,6 +319,24 @@ def build_dispatcher(
         if await guard(message):
             await message.answer("Публикую…")
             await message.answer(await publish_now(repo, load_config(config_path)))
+
+    @dp.message(Command("testpost"))
+    async def on_testpost(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await message.answer(
+                "Укажи ссылку: /testpost https://vk.com/wall-152992737_8999245"
+            )
+            return
+        await message.answer("Готовлю тестовый пост… может занять минуту.")
+        from app.core.llm.client import LLMClient
+
+        config = load_config(config_path)
+        llm_client = LLMClient(config.llm)
+        result = await test_post_now(repo, config, llm_client, vk_ref=parts[1].strip())
+        await message.answer(result)
 
     @dp.message(Command("provider"))
     async def on_provider(message: Message) -> None:

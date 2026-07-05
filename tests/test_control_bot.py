@@ -107,10 +107,10 @@ def test_build_dispatcher_registers_media_handler():
     from unittest.mock import Mock
 
     dp = bot.build_dispatcher(Mock(), Mock(), "config.yaml")
-    # /start /help /run /stop /status /queue /publish /provider
+    # /start /help /run /stop /status /queue /publish /testpost /provider
     # /nature_run /nature_stop /nature_status
-    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 16 хендлеров
-    assert len(dp.message.handlers) == 16
+    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 17 хендлеров
+    assert len(dp.message.handlers) == 17
 
 
 def test_build_nature_controller_none_without_env_path():
