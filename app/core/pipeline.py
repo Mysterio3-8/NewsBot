@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from PIL import Image
+
 from app.config.loader import (
     FiltersConfig,
     HeadlineCardConfig,
@@ -27,8 +29,8 @@ from app.core.filtering.scoring import compute_score
 from app.core.images.image_pipeline import prepare_images_for_post
 from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
-from app.core.images.watermark import Watermarker, WatermarkError
-from app.core.images.watermark_detector import detect_foreign_watermark
+from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
+from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
 from app.core.llm.headline_generator import generate_headlines
@@ -217,21 +219,45 @@ def _prepare_images(
 
 
 def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:
-    """Отбрасывает локальные файлы с обнаруженным чужим водяным знаком/логотипом —
-    см. app/core/images/watermark_detector.py. И TG (TelegramFetcher), и VK
-    (VKFetcher, с 2026-07-05) скачивают фото на диск ДО этого шага, так что media_urls
-    здесь — всегда локальные пути; http(s)-ветка ниже — защита на случай прямого
-    вызова с ещё не скачанным URL (напр. сток-провайдеры), а не штатный путь для VK."""
+    """Держится за ОРИГИНАЛЬНОЕ фото поста, а не подменяет его сток-фото, когда
+    это возможно (запрос пользователя 2026-07-05: "находить оригинальное фото,
+    только без чужого монтажа и вотермарков"). Если чужой знак — у верхнего и/или
+    нижнего края, обрезаем эту полосу и используем очищенную версию того же фото.
+    Только если знак по центру/на самом сюжете (обрезкой не убрать) — фото
+    отбрасывается совсем, пайплайн переходит на сток-фолбэк, как раньше.
+    И TG (TelegramFetcher), и VK (VKFetcher) скачивают фото на диск ДО этого шага,
+    так что media_urls здесь — всегда локальные пути; http(s)-ветка ниже — защита
+    на случай прямого вызова с ещё не скачанным URL, а не штатный путь для VK."""
     kept: list[str] = []
     for item in media_urls:
         if item.startswith("http://") or item.startswith("https://"):
             kept.append(item)
             continue
-        if detect_foreign_watermark(llm_client, Path(item)):
-            logger.info("Фото %s похоже на чужой водяной знак, пропускаю", item)
+
+        regions = locate_foreign_watermark(llm_client, Path(item))
+        if regions is None:
+            logger.info("Фото %s: чужой знак нельзя убрать обрезкой, пропускаю", item)
             continue
-        kept.append(item)
+        if not regions:
+            kept.append(item)
+            continue
+
+        cleaned_path = _crop_out_watermark(item, regions)
+        logger.info(
+            "Фото %s: обрезал чужой знак (%s), использую очищенную версию",
+            item, ",".join(sorted(regions)),
+        )
+        kept.append(str(cleaned_path))
     return kept
+
+
+def _crop_out_watermark(image_path: str, regions: set[str]) -> Path:
+    path = Path(image_path)
+    image = Image.open(path).convert("RGBA")
+    cleaned = crop_out_watermark_regions(image, regions)
+    cleaned_path = path.with_name(f"{path.stem}_clean{path.suffix}")
+    cleaned.convert("RGB").save(cleaned_path)
+    return cleaned_path
 
 
 def _prepare_video(

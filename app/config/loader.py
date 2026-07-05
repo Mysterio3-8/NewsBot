@@ -105,6 +105,10 @@ class HeadlineCardConfig:
     без явного включения в config.yaml."""
 
     enabled: bool = False
+    # Отключено по запросу пользователя 2026-07-05 ("весь фон зелёным — убери, пусть
+    # будет оригинал") — оставлен переключателем, а не удалён совсем, на случай если
+    # понадобится снова (цвета для этого уже настроены и не потеряны).
+    duotone_enabled: bool = False
     duotone_dark: list[int] = field(default_factory=lambda: [10, 40, 30])
     duotone_light: list[int] = field(default_factory=lambda: [210, 255, 230])
     font_path: str = "assets/fonts/DejaVuSans-Bold.ttf"

@@ -24,6 +24,26 @@ ASPECT_RATIOS = {
 # достичь в рамках этого лимита — отдаём максимально близкое, но не режем сильнее.
 MAX_CROP_FRACTION = 0.02
 
+# Обрезка чужого водяного знака у края (см. watermark_detector.locate_foreign_watermark)
+# — ОТДЕЛЬНЫЙ лимит от MAX_CROP_FRACTION выше: тот бережёт композицию от лишней
+# обрезки ради формата, а этот убирает чужой брендинг с самого фото (запрос
+# пользователя 2026-07-05: "находить оригинальное фото, только без чужого монтажа
+# и вотермарков") — здесь важнее полностью убрать знак, чем сохранить каждый пиксель.
+WATERMARK_REMOVAL_CROP_FRACTION = 0.20
+
+
+def crop_out_watermark_regions(
+    image: Image.Image, regions: set[str], fraction: float = WATERMARK_REMOVAL_CROP_FRACTION
+) -> Image.Image:
+    """Обрезает верхнюю и/или нижнюю полосу фото, где обнаружен чужой знак.
+    regions — {"top"}, {"bottom"} или {"top", "bottom"}."""
+    width, height = image.size
+    top = int(height * fraction) if "top" in regions else 0
+    bottom = int(height * fraction) if "bottom" in regions else 0
+    if top + bottom >= height:
+        return image  # защита от вырезания всего фото при абсурдных входных данных
+    return image.crop((0, top, width, height - bottom))
+
 
 class WatermarkError(Exception):
     """Логотип не найден или конфигурация некорректна — не тихий fallback."""
@@ -52,11 +72,12 @@ class Watermarker:
         image = crop_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
         if self._headline_card_config.enabled and headline:
-            image = apply_duotone(
-                image,
-                tuple(self._headline_card_config.duotone_dark),
-                tuple(self._headline_card_config.duotone_light),
-            )
+            if self._headline_card_config.duotone_enabled:
+                image = apply_duotone(
+                    image,
+                    tuple(self._headline_card_config.duotone_dark),
+                    tuple(self._headline_card_config.duotone_light),
+                )
             image = overlay_headline(image, headline, self._headline_card_config)
         image = self._overlay_logo(image)
         return self._save(image, image_path, post_id)

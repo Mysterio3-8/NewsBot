@@ -144,17 +144,18 @@ def test_process_fetched_post_caps_rewrite_length_to_original_post_length(tmp_pa
     assert kwargs["max_length"] == len("Госдума приняла закон.")
 
 
-def test_filter_watermarked_photos_drops_local_files_with_detected_watermark(monkeypatch):
-    """По запросу пользователя 2026-07-05: фото с чужим логотипом/подписью не
-    должны идти в публикацию — пайплайн вместо них падает на сток-фолбэк."""
+def test_filter_watermarked_photos_drops_when_watermark_not_removable(monkeypatch):
+    """По запросу пользователя 2026-07-05: фото с чужим знаком по центру/на самом
+    сюжете (обрезкой не убрать) не должны идти в публикацию — пайплайн вместо них
+    падает на сток-фолбэк."""
     import app.core.pipeline as pipeline_module
 
     client = Mock(spec=LLMClient)
 
-    def fake_detect(_client, path):
-        return str(path) == "watermarked.jpg"
+    def fake_locate(_client, path):
+        return None if str(path) == "watermarked.jpg" else set()
 
-    monkeypatch.setattr(pipeline_module, "detect_foreign_watermark", fake_detect)
+    monkeypatch.setattr(pipeline_module, "locate_foreign_watermark", fake_locate)
 
     result = _filter_watermarked_photos(client, ["clean.jpg", "watermarked.jpg"])
 
@@ -167,13 +168,52 @@ def test_filter_watermarked_photos_keeps_remote_urls_unchecked(monkeypatch):
     import app.core.pipeline as pipeline_module
 
     client = Mock(spec=LLMClient)
-    detect_mock = Mock(return_value=True)
-    monkeypatch.setattr(pipeline_module, "detect_foreign_watermark", detect_mock)
+    locate_mock = Mock(return_value=None)
+    monkeypatch.setattr(pipeline_module, "locate_foreign_watermark", locate_mock)
 
     result = _filter_watermarked_photos(client, ["https://vk.com/photo1.jpg"])
 
     assert result == ["https://vk.com/photo1.jpg"]
-    detect_mock.assert_not_called()
+    locate_mock.assert_not_called()
+
+
+def test_filter_watermarked_photos_crops_out_removable_watermark_and_keeps_original(
+    tmp_path, monkeypatch
+):
+    """По прямому запросу пользователя 2026-07-05: "хочу чтобы ты в точь в точь
+    находил оригинальное фото только без чужого монтажа и вотермарков" — если знак
+    можно убрать обрезкой края, используем ЭТО ЖЕ фото очищенным, а не сток."""
+    import app.core.pipeline as pipeline_module
+
+    client = Mock(spec=LLMClient)
+    monkeypatch.setattr(pipeline_module, "locate_foreign_watermark", lambda *a, **k: {"top"})
+
+    source_path = tmp_path / "source.jpg"
+    Image.new("RGB", (400, 400), color="blue").save(source_path)
+
+    result = _filter_watermarked_photos(client, [str(source_path)])
+
+    assert len(result) == 1
+    cleaned_path = Path(result[0])
+    assert cleaned_path != source_path
+    assert cleaned_path.exists()
+    cleaned_image = Image.open(cleaned_path)
+    assert cleaned_image.height < 400  # верхняя полоса обрезана
+    assert cleaned_image.width == 400  # ширина не тронута
+
+
+def test_filter_watermarked_photos_keeps_clean_photo_unchanged(tmp_path, monkeypatch):
+    import app.core.pipeline as pipeline_module
+
+    client = Mock(spec=LLMClient)
+    monkeypatch.setattr(pipeline_module, "locate_foreign_watermark", lambda *a, **k: set())
+
+    source_path = tmp_path / "source.jpg"
+    Image.new("RGB", (400, 400), color="blue").save(source_path)
+
+    result = _filter_watermarked_photos(client, [str(source_path)])
+
+    assert result == [str(source_path)]
 
 
 def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):
