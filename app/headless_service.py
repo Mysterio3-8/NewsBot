@@ -26,7 +26,7 @@ from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
-from app.core.scheduler import pick_next_post_to_publish
+from app.core.scheduler import pick_next_post_to_publish, start_of_today_utc
 from app.db.repository import Repository
 from app.factories import (
     build_image_providers,
@@ -69,7 +69,7 @@ def build_cycle_job(
             important_score_threshold=config.filters.important_score_threshold,
         )
         if post is None:
-            logger.info("Нет постов к публикации в этом цикле")
+            logger.info(_explain_no_post_reason(repo, config.publishing.schedule.max_posts_per_day))
             return
 
         await _publish_to_all(
@@ -82,6 +82,19 @@ def build_cycle_job(
         )
 
     return cycle_job
+
+
+def _explain_no_post_reason(repo: Repository, max_posts_per_day: int) -> str:
+    """Раньше при post is None писалось только "нет постов к публикации" — приходилось
+    руками лезть в БД, чтобы понять, пуста ли очередь или упёрлись в дневной лимит.
+    Теперь причина видна сразу в логе."""
+    published_today = repo.count_published_since(start_of_today_utc())
+    if published_today >= max_posts_per_day:
+        return f"Публикация пропущена: дневной лимит достигнут ({published_today}/{max_posts_per_day})"
+    queued_count = len(repo.list_processed_posts(status="queued"))
+    if queued_count == 0:
+        return "Публикация пропущена: очередь пуста, новых постов, прошедших фильтры, не найдено"
+    return f"Публикация пропущена: в очереди {queued_count} постов, но ни один не выбран (неожиданно)"
 
 
 async def _publish_to_all(

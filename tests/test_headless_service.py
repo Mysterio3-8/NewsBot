@@ -6,7 +6,7 @@ import pytest
 from app.core.publishing.telegram_publisher import PublishResult, TelegramPublisher
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.db.repository import Repository, init_db, make_engine
-from app.headless_service import build_cycle_job, run_forever
+from app.headless_service import _explain_no_post_reason, build_cycle_job, run_forever
 
 
 def make_repo(tmp_path) -> Repository:
@@ -128,6 +128,40 @@ async def test_cycle_job_does_nothing_when_queue_empty(tmp_path, monkeypatch):
 
     tg_publisher.publish.assert_not_called()
     vk_publisher.publish.assert_not_called()
+
+
+def test_explain_no_post_reason_reports_empty_queue(tmp_path):
+    """Регрессия: раньше 'Нет постов к публикации' не объясняло, пуста ли очередь
+    или упёрлись в дневной лимит — приходилось лезть в БД руками, чтобы понять."""
+    repo = make_repo(tmp_path)
+    reason = _explain_no_post_reason(repo, max_posts_per_day=12)
+    assert "очередь пуста" in reason
+
+
+def test_explain_no_post_reason_reports_daily_cap_reached(tmp_path):
+    import datetime
+
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    now = datetime.datetime.utcnow()
+    for i in range(3):
+        raw = repo.create_raw_post(source_id=source.id, external_id=f"p{i}", raw_text="x")
+        p = repo.create_processed_post(raw_post_id=raw.id, score=90, status="queued")
+        repo.update_processed_post_status(p.id, "published", published_at=now)
+
+    reason = _explain_no_post_reason(repo, max_posts_per_day=3)
+    assert "дневной лимит" in reason
+    assert "3/3" in reason
+
+
+def test_explain_no_post_reason_reports_queue_has_posts_but_none_picked(tmp_path):
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="x")
+    repo.create_processed_post(raw_post_id=raw.id, score=90, status="queued")
+
+    reason = _explain_no_post_reason(repo, max_posts_per_day=12)
+    assert "в очереди 1 постов" in reason
 
 
 @pytest.mark.asyncio

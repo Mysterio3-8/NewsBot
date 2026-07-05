@@ -281,6 +281,9 @@ def _check_local_filters(
 
 
 def _reject(repo: Repository, raw_post_id: int, reason: str, *, score: float = 0.0) -> RejectedPost:
+    """Логируем каждый отказ (раньше это было видно только в БД — приходилось
+    руками лезть в rejected_posts, чтобы понять, почему пайплайн ничего не публикует)."""
+    logger.info("raw_post %d отклонён: %s (score=%.2f)", raw_post_id, reason, score)
     return repo.create_rejected_post(raw_post_id=raw_post_id, reason=reason, score=score)
 
 

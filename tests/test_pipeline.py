@@ -287,21 +287,26 @@ def test_process_fetched_post_rejects_structural_non_news(tmp_path):
     assert "poll" in outcome.rejected.reason
 
 
-def test_process_fetched_post_rejects_blacklisted_word(tmp_path):
+def test_process_fetched_post_rejects_blacklisted_word(tmp_path, caplog):
+    """Регрессия: отказы логируются (раньше были видны только в БД), чтобы не
+    приходилось лезть в rejected_posts руками для диагностики."""
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
     client = Mock(spec=LLMClient)
 
-    outcome = process_fetched_post(
-        repo,
-        source,
-        make_post(text="Успей купить со скидка!"),
-        llm_client=client,
-        filters=make_filters(),
-        scoring_weights=WEIGHTS,
-        rewrite_config=REWRITE_CONFIG,
-        max_post_age_hours=24,
-    )
+    with caplog.at_level("INFO", logger="monitoring"):
+        outcome = process_fetched_post(
+            repo,
+            source,
+            make_post(text="Успей купить со скидка!"),
+            llm_client=client,
+            filters=make_filters(),
+            scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG,
+            max_post_age_hours=24,
+        )
+
+    assert "отклонён" in caplog.text
 
     assert outcome.accepted is None
     assert "скидка" in outcome.rejected.reason

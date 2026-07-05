@@ -45,6 +45,7 @@ async def run_check_cycle(
                 # каждый цикл падал на VK-фетче и никогда не доходил до pick_next_post).
                 logger.exception("Не удалось получить посты из источника %s", source.name)
                 continue
+            logger.info("Источник %s (tg): получено %d новых постов", source.name, len(posts))
             _process_posts(repo, source, posts, llm_client, config, image_providers)
 
     if vk_fetcher is not None:
@@ -58,6 +59,7 @@ async def run_check_cycle(
             except Exception:
                 logger.exception("Не удалось получить посты из источника %s", source.name)
                 continue
+            logger.info("Источник %s (vk): получено %d постов", source.name, len(posts))
             _process_posts(repo, source, posts, llm_client, config, image_providers)
 
 

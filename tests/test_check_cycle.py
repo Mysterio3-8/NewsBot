@@ -52,6 +52,25 @@ def make_post(external_id: str) -> FetchedPost:
 
 
 @pytest.mark.asyncio
+async def test_run_check_cycle_logs_fetch_count_per_source(tmp_path, monkeypatch, caplog):
+    """Регрессия: раньше единственный способ узнать, сколько постов реально нашлось
+    у источника за цикл, был лезть в raw_posts руками — теперь видно прямо в логе."""
+    repo = make_repo(tmp_path)
+    repo.create_source(type="tg", name="novosti_efir", url="https://t.me/novosti_efir")
+    config = FakeAppConfig()
+    client = Mock(spec=LLMClient)
+
+    tg_fetcher = Mock()
+    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[])
+
+    with caplog.at_level("INFO", logger="monitoring"):
+        await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
+
+    assert "novosti_efir" in caplog.text
+    assert "получено 0 новых постов" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_run_check_cycle_processes_telegram_sources(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
     repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
