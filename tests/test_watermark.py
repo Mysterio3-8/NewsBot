@@ -17,14 +17,27 @@ def make_config(**overrides) -> WatermarkConfig:
     return WatermarkConfig(**defaults)
 
 
-@pytest.mark.parametrize(
-    "ratio_key,expected_ratio",
-    [("1:1", 1.0), ("4:5", 0.8), ("16:9", 16 / 9), ("9:16", 9 / 16)],
-)
-def test_crop_to_aspect_ratio_produces_correct_ratio(ratio_key, expected_ratio):
+def test_crop_to_aspect_ratio_matches_target_when_within_crop_cap():
+    # 1050x1000 (ratio 1.05) -> "1:1" needs ~4.8% width crop, well under the 15% cap.
+    image = Image.new("RGBA", (1050, 1000))
+    cropped = crop_to_aspect_ratio(image, "1:1")
+    assert cropped.width / cropped.height == pytest.approx(1.0, rel=0.02)
+
+
+@pytest.mark.parametrize("ratio_key", ["4:5", "16:9", "9:16"])
+def test_crop_to_aspect_ratio_never_crops_more_than_cap(ratio_key):
+    # A square source is far from all of these ratios — cropping to the exact
+    # target would cut ~20-44% of a dimension. Must clamp to <=15%, not force it.
     image = Image.new("RGBA", (1000, 1000))
     cropped = crop_to_aspect_ratio(image, ratio_key)
-    assert cropped.width / cropped.height == pytest.approx(expected_ratio, rel=0.02)
+    assert cropped.width >= 1000 * 0.85 - 1
+    assert cropped.height >= 1000 * 0.85 - 1
+
+
+def test_crop_to_aspect_ratio_does_not_crop_when_already_target_ratio():
+    image = Image.new("RGBA", (800, 1000))  # exactly 4:5
+    cropped = crop_to_aspect_ratio(image, "4:5")
+    assert (cropped.width, cropped.height) == (800, 1000)
 
 
 def test_crop_to_aspect_ratio_rejects_unknown_key():
@@ -63,7 +76,11 @@ def test_watermarker_applies_logo_and_saves_output(tmp_path, monkeypatch):
 
     assert output_path.exists()
     result_image = Image.open(output_path)
-    assert result_image.width / result_image.height == pytest.approx(0.8, rel=0.02)
+    # 800x600 source (4:3) cropped toward "4:5" is capped at 15% max crop (see
+    # MAX_CROP_FRACTION) rather than forced to exactly 0.8 — that would have cut
+    # ~40% of the width. Expect the capped width (800 * 0.85 = 680), not the exact ratio.
+    assert result_image.width == 680
+    assert result_image.height == 600
     assert output_path.parent == tmp_path / "output" / "images" / "42"
 
 

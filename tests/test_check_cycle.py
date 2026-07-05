@@ -128,7 +128,9 @@ async def test_run_check_cycle_processes_vk_sources_using_numeric_url(tmp_path, 
 
     await run_check_cycle(repo, config, client, tg_fetcher=None, vk_fetcher=vk_fetcher)
 
-    vk_fetcher.fetch_recent_posts.assert_called_once_with(12345, max_age_hours=24)
+    vk_fetcher.fetch_recent_posts.assert_called_once_with(
+        12345, max_age_hours=24, known_external_ids=set()
+    )
 
 
 @pytest.mark.asyncio

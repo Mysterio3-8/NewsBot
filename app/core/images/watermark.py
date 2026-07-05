@@ -16,6 +16,13 @@ ASPECT_RATIOS = {
     "9:16": (9, 16),
 }
 
+# Не резать больше 15% исходной ширины/высоты ради точного целевого соотношения —
+# иначе landscape-фото (типичный источник TG/VK) при "4:5" теряло ~40% кадра,
+# вырезая важную часть сюжета (жалоба пользователя 2026-07-05). Если точного
+# соотношения не достичь в рамках этого лимита — отдаём максимально близкое,
+# но не режем сильнее.
+MAX_CROP_FRACTION = 0.15
+
 
 class WatermarkError(Exception):
     """Логотип не найден или конфигурация некорректна — не тихий fallback."""
@@ -83,11 +90,15 @@ def crop_to_aspect_ratio(image: Image.Image, ratio_key: str) -> Image.Image:
     current_ratio = image.width / image.height
 
     if current_ratio > target_ratio:
-        new_width = int(image.height * target_ratio)
+        ideal_width = int(image.height * target_ratio)
+        min_width = int(image.width * (1 - MAX_CROP_FRACTION))
+        new_width = max(ideal_width, min_width)
         left = (image.width - new_width) // 2
         return image.crop((left, 0, left + new_width, image.height))
 
-    new_height = int(image.width / target_ratio)
+    ideal_height = int(image.width / target_ratio)
+    min_height = int(image.height * (1 - MAX_CROP_FRACTION))
+    new_height = max(ideal_height, min_height)
     top = (image.height - new_height) // 2
     return image.crop((0, top, image.width, top + new_height))
 

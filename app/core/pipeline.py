@@ -207,10 +207,11 @@ def _prepare_images(
 
 
 def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:
-    """Отбрасывает локальные файлы (скачанные из TG) с обнаруженным чужим водяным
-    знаком/логотипом — см. app/core/images/watermark_detector.py. Удалённые URL
-    (VK) не проверяются (используются как есть) — сам провайдер их только резолвит
-    в файл, локальной копии для vision-анализа на этом шаге ещё нет."""
+    """Отбрасывает локальные файлы с обнаруженным чужим водяным знаком/логотипом —
+    см. app/core/images/watermark_detector.py. И TG (TelegramFetcher), и VK
+    (VKFetcher, с 2026-07-05) скачивают фото на диск ДО этого шага, так что media_urls
+    здесь — всегда локальные пути; http(s)-ветка ниже — защита на случай прямого
+    вызова с ещё не скачанным URL (напр. сток-провайдеры), а не штатный путь для VK."""
     kept: list[str] = []
     for item in media_urls:
         if item.startswith("http://") or item.startswith("https://"):

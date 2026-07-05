@@ -54,7 +54,9 @@ async def run_check_cycle(
                 continue
             try:
                 posts = vk_fetcher.fetch_recent_posts(
-                    int(source.url), max_age_hours=config.monitoring.max_post_age_hours
+                    int(source.url),
+                    max_age_hours=config.monitoring.max_post_age_hours,
+                    known_external_ids=repo.get_existing_external_ids(source.id),
                 )
             except Exception:
                 logger.exception("Не удалось получить посты из источника %s", source.name)

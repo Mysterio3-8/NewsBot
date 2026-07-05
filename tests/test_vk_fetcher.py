@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+import app.core.monitoring.vk_fetcher as vk_fetcher_module
 from app.core.monitoring.vk_fetcher import VKFetcher, vk_post_to_fetched_post
 
 
@@ -87,3 +88,70 @@ def test_fetch_recent_posts_filters_by_age():
 
     assert [p.external_id for p in posts] == ["2"]
     fetcher._api.wall.get.assert_called_once_with(owner_id=-123, count=50)
+
+
+def test_fetch_recent_posts_skips_known_external_ids_before_downloading(monkeypatch):
+    now = datetime.now(timezone.utc)
+    known = make_item(id=1, date=int(now.timestamp()))
+    new = make_item(id=2, date=int(now.timestamp()))
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [new, known]}
+
+    download_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(fetcher, "_download_photos", download_mock)
+
+    posts = fetcher.fetch_recent_posts(123, max_age_hours=24, known_external_ids={"1"})
+
+    assert [p.external_id for p in posts] == ["2"]
+    download_mock.assert_called_once_with("2", [])
+
+
+def test_fetch_recent_posts_downloads_photos_to_local_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(vk_fetcher_module, "VK_MEDIA_DIR", tmp_path)
+
+    attachment = {
+        "type": "photo",
+        "photo": {"sizes": [{"type": "x", "url": "https://vk.com/photo.jpg", "width": 800, "height": 600}]},
+    }
+    item = make_item(id=5, attachments=[attachment])
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [item]}
+
+    fake_response = MagicMock()
+    fake_response.content = b"fake-jpeg-bytes"
+    fake_response.raise_for_status = MagicMock()
+    monkeypatch.setattr(vk_fetcher_module.requests, "get", MagicMock(return_value=fake_response))
+
+    posts = fetcher.fetch_recent_posts(123, max_age_hours=24)
+
+    assert len(posts) == 1
+    [local_path] = posts[0].media_urls
+    assert local_path == str(tmp_path / "5_0.jpg")
+    assert (tmp_path / "5_0.jpg").read_bytes() == b"fake-jpeg-bytes"
+
+
+def test_fetch_recent_posts_skips_photo_that_fails_to_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(vk_fetcher_module, "VK_MEDIA_DIR", tmp_path)
+
+    attachment = {
+        "type": "photo",
+        "photo": {"sizes": [{"type": "x", "url": "https://vk.com/photo.jpg", "width": 800, "height": 600}]},
+    }
+    item = make_item(id=6, attachments=[attachment])
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [item]}
+
+    monkeypatch.setattr(
+        vk_fetcher_module.requests, "get", MagicMock(side_effect=ConnectionError("boom"))
+    )
+
+    posts = fetcher.fetch_recent_posts(123, max_age_hours=24)
+
+    assert len(posts) == 1
+    assert posts[0].media_urls == []
