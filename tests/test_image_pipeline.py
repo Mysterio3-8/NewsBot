@@ -82,6 +82,36 @@ def test_prepare_images_falls_through_to_next_provider(tmp_path, monkeypatch):
     fallback_provider.search.assert_called_once()
 
 
+def test_prepare_images_applies_headline_only_to_first_photo(tmp_path):
+    """По запросу пользователя 2026-07-05: "если фотки три, заголовок только на
+    первом фото" — остальные получают только логотип (headline=None)."""
+    watermarker = Mock(spec=Watermarker)
+    watermarker.apply.side_effect = lambda path, **kwargs: path
+
+    provider = Mock()
+    provider.search.return_value = [
+        ImageResult(source_provider="source", local_path=tmp_path / f"photo_{i}.jpg")
+        for i in range(3)
+    ]
+    for i in range(3):
+        Image.new("RGB", (10, 10)).save(tmp_path / f"photo_{i}.jpg")
+
+    prepare_images_for_post(
+        providers_order=["source"],
+        providers={"source": provider},
+        query="новость",
+        count=3,
+        post_id=10,
+        watermarker=watermarker,
+        target_aspect_ratio="4:5",
+        raw_output_dir=tmp_path / "raw",
+        headline="Главный заголовок",
+    )
+
+    headlines_passed = [call.kwargs["headline"] for call in watermarker.apply.call_args_list]
+    assert headlines_passed == ["Главный заголовок", None, None]
+
+
 def test_prepare_images_returns_empty_when_no_provider_finds_anything(tmp_path, monkeypatch):
     watermarker = make_watermarker(tmp_path, monkeypatch)
     empty_provider = Mock()

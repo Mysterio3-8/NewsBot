@@ -33,12 +33,15 @@ def prepare_images_for_post(
             continue
 
         raw_output_dir.mkdir(parents=True, exist_ok=True)
+        # Заголовок — только на первом фото (запрос пользователя 2026-07-05: "если
+        # фотки три, заголовок только на первом фото"). Остальные фото получают
+        # только логотип, без карточки с заголовком.
         return [
             watermarker.apply(
                 resolve_to_local_file(result, raw_output_dir / f"raw_{index}.jpg"),
                 target_aspect_ratio=target_aspect_ratio,
                 post_id=post_id,
-                headline=headline,
+                headline=headline if index == 0 else None,
             )
             for index, result in enumerate(results)
         ]
