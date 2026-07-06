@@ -5,10 +5,18 @@ from unittest.mock import Mock
 
 from PIL import Image
 
-from app.config.loader import FiltersConfig, RewriteConfig, ScoringWeights, WatermarkConfig
+from app.config.loader import (
+    FiltersConfig,
+    HeadlineCardConfig,
+    ImagesConfig,
+    RewriteConfig,
+    ScoringWeights,
+    UniquifyConfig,
+    WatermarkConfig,
+)
 from app.core.llm.classifier import ClassificationError, ClassificationResult
 from app.core.llm.client import LLMClient
-from app.core.pipeline import _filter_watermarked_photos, process_fetched_post
+from app.core.pipeline import _filter_watermarked_photos, _prepare_images, process_fetched_post
 from app.core.monitoring.models import FetchedPost
 from app.db.repository import Repository, init_db, make_engine
 
@@ -214,6 +222,77 @@ def test_filter_watermarked_photos_keeps_clean_photo_unchanged(tmp_path, monkeyp
     result = _filter_watermarked_photos(client, [str(source_path)])
 
     assert result == [str(source_path)]
+
+
+def _images_config(count_per_post: int) -> ImagesConfig:
+    return ImagesConfig(
+        providers_order=["source", "pexels"],
+        count_per_post=count_per_post,
+        target_aspect_ratio="4:5",
+        uniquify=UniquifyConfig(enabled=False),
+    )
+
+
+def _watermark_config() -> WatermarkConfig:
+    return WatermarkConfig(logo_path="assets/logo.png", position="top-right", opacity=65, margin_px=20)
+
+
+def test_prepare_images_uses_all_own_photos_not_count_per_post(monkeypatch):
+    """Запрос пользователя 2026-07-05: свои фото поста берём ВСЕ (не ограничиваемся
+    count_per_post, который для стока = 1). Первое получит заголовок, остальные — фейд."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module, "_filter_watermarked_photos", lambda *a, **k: ["p1.jpg", "p2.jpg", "p3.jpg"]
+    )
+    captured = {}
+
+    def fake_prepare(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", fake_prepare)
+
+    _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=["p1.jpg", "p2.jpg", "p3.jpg"],
+        rewritten_text="текст",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+    )
+
+    assert captured["count"] == 3  # все три своих, не count_per_post=1
+
+
+def test_prepare_images_limits_stock_to_count_per_post(monkeypatch):
+    """Нет своих фото (все отфильтрованы) — сток берём только count_per_post (1)."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_filter_watermarked_photos", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline_module, "_safe_image_query", lambda *a, **k: "запрос")
+    captured = {}
+
+    def fake_prepare(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", fake_prepare)
+
+    _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=2,
+        post_media_urls=[],
+        rewritten_text="текст",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={"pexels": Mock()},
+    )
+
+    assert captured["count"] == 1
 
 
 def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):

@@ -44,6 +44,9 @@ from app.paths import OUTPUT_DIR
 
 logger = logging.getLogger("monitoring")
 
+# Потолок числа своих фото поста, идущих в публикацию (лимит медиагруппы TG/VK — 10).
+MAX_SOURCE_PHOTOS = 10
+
 
 @dataclass(frozen=True)
 class ProcessingOutcome:
@@ -198,13 +201,19 @@ def _prepare_images(
 
     query = "" if own_photos else _safe_image_query(llm_client, rewritten_text)
 
+    # Свои фото поста берём ВСЕ (запрос пользователя 2026-07-05: "медиа качай все...
+    # на первое фото заголовок, на остальные монтаж") — до разумного потолка в 10
+    # (лимит медиагруппы TG/VK). Сток-фолбэк (нет своих фото) — только count_per_post
+    # (по умолчанию 1, "бери только одно, как в оригинале").
+    count = min(len(own_photos), MAX_SOURCE_PHOTOS) if own_photos else images_config.count_per_post
+
     try:
         watermarker = Watermarker(watermark_config, images_config.uniquify, headline_card_config)
         image_paths = prepare_images_for_post(
             providers_order=images_config.providers_order,
             providers=providers,
             query=query,
-            count=images_config.count_per_post,
+            count=count,
             post_id=raw_post_id,
             headline=headline,
             watermarker=watermarker,
