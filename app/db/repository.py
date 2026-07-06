@@ -242,6 +242,40 @@ class Repository:
                 query = query.filter(ProcessedPost.status == status)
             return query.order_by(ProcessedPost.score.desc()).all()
 
+    def list_fresh_queued_posts(self, cutoff: datetime.datetime) -> list[ProcessedPost]:
+        """Посты в очереди со свежестью не старше cutoff, самые СВЕЖИЕ первыми
+        (по created_at desc). Используется для публикации только свежих новостей —
+        см. scheduler.pick_next_post_to_publish."""
+        with self._session_factory() as session:
+            return (
+                session.query(ProcessedPost)
+                .filter(
+                    ProcessedPost.status == "queued",
+                    ProcessedPost.created_at >= cutoff,
+                )
+                .order_by(ProcessedPost.created_at.desc())
+                .all()
+            )
+
+    def expire_stale_queued_posts(self, cutoff: datetime.datetime) -> int:
+        """Помечает залежавшиеся посты очереди (created_at < cutoff) как 'expired',
+        чтобы старые новости никогда не публиковались и очередь не копилась. Возвращает
+        число протухших."""
+        with self._session_factory() as session:
+            stale = (
+                session.query(ProcessedPost)
+                .filter(
+                    ProcessedPost.status == "queued",
+                    ProcessedPost.created_at < cutoff,
+                )
+                .all()
+            )
+            for post in stale:
+                post.status = "expired"
+            count = len(stale)
+            session.commit()
+        return count
+
     def list_recent_published(self, limit: int = 10) -> list[ProcessedPost]:
         with self._session_factory() as session:
             return (

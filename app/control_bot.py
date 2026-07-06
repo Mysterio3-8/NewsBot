@@ -224,7 +224,7 @@ async def publish_now(repo: Repository, config: AppConfig) -> str:
     post = pick_next_post_to_publish(
         repo,
         max_posts_per_day=config.publishing.schedule.max_posts_per_day,
-        important_score_threshold=config.filters.important_score_threshold,
+        freshness_hours=config.publishing.schedule.publish_freshness_hours,
     )
     if post is None:
         return "Нет постов в очереди для публикации."

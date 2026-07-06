@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -38,31 +38,28 @@ def pick_next_post_to_publish(
     repo: Repository,
     *,
     max_posts_per_day: int,
-    important_score_threshold: int | None = None,
+    freshness_hours: int,
 ) -> ProcessedPost | None:
-    """Пустой слот пропускается без ошибки, если очередь пуста или лимит дня достигнут.
+    """Только СВЕЖИЕ новости, без залежавшейся очереди (запрос пользователя
+    2026-07-05: "публикуй только свежие новости без очереди"). Выбираем самый
+    свежий пост очереди (по created_at); старьё за пределами `freshness_hours`
+    протухает и никогда не публикуется. Возвращает None, если свежих нет или
+    достигнут дневной лимит.
 
-    Если задан `important_score_threshold`, публикации дня чередуются по важности:
-    1-я, 3-я, 5-я... публикация дня — «главный» пост (score >= порога),
-    2-я, 4-я, 6-я... — «обычный» (score < порога). При нехватке постов нужного
-    уровня важности слот не пропускается — берётся лучший из доступных.
-    """
+    Ранее выбирали пост с максимальным score без учёта возраста — из-за этого
+    публиковались старые новости (в т.ч. с уже впечатанными в старые рендеры
+    чужими подписями, когда функция channel_name ещё существовала)."""
     published_today = repo.count_published_since(start_of_today_utc())
     if published_today >= max_posts_per_day:
         return None
 
-    queued_posts = repo.list_processed_posts(status="queued")  # уже отсортировано по score desc
-    if not queued_posts:
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=freshness_hours)
+    repo.expire_stale_queued_posts(cutoff)
+
+    fresh_posts = repo.list_fresh_queued_posts(cutoff)  # свежайшие первыми
+    if not fresh_posts:
         return None
-
-    if important_score_threshold is None:
-        return _prefer_post_with_image(queued_posts)
-
-    wants_important = published_today % 2 == 0
-    tiered = [
-        post for post in queued_posts if (post.score >= important_score_threshold) == wants_important
-    ]
-    return _prefer_post_with_image(tiered) if tiered else _prefer_post_with_image(queued_posts)
+    return _prefer_post_with_image(fresh_posts)
 
 
 def _has_image(post: ProcessedPost) -> bool:

@@ -19,6 +19,7 @@ class FakeScheduleConfig:
     max_posts_per_day = 12
     min_interval_minutes = 0  # в тестах стопор по интервалу не мешает
     jitter_minutes = 0
+    publish_freshness_hours = 6
 
 
 class FakeTelegramConfig:

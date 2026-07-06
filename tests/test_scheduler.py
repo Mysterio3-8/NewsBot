@@ -41,27 +41,57 @@ def test_build_triggers_raises_on_unknown_mode():
         build_triggers(schedule)
 
 
+import datetime
+
+from app.db.models import ProcessedPost
+
+
+def _set_created_at(repo, post_id, when) -> None:
+    with repo._session_factory() as session:
+        session.query(ProcessedPost).filter(ProcessedPost.id == post_id).update(
+            {"created_at": when}
+        )
+        session.commit()
+
+
 def test_pick_next_post_returns_none_when_queue_empty(tmp_path):
     repo = make_repo(tmp_path)
-    assert pick_next_post_to_publish(repo, max_posts_per_day=12) is None
+    assert pick_next_post_to_publish(repo, max_posts_per_day=12, freshness_hours=6) is None
 
 
-def test_pick_next_post_returns_highest_score(tmp_path):
+def test_pick_next_post_returns_freshest_not_highest_score(tmp_path):
+    """Запрос пользователя 2026-07-05: только свежие новости — выбираем самый свежий
+    пост (по created_at), а НЕ с самым высоким score (раньше публиковались старые)."""
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
     raw_a = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
     raw_b = repo.create_raw_post(source_id=source.id, external_id="2", raw_text="b")
-    repo.create_processed_post(raw_post_id=raw_a.id, score=50, status="queued")
-    best = repo.create_processed_post(raw_post_id=raw_b.id, score=90, status="queued")
+    old_high = repo.create_processed_post(raw_post_id=raw_a.id, score=99, status="queued")
+    fresh_low = repo.create_processed_post(raw_post_id=raw_b.id, score=40, status="queued")
+    # старый пост с высоким score создан 3 часа назад, свежий — только что
+    _set_created_at(repo, old_high.id, datetime.datetime.utcnow() - datetime.timedelta(hours=3))
 
-    picked = pick_next_post_to_publish(repo, max_posts_per_day=12)
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, freshness_hours=6)
 
-    assert picked.id == best.id
+    assert picked.id == fresh_low.id  # свежий, несмотря на низкий score
+
+
+def test_pick_next_post_ignores_and_expires_stale_posts(tmp_path):
+    """Пост старше freshness_hours не публикуется и помечается expired — чтобы старые
+    новости (в т.ч. со старыми впечатанными подписями) никогда не всплывали."""
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
+    stale = repo.create_processed_post(raw_post_id=raw.id, score=99, status="queued")
+    _set_created_at(repo, stale.id, datetime.datetime.utcnow() - datetime.timedelta(hours=10))
+
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, freshness_hours=4)
+
+    assert picked is None
+    assert repo.get_processed_post(stale.id).status == "expired"
 
 
 def test_pick_next_post_returns_none_when_daily_limit_reached(tmp_path):
-    import datetime
-
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
     raw_a = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
@@ -70,69 +100,29 @@ def test_pick_next_post_returns_none_when_daily_limit_reached(tmp_path):
         published.id, "published", published_at=datetime.datetime.now(datetime.timezone.utc)
     )
 
-    picked = pick_next_post_to_publish(repo, max_posts_per_day=1)
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=1, freshness_hours=6)
 
     assert picked is None
 
 
-def test_pick_next_post_alternates_important_and_regular_tiers(tmp_path):
-    import datetime
-
-    repo = make_repo(tmp_path)
-    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
-
-    def make_queued(score: float) -> int:
-        raw = repo.create_raw_post(
-            source_id=source.id, external_id=str(score), raw_text=f"post {score}"
-        )
-        return repo.create_processed_post(raw_post_id=raw.id, score=score, status="queued").id
-
-    important_high = make_queued(95)
-    important_low = make_queued(90)
-    regular_high = make_queued(80)
-    regular_low = make_queued(70)
-
-    def mark_published(post_id: int) -> None:
-        repo.update_processed_post_status(
-            post_id, "published", published_at=datetime.datetime.now(datetime.timezone.utc)
-        )
-
-    # 1-я публикация дня (published_today=0, чётное) -> главный пост
-    picked_1 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
-    assert picked_1.id == important_high
-    mark_published(picked_1.id)
-
-    # 2-я публикация дня (published_today=1, нечётное) -> обычный пост
-    picked_2 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
-    assert picked_2.id == regular_high
-    mark_published(picked_2.id)
-
-    # 3-я публикация дня -> снова главный
-    picked_3 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
-    assert picked_3.id == important_low
-    mark_published(picked_3.id)
-
-    # 4-я публикация дня -> снова обычный
-    picked_4 = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
-    assert picked_4.id == regular_low
-
-
-def test_pick_next_post_prefers_post_with_image_over_higher_score_without_image(tmp_path):
-    """Пользователь требует медиа на КАЖДОМ опубликованном посте — среди постов
-    одного тира берём лучший по score среди тех, у кого есть картинка, а не
-    просто самый высокий score без картинки."""
+def test_pick_next_post_prefers_fresh_post_with_image_over_fresher_without(tmp_path):
+    """Медиа на КАЖДОМ посте — среди свежих берём тот, у кого есть картинка, даже
+    если чуть более свежий без картинки."""
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
     raw_a = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
     raw_b = repo.create_raw_post(source_id=source.id, external_id="2", raw_text="b")
-    repo.create_processed_post(raw_post_id=raw_a.id, score=95, status="queued")  # без картинки
     with_image = repo.create_processed_post(
-        raw_post_id=raw_b.id, score=80, status="queued", image_paths=["output/images/1/photo.jpg"]
+        raw_post_id=raw_a.id, score=80, status="queued", image_paths=["output/images/1/photo.jpg"]
     )
+    no_image = repo.create_processed_post(raw_post_id=raw_b.id, score=95, status="queued")
+    # no_image свежее (создан позже), но картинки нет — берём with_image
+    _set_created_at(repo, with_image.id, datetime.datetime.utcnow() - datetime.timedelta(minutes=10))
 
-    picked = pick_next_post_to_publish(repo, max_posts_per_day=12)
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, freshness_hours=6)
 
     assert picked.id == with_image.id
+    assert no_image.id != with_image.id
 
 
 def test_pick_next_post_falls_back_to_no_image_when_none_have_images(tmp_path):
@@ -141,21 +131,9 @@ def test_pick_next_post_falls_back_to_no_image_when_none_have_images(tmp_path):
     raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
     only_post = repo.create_processed_post(raw_post_id=raw.id, score=95, status="queued")
 
-    picked = pick_next_post_to_publish(repo, max_posts_per_day=12)
+    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, freshness_hours=6)
 
     assert picked.id == only_post.id
-
-
-def test_pick_next_post_falls_back_when_tier_has_no_candidates(tmp_path):
-    repo = make_repo(tmp_path)
-    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
-    raw = repo.create_raw_post(source_id=source.id, external_id="1", raw_text="a")
-    only_regular = repo.create_processed_post(raw_post_id=raw.id, score=70, status="queued")
-
-    # published_today=0 (чётное) хочет "главный", но в очереди только обычный — берём его
-    picked = pick_next_post_to_publish(repo, max_posts_per_day=12, important_score_threshold=88)
-
-    assert picked.id == only_regular.id
 
 
 @pytest.mark.asyncio
