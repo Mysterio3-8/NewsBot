@@ -169,7 +169,9 @@ def test_watermarker_applies_headline_card_when_enabled_and_headline_given(tmp_p
     )
 
 
-def test_watermarker_skips_headline_card_when_no_headline_given(tmp_path, monkeypatch):
+def test_watermarker_applies_corner_fade_but_no_headline_when_headline_none(tmp_path, monkeypatch):
+    """headline=None (не первое фото) — зелёный фейд по углам применяется, а заголовок
+    НЕТ. Значит шрифт (которого тут нет на диске) не нужен и падать не должно."""
     import app.core.images.watermark as watermark_module
 
     monkeypatch.setattr(watermark_module, "PROJECT_ROOT", tmp_path)
@@ -184,8 +186,6 @@ def test_watermarker_skips_headline_card_when_no_headline_given(tmp_path, monkey
         make_config(logo_path="assets/logo.png"),
         headline_card_config=HeadlineCardConfig(enabled=True),
     )
-    # headline=None — карточка не должна применяться, даже если enabled=True,
-    # значит шрифт (которого тут нет на диске) не понадобится и не упадёт с ошибкой.
     output_path = watermarker.apply(source_image_path, target_aspect_ratio="4:5", post_id=1)
     assert output_path.exists()
 
@@ -211,10 +211,9 @@ def test_crop_out_watermark_regions_never_crops_entire_image():
     assert cropped.size == (400, 10)  # 0.6+0.6 >= 1.0 — защита сработала, не режем
 
 
-def test_watermarker_duotone_disabled_by_default_keeps_headline_text_only(tmp_path, monkeypatch):
-    """По запросу пользователя 2026-07-05 ("весь фон зелёным — убери, пусть будет
-    оригинал") дуотон выключен по умолчанию (duotone_enabled=False), но заголовок
-    и логотип по-прежнему накладываются."""
+def test_watermarker_center_keeps_original_colors_no_full_tint(tmp_path, monkeypatch):
+    """Фейд — только по углам, центр фото остаётся оригинальным (не как отвергнутый
+    дуотон, красивший весь кадр). Проверяем: центр синего фото остаётся синим."""
     import shutil
 
     import numpy as np
@@ -234,14 +233,13 @@ def test_watermarker_duotone_disabled_by_default_keeps_headline_text_only(tmp_pa
 
     watermarker = Watermarker(
         make_config(logo_path="assets/logo.png"),
-        headline_card_config=HeadlineCardConfig(enabled=True),  # duotone_enabled defaults False
+        headline_card_config=HeadlineCardConfig(enabled=True),
     )
     output_path = watermarker.apply(
         source_image_path, target_aspect_ratio="4:5", post_id=1, headline="Заголовок"
     )
 
     result = np.asarray(Image.open(output_path).convert("RGB"))
-    # Верхняя область (вдали от градиента/лого) должна остаться исходным синим, а
-    # не позеленеть — проверяем пиксель в центре верхней половины.
-    top_pixel = result[50, 400]
-    assert top_pixel[2] > top_pixel[1]  # синий канал доминирует, не зелёный
+    h, w = result.shape[:2]
+    center_pixel = result[h // 3, w // 2]  # верхняя треть по центру — вдали от углов и полосы
+    assert center_pixel[2] > center_pixel[1]  # синий доминирует, центр не позеленел

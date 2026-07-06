@@ -15,7 +15,7 @@ def test_load_config_reads_headline_card_section():
     config = load_config()
 
     assert config.headline_card.enabled is True
-    assert config.headline_card.duotone_dark == [10, 40, 30]
+    assert config.headline_card.corner_fade_corners == ["bottom-left", "top-right"]
 
 
 def test_load_config_defaults_headline_card_when_section_missing(tmp_path):

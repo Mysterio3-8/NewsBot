@@ -99,18 +99,23 @@ class WatermarkConfig:
 
 @dataclass(frozen=True)
 class HeadlineCardConfig:
-    """Заголовок на фото + дуотон-тонировка (запрос пользователя 2026-07-05) —
-    отдельная опция от логотипа-вотермарка, см. app/core/images/headline_card.py.
-    По умолчанию выключено (enabled=False), чтобы не менять существующие фото
-    без явного включения в config.yaml."""
+    """Монтаж фото в стиле PostNews (запрос пользователя 2026-07-05): зелёное
+    свечение в двух углах на КАЖДОМ фото + жирный заголовок белым внизу ТОЛЬКО на
+    первом фото. Логотип-вотермарк — отдельно (см. app/core/images/watermark.py).
+    По умолчанию выключено (enabled=False)."""
 
     enabled: bool = False
-    # Отключено по запросу пользователя 2026-07-05 ("весь фон зелёным — убери, пусть
-    # будет оригинал") — оставлен переключателем, а не удалён совсем, на случай если
-    # понадобится снова (цвета для этого уже настроены и не потеряны).
-    duotone_enabled: bool = False
-    duotone_dark: list[int] = field(default_factory=lambda: [10, 40, 30])
-    duotone_light: list[int] = field(default_factory=lambda: [210, 255, 230])
+    # Зелёное свечение по углам (референс PostNews — там синее). Углы: нижний-левый
+    # и верхний-правый (явный запрос пользователя). Цвет/интенсивность/радиус
+    # настраиваются — визуально калибруются под референс.
+    corner_fade_color: list[int] = field(default_factory=lambda: [16, 175, 110])
+    corner_fade_corners: list[str] = field(
+        default_factory=lambda: ["bottom-left", "top-right"]
+    )
+    corner_fade_max_alpha: float = 0.6
+    corner_fade_radius_ratio: float = 0.8
+    # Полоса под заголовком (тёмно-зелёная — для контраста белого текста, в тон бренду).
+    band_color: list[int] = field(default_factory=lambda: [6, 40, 26])
     font_path: str = "assets/fonts/DejaVuSans-Bold.ttf"
     font_size_ratio: float = 0.065
     band_height_ratio: float = 0.35

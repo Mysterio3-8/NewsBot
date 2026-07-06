@@ -6,28 +6,34 @@ from app.config.loader import HeadlineCardConfig
 from app.core.images.headline_card import (
     HeadlineCardError,
     _wrap_text,
-    apply_duotone,
+    apply_corner_fade,
     overlay_headline,
 )
 
 
-def test_apply_duotone_maps_black_and_white_extremes():
-    image = Image.new("RGB", (10, 10))
-    image.paste((0, 0, 0), (0, 0, 5, 10))
-    image.paste((255, 255, 255), (5, 0, 10, 10))
+def test_apply_corner_fade_tints_specified_corners_green():
+    image = Image.new("RGBA", (100, 100), color=(0, 0, 0, 255))
+    config = HeadlineCardConfig(
+        corner_fade_color=[0, 200, 0],
+        corner_fade_corners=["bottom-left", "top-right"],
+        corner_fade_max_alpha=0.8,
+        corner_fade_radius_ratio=0.8,
+    )
+    result = np.asarray(apply_corner_fade(image, config))
 
-    result = apply_duotone(image, dark=(10, 40, 30), light=(210, 255, 230))
+    # Нижний-левый и верхний-правый углы должны позеленеть (green-канал вырос).
+    assert result[99, 0][1] > 100   # bottom-left
+    assert result[0, 99][1] > 100   # top-right
+    # Противоположные углы (не в списке) остаются почти чёрными.
+    assert result[0, 0][1] < 60     # top-left
+    assert result[99, 99][1] < 60   # bottom-right
 
-    assert result.getpixel((1, 1))[:3] == (10, 40, 30)
-    assert result.getpixel((8, 1))[:3] == (210, 255, 230)
 
-
-def test_apply_duotone_removes_original_hue():
-    image = Image.new("RGB", (10, 10), color=(255, 0, 0))  # чистый красный
-    result = apply_duotone(image, dark=(0, 0, 0), light=(0, 255, 0))
-    # Дуотон идёт через grayscale — чистый красный не должен остаться красным
-    pixel = result.getpixel((0, 0))[:3]
-    assert pixel[0] <= pixel[1]  # не доминирует красный канал
+def test_apply_corner_fade_raises_on_unknown_corner():
+    image = Image.new("RGBA", (50, 50))
+    config = HeadlineCardConfig(corner_fade_corners=["middle"])
+    with pytest.raises(HeadlineCardError):
+        apply_corner_fade(image, config)
 
 
 def test_wrap_text_splits_on_width():

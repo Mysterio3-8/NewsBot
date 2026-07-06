@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.config.loader import HeadlineCardConfig, UniquifyConfig, WatermarkConfig
-from app.core.images.headline_card import apply_duotone, overlay_headline
+from app.core.images.headline_card import apply_corner_fade, overlay_headline
 from app.core.images.uniquifier import uniquify
 from app.paths import OUTPUT_DIR, PROJECT_ROOT
 
@@ -71,14 +71,13 @@ class Watermarker:
         image = Image.open(image_path).convert("RGBA")
         image = crop_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
-        if self._headline_card_config.enabled and headline:
-            if self._headline_card_config.duotone_enabled:
-                image = apply_duotone(
-                    image,
-                    tuple(self._headline_card_config.duotone_dark),
-                    tuple(self._headline_card_config.duotone_light),
-                )
-            image = overlay_headline(image, headline, self._headline_card_config)
+        if self._headline_card_config.enabled:
+            # Зелёный фейд по углам — на КАЖДОМ фото (общий фирменный вид), заголовок
+            # — только на первом (headline передаётся только для index==0, см.
+            # image_pipeline.prepare_images_for_post).
+            image = apply_corner_fade(image, self._headline_card_config)
+            if headline:
+                image = overlay_headline(image, headline, self._headline_card_config)
         image = self._overlay_logo(image)
         return self._save(image, image_path, post_id)
 
