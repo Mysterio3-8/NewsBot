@@ -14,7 +14,14 @@ import os
 
 from pathlib import Path
 
-from app.config.loader import CONFIG_PATH, AppConfig, load_config, update_config_section
+from app.config.loader import (
+    CONFIG_PATH,
+    AppConfig,
+    ConfigValidationError,
+    load_config,
+    update_config_section,
+    update_schedule_config,
+)
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
@@ -55,6 +62,16 @@ HELP_TEXT = (
     "повторно в ту же сеть один и тот же пост всё равно не уйдёт\n"
     "/queue — сколько постов в очереди\n"
     "/provider <groq|openrouter|gemini|ollama> — сменить LLM\n"
+    "\nИсточники новостей:\n"
+    "/sources — список источников (вкл/выкл)\n"
+    "/source_on <id> — включить источник\n"
+    "/source_off <id> — выключить источник\n"
+    "/addsource <tg|vk> <url|group_id> <имя> — добавить источник\n"
+    "\nТемп публикации:\n"
+    "/settings — текущие настройки темпа\n"
+    "/interval <мин> — как часто проверять каналы\n"
+    "/freshness <часов> — окно свежести/бэклога\n"
+    "/maxposts <n> — лимит постов в день\n"
     "\nУправление VK Nature Bot (отдельный процесс, свой репозиторий):\n"
     "/nature_run — запустить\n"
     "/nature_stop — остановить\n"
@@ -220,6 +237,78 @@ def switch_provider(config_path, provider: str) -> str:
     return f"LLM-провайдер → {provider}. Перезапусти сервис (/stop, /run), чтобы применить."
 
 
+def render_sources(repo: Repository) -> str:
+    """Список источников с id, типом, именем и статусом вкл/выкл — для /sources."""
+    sources = repo.list_sources()
+    if not sources:
+        return "Источников нет. Добавь: /addsource tg https://t.me/канал Имя"
+    lines = ["Источники (🟢 вкл / ⚪ выкл):"]
+    for src in sorted(sources, key=lambda s: s.id):
+        mark = "🟢" if src.enabled else "⚪"
+        lines.append(f"{mark} [{src.id}] {src.type}: {src.name} — {src.url}")
+    lines.append("\n/source_on <id> · /source_off <id> · /addsource <tg|vk> <url> <имя>")
+    return "\n".join(lines)
+
+
+def toggle_source(repo: Repository, arg: str, *, enabled: bool) -> str:
+    """Включить/выключить источник по id. Меняется в БД — эффект сразу, без рестарта."""
+    arg = arg.strip()
+    if not arg.isdigit():
+        return "Укажи числовой id источника: /source_off 7 (см. /sources)"
+    source = repo.get_source(int(arg))
+    if source is None:
+        return f"Источник {arg} не найден (см. /sources)."
+    repo.update_source(source.id, enabled=enabled)
+    state = "включён 🟢" if enabled else "выключен ⚪"
+    return f"Источник [{source.id}] {source.name} {state}."
+
+
+def add_source(repo: Repository, arg: str) -> str:
+    """Добавить источник: /addsource <tg|vk> <url|group_id> <имя>. Выключен по умолчанию —
+    чтобы включить осознанно через /source_on после проверки."""
+    parts = arg.split(maxsplit=2)
+    if len(parts) < 3:
+        return "Формат: /addsource <tg|vk> <url или group_id> <имя>"
+    src_type, url, name = parts[0].strip().lower(), parts[1].strip(), parts[2].strip()
+    if src_type not in ("tg", "vk"):
+        return "Тип должен быть tg или vk."
+    source = repo.create_source(type=src_type, name=name, url=url)
+    repo.update_source(source.id, enabled=False)
+    return f"Источник [{source.id}] {name} добавлен (выключен). Включить: /source_on {source.id}"
+
+
+def render_settings(config: AppConfig) -> str:
+    """Текущие настройки темпа публикации — для /settings."""
+    schedule = config.publishing.schedule
+    return (
+        "⚙️ Настройки темпа:\n"
+        f"• Проверка каналов: каждые {config.monitoring.check_interval_minutes} мин "
+        f"(±{schedule.jitter_minutes})\n"
+        f"• Окно свежести/бэклога: {schedule.publish_freshness_hours} ч\n"
+        f"• Мин. интервал между постами: {schedule.min_interval_minutes} мин\n"
+        f"• Лимит постов в день: {schedule.max_posts_per_day}\n"
+        "\nИзменить: /interval <мин> · /freshness <часов> · /maxposts <n>\n"
+        "(после изменения — /stop, /run, чтобы применить)"
+    )
+
+
+def set_check_interval(config_path, arg: str) -> str:
+    if not arg.strip().isdigit():
+        return "Укажи число минут: /interval 20"
+    update_config_section(config_path, "monitoring", check_interval_minutes=int(arg.strip()))
+    return f"Проверка каналов → каждые {arg.strip()} мин. Перезапусти сервис (/stop, /run)."
+
+
+def set_schedule_number(config_path, arg: str, *, field: str, label: str) -> str:
+    if not arg.strip().isdigit():
+        return f"Укажи число: /{field.split('_')[0]} <n>"
+    try:
+        update_schedule_config(config_path, **{field: int(arg.strip())})
+    except ConfigValidationError as error:
+        return f"Не сохранено: {error}"
+    return f"{label} → {arg.strip()}. Перезапусти сервис (/stop, /run)."
+
+
 async def publish_now(repo: Repository, config: AppConfig) -> str:
     post = pick_next_post_to_publish(
         repo,
@@ -348,6 +437,68 @@ def build_dispatcher(
             await message.answer("Укажи провайдера: /provider groq")
             return
         await message.answer(switch_provider(config_path, parts[1]))
+
+    @dp.message(Command("sources"))
+    async def on_sources(message: Message) -> None:
+        if await guard(message):
+            await message.answer(render_sources(repo))
+
+    @dp.message(Command("source_on"))
+    async def on_source_on(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(toggle_source(repo, parts[1] if len(parts) > 1 else "", enabled=True))
+
+    @dp.message(Command("source_off"))
+    async def on_source_off(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(toggle_source(repo, parts[1] if len(parts) > 1 else "", enabled=False))
+
+    @dp.message(Command("addsource"))
+    async def on_addsource(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(add_source(repo, parts[1] if len(parts) > 1 else ""))
+
+    @dp.message(Command("settings"))
+    async def on_settings(message: Message) -> None:
+        if await guard(message):
+            await message.answer(render_settings(load_config(config_path)))
+
+    @dp.message(Command("interval"))
+    async def on_interval(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(set_check_interval(config_path, parts[1] if len(parts) > 1 else ""))
+
+    @dp.message(Command("freshness"))
+    async def on_freshness(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(
+            set_schedule_number(
+                config_path, parts[1] if len(parts) > 1 else "",
+                field="publish_freshness_hours", label="Окно свежести (часов)",
+            )
+        )
+
+    @dp.message(Command("maxposts"))
+    async def on_maxposts(message: Message) -> None:
+        if not await guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        await message.answer(
+            set_schedule_number(
+                config_path, parts[1] if len(parts) > 1 else "",
+                field="max_posts_per_day", label="Лимит постов в день",
+            )
+        )
 
     @dp.message(Command("nature_run"))
     async def on_nature_run(message: Message) -> None:

@@ -108,9 +108,10 @@ def test_build_dispatcher_registers_media_handler():
 
     dp = bot.build_dispatcher(Mock(), Mock(), "config.yaml")
     # /start /help /run /stop /status /queue /publish /testpost /provider
+    # /sources /source_on /source_off /addsource /settings /interval /freshness /maxposts
     # /nature_run /nature_stop /nature_status
-    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 17 хендлеров
-    assert len(dp.message.handlers) == 17
+    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 25 хендлеров
+    assert len(dp.message.handlers) == 25
 
 
 def test_build_nature_controller_none_without_env_path():
@@ -258,3 +259,111 @@ async def test_publish_now_publishes_and_reports(tmp_path, monkeypatch):
     result = await bot.publish_now(repo, config)
     assert "Тестовый пост" in result
     assert "TG: ✅" in result
+
+
+def _repo(tmp_path) -> Repository:
+    engine = make_engine(tmp_path / "sources.db")
+    init_db(engine)
+    return Repository(engine)
+
+
+def test_render_sources_lists_with_status(tmp_path):
+    repo = _repo(tmp_path)
+    s1 = repo.create_source(type="tg", name="novosti_efir", url="https://t.me/novosti_efir")
+    repo.create_source(type="vk", name="postnews", url="152992737")
+    repo.update_source(s1.id, enabled=False)
+
+    text = bot.render_sources(repo)
+
+    assert "novosti_efir" in text
+    assert "postnews" in text
+    assert "⚪" in text and "🟢" in text
+
+
+def test_toggle_source_enables_and_disables(tmp_path):
+    repo = _repo(tmp_path)
+    src = repo.create_source(type="tg", name="x", url="https://t.me/x")
+
+    bot.toggle_source(repo, str(src.id), enabled=False)
+    assert repo.get_source(src.id).enabled is False
+
+    bot.toggle_source(repo, str(src.id), enabled=True)
+    assert repo.get_source(src.id).enabled is True
+
+
+def test_toggle_source_rejects_non_numeric(tmp_path):
+    repo = _repo(tmp_path)
+    assert "числовой id" in bot.toggle_source(repo, "abc", enabled=True)
+
+
+def test_toggle_source_reports_missing(tmp_path):
+    repo = _repo(tmp_path)
+    assert "не найден" in bot.toggle_source(repo, "999", enabled=True)
+
+
+def test_add_source_creates_disabled(tmp_path):
+    repo = _repo(tmp_path)
+    result = bot.add_source(repo, "tg https://t.me/newchan Новый канал")
+
+    assert "добавлен" in result
+    sources = repo.list_sources()
+    assert len(sources) == 1
+    assert sources[0].enabled is False
+    assert sources[0].name == "Новый канал"
+
+
+def test_add_source_rejects_bad_format(tmp_path):
+    repo = _repo(tmp_path)
+    assert "Формат" in bot.add_source(repo, "tg только-url")
+    assert "tg или vk" in bot.add_source(repo, "foo https://x Имя")
+
+
+def test_render_settings_shows_current_values():
+    from unittest.mock import Mock
+
+    config = Mock()
+    config.monitoring.check_interval_minutes = 20
+    config.publishing.schedule.jitter_minutes = 10
+    config.publishing.schedule.publish_freshness_hours = 12
+    config.publishing.schedule.min_interval_minutes = 10
+    config.publishing.schedule.max_posts_per_day = 50
+
+    text = bot.render_settings(config)
+
+    assert "каждые 20 мин" in text
+    assert "12 ч" in text
+    assert "50" in text
+
+
+def test_set_check_interval_writes_config(tmp_path):
+    import shutil
+
+    from app.config.loader import load_config
+
+    cfg_path = tmp_path / "config.yaml"
+    shutil.copy("app/config/config.yaml", cfg_path)
+
+    result = bot.set_check_interval(cfg_path, "35")
+
+    assert "35 мин" in result
+    assert load_config(cfg_path).monitoring.check_interval_minutes == 35
+
+
+def test_set_check_interval_rejects_non_numeric(tmp_path):
+    assert "число минут" in bot.set_check_interval(tmp_path / "x.yaml", "abc")
+
+
+def test_set_schedule_number_writes_freshness(tmp_path):
+    import shutil
+
+    from app.config.loader import load_config
+
+    cfg_path = tmp_path / "config.yaml"
+    shutil.copy("app/config/config.yaml", cfg_path)
+
+    result = bot.set_schedule_number(
+        cfg_path, "8", field="publish_freshness_hours", label="Окно свежести (часов)"
+    )
+
+    assert "8" in result
+    assert load_config(cfg_path).publishing.schedule.publish_freshness_hours == 8

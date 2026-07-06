@@ -236,6 +236,22 @@ def update_config_section(path: Path | None, section: str, **fields) -> AppConfi
     return load_config(config_path)
 
 
+def update_schedule_config(path: Path | None, **fields) -> AppConfig:
+    """Обновляет вложенную секцию publishing.schedule (freshness/max_posts/интервалы)
+    — update_config_section умеет только плоские секции верхнего уровня."""
+    config_path = path or CONFIG_PATH
+    with open(config_path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+
+    raw["publishing"]["schedule"].update(fields)
+    _validate(raw)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+
+    return load_config(config_path)
+
+
 def _build_images_config(raw_images: dict) -> ImagesConfig:
     raw = dict(raw_images)
     uniquify_raw = raw.pop("uniquify", None)
