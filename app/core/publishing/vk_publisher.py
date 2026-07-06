@@ -84,17 +84,24 @@ class VKPublisher:
     def _build_attachments(
         self, group_id: int, image_paths: list[Path], video_path: Path | None
     ) -> list[str]:
+        # Видео есть — прикрепляем ТОЛЬКО его, фото игнорируем: так VK-пост
+        # совпадает с TG-постом (TelegramPublisher при наличии видео шлёт только
+        # видео). Один и тот же пост во всех соцсетях — явный запрос пользователя
+        # 2026-07-05 («одинаковый пост во все соцсети», раньше VK давал фото+видео,
+        # а TG только видео).
+        if video_path is not None:
+            try:
+                return [self._upload_video(group_id, video_path)]
+            except Exception as error:
+                logger.warning("VK: не удалось загрузить видео %s, публикую без него: %s", video_path, error)
+                return []
+
         attachments: list[str] = []
         for path in image_paths:
             try:
                 attachments.append(self._upload_photo(group_id, path))
             except Exception as error:
                 logger.warning("VK: не удалось загрузить фото %s, публикую без него: %s", path, error)
-        if video_path is not None:
-            try:
-                attachments.append(self._upload_video(group_id, video_path))
-            except Exception as error:
-                logger.warning("VK: не удалось загрузить видео %s, публикую без него: %s", video_path, error)
         return attachments
 
     def _upload_photo(self, group_id: int, image_path: Path) -> str:

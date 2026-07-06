@@ -72,6 +72,35 @@ def test_publish_with_video_uploads_and_attaches():
     )
 
 
+def test_publish_with_video_and_photos_attaches_only_video():
+    """Одинаковый пост во все соцсети (запрос пользователя 2026-07-05): при наличии
+    видео фото НЕ прикрепляются — так VK совпадает с TG (тот при видео шлёт только
+    видео). Раньше VK давал фото+видео, а TG только видео — расхождение."""
+    publisher = make_publisher()
+    publisher._api.video.save.return_value = {
+        "upload_url": "http://upload-video", "video_id": 777, "owner_id": -123,
+    }
+    publisher._api.wall.post.return_value = {"post_id": 58}
+
+    upload_response = MagicMock()
+    upload_response.json.return_value = {"size": 12345}
+    upload_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
+        patch("builtins.open", mock_open(read_data=b"fake-bytes")),
+    ):
+        result = publisher.publish(
+            group_id=123, text="новость",
+            image_paths=[Path("a.jpg"), Path("b.jpg")], video_path=Path("clip.mp4"),
+        )
+
+    assert result.success is True
+    _, kwargs = publisher._api.wall.post.call_args
+    assert kwargs["attachments"] == "video-123_777"  # только видео, без фото
+    publisher._api.photos.getWallUploadServer.assert_not_called()
+
+
 def test_publish_posts_text_only_when_photo_upload_fails():
     """Регрессия: групповой токен не может загрузить фото (VK error 27) — пост должен
     уйти текстом, а не упасть целиком (главное — публикация во все сети)."""
