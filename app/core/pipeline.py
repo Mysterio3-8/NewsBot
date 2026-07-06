@@ -283,6 +283,10 @@ def _prepare_video(
     if not post_video_path or watermark_config is None:
         return None
 
+    # Видео без вотермарка/монтажа (запрос пользователя 2026-07-05) — публикуем как есть.
+    if not watermark_config.video_enabled:
+        return post_video_path
+
     uniquify_enabled = images_config is not None and images_config.uniquify.enabled
 
     try:

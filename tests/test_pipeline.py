@@ -16,7 +16,12 @@ from app.config.loader import (
 )
 from app.core.llm.classifier import ClassificationError, ClassificationResult
 from app.core.llm.client import LLMClient
-from app.core.pipeline import _filter_watermarked_photos, _prepare_images, process_fetched_post
+from app.core.pipeline import (
+    _filter_watermarked_photos,
+    _prepare_images,
+    _prepare_video,
+    process_fetched_post,
+)
 from app.core.monitoring.models import FetchedPost
 from app.db.repository import Repository, init_db, make_engine
 
@@ -235,6 +240,19 @@ def _images_config(count_per_post: int) -> ImagesConfig:
 
 def _watermark_config() -> WatermarkConfig:
     return WatermarkConfig(logo_path="assets/logo.png", position="top-right", opacity=65, margin_px=20)
+
+
+def test_prepare_video_returns_raw_path_when_video_watermark_disabled():
+    """Запрос пользователя 2026-07-05: на видео вотермарк/монтаж не ставим — видео
+    уходит как есть (video_enabled=False), без вызова ffmpeg-watermark."""
+    wm = WatermarkConfig(
+        logo_path="assets/logo.png", position="top-right", opacity=65, margin_px=20,
+        video_enabled=False,
+    )
+    result = _prepare_video(
+        raw_post_id=1, post_video_path="/some/video.mp4", watermark_config=wm, images_config=None
+    )
+    assert result == "/some/video.mp4"
 
 
 def test_prepare_images_uses_all_own_photos_not_count_per_post(monkeypatch):

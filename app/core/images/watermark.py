@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
 from app.config.loader import HeadlineCardConfig, UniquifyConfig, WatermarkConfig
 from app.core.images.headline_card import apply_corner_fade, overlay_headline
@@ -69,7 +69,7 @@ class Watermarker:
         headline: str | None = None,
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
-        image = crop_to_aspect_ratio(image, target_aspect_ratio)
+        image = fit_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
         if self._headline_card_config.enabled:
             # Зелёный фейд по углам — на КАЖДОМ фото (общий фирменный вид), заголовок
@@ -100,6 +100,41 @@ class Watermarker:
         output_path = output_dir / original_path.name
         image.convert("RGB").save(output_path)
         return output_path
+
+
+def fit_to_aspect_ratio(image: Image.Image, ratio_key: str, *, blur_radius: int = 45) -> Image.Image:
+    """Приводит фото к целевому соотношению БЕЗ обрезки контента: фото вписывается
+    целиком по центру, а недостающие поля заполняются размытой затемнённой копией
+    самого фото (приём PostNews). Так широкое фото не режется в VK-ленте (жалоба
+    пользователя 2026-07-05: "VK фотка обрубленная") — оно становится квадратным и
+    показывается целиком везде. Если фото уже нужного соотношения — возвращаем как есть."""
+    if ratio_key not in ASPECT_RATIOS:
+        raise WatermarkError(f"Неизвестное соотношение сторон: {ratio_key}")
+
+    ratio_w, ratio_h = ASPECT_RATIOS[ratio_key]
+    target_ratio = ratio_w / ratio_h
+    width, height = image.size
+    current_ratio = width / height
+
+    if abs(current_ratio - target_ratio) < 0.01:
+        return image
+
+    if current_ratio > target_ratio:
+        canvas_w, canvas_h = width, round(width / target_ratio)
+    else:
+        canvas_w, canvas_h = round(height * target_ratio), height
+
+    scale = max(canvas_w / width, canvas_h / height)
+    bg = image.convert("RGB").resize((round(width * scale) + 1, round(height * scale) + 1))
+    left = (bg.width - canvas_w) // 2
+    top = (bg.height - canvas_h) // 2
+    bg = bg.crop((left, top, left + canvas_w, top + canvas_h))
+    bg = bg.filter(ImageFilter.GaussianBlur(blur_radius))
+    bg = ImageEnhance.Brightness(bg).enhance(0.6)  # затемняем фон, чтобы фото выделялось
+
+    canvas = bg.convert("RGBA")
+    canvas.paste(image, ((canvas_w - width) // 2, (canvas_h - height) // 2), image)
+    return canvas
 
 
 def crop_to_aspect_ratio(image: Image.Image, ratio_key: str) -> Image.Image:

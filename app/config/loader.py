@@ -95,6 +95,9 @@ class WatermarkConfig:
     opacity: int
     margin_px: int
     size_ratio: float = 0.2
+    # Накладывать ли вотермарк/монтаж на ВИДЕО. Пользователь 2026-07-05: "на видео
+    # не надо ставить вотермарки и надписи с фейдом" — видео уходит как есть.
+    video_enabled: bool = True
 
 
 @dataclass(frozen=True)

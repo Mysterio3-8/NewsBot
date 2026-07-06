@@ -7,7 +7,33 @@ from app.core.images.watermark import (
     WatermarkError,
     crop_out_watermark_regions,
     crop_to_aspect_ratio,
+    fit_to_aspect_ratio,
 )
+
+
+def test_fit_to_aspect_ratio_pads_wide_image_to_square_without_cropping():
+    """Широкое фото приводится к 1:1 БЕЗ обрезки: ширина сохраняется, высота
+    дорастает размытыми полями. Контент не теряется (жалоба "VK фотка обрубленная")."""
+    image = Image.new("RGBA", (1000, 500), color=(0, 0, 255, 255))
+    result = fit_to_aspect_ratio(image, "1:1")
+    assert result.size == (1000, 1000)  # квадрат, ширина не тронута
+
+
+def test_fit_to_aspect_ratio_returns_unchanged_when_already_target():
+    image = Image.new("RGBA", (600, 600))
+    result = fit_to_aspect_ratio(image, "1:1")
+    assert result.size == (600, 600)
+
+
+def test_fit_to_aspect_ratio_keeps_original_photo_centered():
+    """Оригинал вписан по центру целиком — центральный пиксель остаётся исходным."""
+    import numpy as np
+
+    image = Image.new("RGBA", (1000, 400), color=(0, 0, 255, 255))
+    result = fit_to_aspect_ratio(image, "1:1")
+    arr = np.asarray(result.convert("RGB"))
+    center = arr[500, 500]
+    assert center[2] > center[0] and center[2] > center[1]  # синий оригинал в центре
 
 
 def make_config(**overrides) -> WatermarkConfig:
@@ -78,11 +104,11 @@ def test_watermarker_applies_logo_and_saves_output(tmp_path, monkeypatch):
 
     assert output_path.exists()
     result_image = Image.open(output_path)
-    # 800x600 source (4:3) cropped toward "4:5" is capped at 2% max crop (see
-    # MAX_CROP_FRACTION) rather than forced to exactly 0.8 — that would have cut
-    # ~40% of the width. Expect the capped width (800 * 0.98 = 784), not the exact ratio.
-    assert result_image.width == 784
-    assert result_image.height == 600
+    # 800x600 (4:3) приводится к "4:5" (0.8) через fit_to_aspect_ratio: не обрезкой,
+    # а размытыми полями сверху/снизу — контент сохраняется полностью. Ширина остаётся
+    # 800, высота растёт до 800/0.8 = 1000.
+    assert result_image.width == 800
+    assert result_image.height == 1000
     assert output_path.parent == tmp_path / "output" / "images" / "42"
 
 
