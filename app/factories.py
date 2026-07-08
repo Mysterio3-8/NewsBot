@@ -5,6 +5,7 @@ import os
 
 from app.config.loader import AppConfig
 from app.core.images.providers.base import ImageProvider
+from app.db.models import Channel
 from app.core.images.providers.pexels_provider import PexelsProvider
 from app.core.images.providers.pixabay_provider import PixabayProvider
 from app.core.images.providers.unsplash_provider import UnsplashProvider
@@ -29,6 +30,26 @@ def build_vk_publisher(config: AppConfig) -> VKPublisher | None:
     # group-токен не может (VK error 27, см. CLAUDE.md). wall.post всегда идёт через
     # group_token. Не задан — best-effort продолжает публиковать текстом без вложения.
     upload_token = os.environ.get("VK_PHOTO_UPLOAD_TOKEN")
+    return VKPublisher(group_token, upload_token=upload_token)
+
+
+def build_telegram_publisher_for_channel(channel: Channel) -> TelegramPublisher | None:
+    """Publisher канала: токен бота берётся из env-переменной, ИМЯ которой хранится в
+    channel.tg_token_env (сам токен — в .env, инвариант). Разные каналы могут постить
+    одним ботом (одно имя env) в разные @назначения или разными ботами."""
+    bot_token = os.environ.get(channel.tg_token_env)
+    if not bot_token:
+        return None
+    return TelegramPublisher(bot_token)
+
+
+def build_vk_publisher_for_channel(channel: Channel) -> VKPublisher | None:
+    """Publisher канала: групповой токен из channel.vk_token_env + опц. личный upload-
+    токен из channel.vk_upload_token_env (group-токен не грузит медиа, VK error 27)."""
+    group_token = os.environ.get(channel.vk_token_env)
+    if not group_token:
+        return None
+    upload_token = os.environ.get(channel.vk_upload_token_env)
     return VKPublisher(group_token, upload_token=upload_token)
 
 

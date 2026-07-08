@@ -358,20 +358,25 @@ class Repository:
                 query = query.filter(ProcessedPost.status == status)
             return query.order_by(ProcessedPost.score.desc()).all()
 
-    def list_fresh_queued_posts(self, cutoff: datetime.datetime) -> list[ProcessedPost]:
+    def list_fresh_queued_posts(
+        self, cutoff: datetime.datetime, *, channel_id: int | None = None
+    ) -> list[ProcessedPost]:
         """Посты в очереди со свежестью не старше cutoff, самые СВЕЖИЕ первыми
-        (по created_at desc). Используется для публикации только свежих новостей —
-        см. scheduler.pick_next_post_to_publish."""
+        (по created_at desc). channel_id ограничивает выборку постами, чьи источники
+        принадлежат каналу (мультиканальность: каждый канал публикуется отдельно в
+        свой таргет). None — все каналы (обратная совместимость)."""
         with self._session_factory() as session:
-            return (
-                session.query(ProcessedPost)
-                .filter(
-                    ProcessedPost.status == "queued",
-                    ProcessedPost.created_at >= cutoff,
-                )
-                .order_by(ProcessedPost.created_at.desc())
-                .all()
+            query = session.query(ProcessedPost).filter(
+                ProcessedPost.status == "queued",
+                ProcessedPost.created_at >= cutoff,
             )
+            if channel_id is not None:
+                query = (
+                    query.join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
+                    .join(Source, RawPost.source_id == Source.id)
+                    .filter(Source.channel_id == channel_id)
+                )
+            return query.order_by(ProcessedPost.created_at.desc()).all()
 
     def expire_stale_queued_posts(self, cutoff: datetime.datetime) -> int:
         """Помечает залежавшиеся посты очереди (created_at < cutoff) как 'expired',

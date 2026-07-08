@@ -27,13 +27,14 @@ from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.scheduler import start_of_today_utc
-from app.db.repository import Repository
+from app.db.models import Channel
+from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
 from app.factories import (
     build_image_providers,
     build_telegram_fetcher,
-    build_telegram_publisher,
+    build_telegram_publisher_for_channel,
     build_vk_fetcher,
-    build_vk_publisher,
+    build_vk_publisher_for_channel,
 )
 
 logger = logging.getLogger("app")
@@ -46,12 +47,28 @@ def build_cycle_job(
     *,
     tg_fetcher: TelegramFetcher | None,
     vk_fetcher: VKFetcher | None,
-    tg_publisher: TelegramPublisher | None,
-    vk_publisher: VKPublisher | None,
 ):
-    """Один автономный цикл: собрать свежие посты → опубликовать один лучший в обе сети."""
+    """Один автономный цикл: собрать свежие посты всех источников → опубликовать посты
+    КАЖДОГО канала в его собственные таргеты (мультиканальность). Читалка (fetcher) общая
+    для всех каналов, публикация — раздельная: каждый канал в свою VK-группу/TG-канал."""
     image_providers = build_image_providers()
     footer_links = build_footer_links_from_config(config.footer)
+
+    # Publisher'ы кэшируются по имени env-переменной с токеном — чтобы не создавать
+    # новый клиент на каждый канал в каждом цикле (несколько каналов могут постить одним
+    # ботом/групповым токеном, тогда publisher переиспользуется).
+    tg_pub_cache: dict[str, TelegramPublisher | None] = {}
+    vk_pub_cache: dict[str, VKPublisher | None] = {}
+
+    def _tg_publisher_for(channel: Channel) -> TelegramPublisher | None:
+        if channel.tg_token_env not in tg_pub_cache:
+            tg_pub_cache[channel.tg_token_env] = build_telegram_publisher_for_channel(channel)
+        return tg_pub_cache[channel.tg_token_env]
+
+    def _vk_publisher_for(channel: Channel) -> VKPublisher | None:
+        if channel.vk_token_env not in vk_pub_cache:
+            vk_pub_cache[channel.vk_token_env] = build_vk_publisher_for_channel(channel)
+        return vk_pub_cache[channel.vk_token_env]
 
     async def cycle_job() -> None:
         await run_check_cycle(
@@ -68,24 +85,28 @@ def build_cycle_job(
         repo.expire_stale_queued_posts(cutoff)
 
         # Публикуем ВСЕ свежие посты очереди за цикл (запрос пользователя 2026-07-07:
-        # "публиковать всё сразу, без лимита"), по порядку появления (oldest-first),
-        # а не один самый свежий, как раньше — из-за этого пачка постов терялась.
-        # list_fresh_queued_posts отдаёт created_at desc → reversed = хронология.
-        fresh = repo.list_fresh_queued_posts(cutoff)
-        if not fresh:
-            logger.info(_explain_no_post_reason(repo, schedule.max_posts_per_day))
-            return
+        # "публиковать всё сразу"), по порядку появления (oldest-first) — reversed от
+        # created_at desc. Каждый канал отдельно → в свои таргеты.
+        published_any = False
+        for channel in repo.list_channels(enabled_only=True):
+            fresh = repo.list_fresh_queued_posts(cutoff, channel_id=channel.id)
+            if not fresh:
+                continue
+            published_any = True
+            for post in reversed(fresh):
+                await _publish_channel_post(
+                    repo,
+                    channel,
+                    post_id=post.id,
+                    config=config,
+                    tg_publisher=_tg_publisher_for(channel),
+                    vk_publisher=_vk_publisher_for(channel),
+                    footer_links=footer_links,
+                )
+                await asyncio.sleep(random.uniform(3, 8))  # лёгкая пауза между постами
 
-        for post in reversed(fresh):
-            await _publish_to_all(
-                repo,
-                post_id=post.id,
-                config=config,
-                tg_publisher=tg_publisher,
-                vk_publisher=vk_publisher,
-                footer_links=footer_links,
-            )
-            await asyncio.sleep(random.uniform(3, 8))  # лёгкая пауза между постами
+        if not published_any:
+            logger.info(_explain_no_post_reason(repo, schedule.max_posts_per_day))
 
     return cycle_job
 
@@ -103,8 +124,9 @@ def _explain_no_post_reason(repo: Repository, max_posts_per_day: int) -> str:
     return f"Публикация пропущена: в очереди {queued_count} постов, но ни один не выбран (неожиданно)"
 
 
-async def _publish_to_all(
+async def _publish_channel_post(
     repo: Repository,
+    channel: Channel,
     *,
     post_id: int,
     config: AppConfig,
@@ -112,29 +134,30 @@ async def _publish_to_all(
     vk_publisher: VKPublisher | None,
     footer_links,
 ) -> None:
-    """Публикует в обе сети. Статус поста ('published'/'failed') ставит publish_queued_post*,
-    поэтому в БД он опубликован, если прошла хотя бы одна сеть — этого достаточно, чтобы
-    не публиковать его снова в следующем цикле."""
+    """Публикует пост в таргеты КОНКРЕТНОГО канала. Сеть пропускается, если у канала не
+    задано её назначение (напр. кино/мемы пока только VK, tg_destination пуст) или сеть
+    выключена глобально. Статус ('published'/'failed') ставит publish_queued_post*."""
     schedule = config.publishing.schedule
-    if tg_publisher is not None and config.publishing.telegram.enabled:
+    if tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination:
         try:
             await publish_queued_post(
                 repo,
                 tg_publisher,
                 post_id=post_id,
-                chat_id=config.publishing.telegram.destination,
+                chat_id=channel.tg_destination,
                 footer_links=footer_links,
                 max_posts_per_day=schedule.max_posts_per_day,
                 min_interval_minutes=schedule.min_interval_minutes,
                 include_hashtags=config.rewrite.include_hashtags,
             )
         except Exception:
-            logger.exception("Публикация в Telegram не удалась для поста %d", post_id)
+            logger.exception(
+                "Публикация в Telegram не удалась для поста %d (канал %s)", post_id, channel.name
+            )
 
-    if vk_publisher is not None and config.publishing.vk.enabled:
+    if vk_publisher is not None and config.publishing.vk.enabled and channel.vk_destination:
         # Небольшая случайная пауза перед второй сетью — чтобы TG и VK не публиковались
-        # секунда в секунду (антибан). Короткая (3-8с): режим немедленной публикации,
-        # длинная пауза 1-5 мин мешала бы публиковать пачку постов «сразу».
+        # секунда в секунду (антибан). Короткая (3-8с): режим немедленной публикации.
         delay_seconds = random.uniform(3, 8)
         logger.info("Пауза %.0f сек перед публикацией в VK", delay_seconds)
         await asyncio.sleep(delay_seconds)
@@ -143,14 +166,35 @@ async def _publish_to_all(
                 repo,
                 vk_publisher,
                 post_id=post_id,
-                group_id=int(config.publishing.vk.destination),
+                group_id=int(channel.vk_destination),
                 footer_links=footer_links,
                 max_posts_per_day=schedule.max_posts_per_day,
                 min_interval_minutes=schedule.min_interval_minutes,
                 include_hashtags=config.rewrite.include_hashtags,
             )
         except Exception:
-            logger.exception("Публикация в VK не удалась для поста %d", post_id)
+            logger.exception(
+                "Публикация в VK не удалась для поста %d (канал %s)", post_id, channel.name
+            )
+
+
+def _sync_default_channel_targets(repo: Repository, config: AppConfig) -> None:
+    """Канал 1 (Новости) создан миграцией с пустыми таргетами. Здесь (в headless доступен
+    config) заполняем их из глобального config.publishing — новостной канал постит в
+    @NewsThreeWord/VK как раньше, без магии fallback в цикле публикации. Не перетираем,
+    если таргеты уже заданы (напр. вручную через бота)."""
+    default = next(
+        (c for c in repo.list_channels() if c.name == DEFAULT_CHANNEL_NAME), None
+    )
+    if default is None or default.tg_destination or default.vk_destination:
+        return
+    repo.update_channel(
+        default.id,
+        tg_token_env=config.publishing.telegram.token_env,
+        tg_destination=config.publishing.telegram.destination,
+        vk_token_env=config.publishing.vk.token_env,
+        vk_destination=config.publishing.vk.destination,
+    )
 
 
 async def run_forever(
@@ -162,15 +206,14 @@ async def run_forever(
 ) -> None:
     tg_fetcher = build_telegram_fetcher()
     vk_fetcher = build_vk_fetcher()
-    tg_publisher = build_telegram_publisher(config)
-    vk_publisher = build_vk_publisher(config)
+    _sync_default_channel_targets(repo, config)
 
     if tg_fetcher is None and vk_fetcher is None:
         logger.warning(
             "Ни TG_API_ID/TG_API_HASH, ни VK_USER_TOKEN не заданы — мониторинг источников не запущен"
         )
-    if tg_publisher is None and vk_publisher is None:
-        logger.warning("Ни TG_BOT_TOKEN, ни VK_GROUP_TOKEN не заданы — автопубликация недоступна")
+    if not repo.list_channels(enabled_only=True):
+        logger.warning("Нет ни одного включённого канала — автопубликация недоступна")
 
     scheduler = AsyncIOScheduler()
     # jitter — случайный разброс момента запуска (±jitter_minutes), чтобы публикации
@@ -183,8 +226,6 @@ async def run_forever(
             llm_client,
             tg_fetcher=tg_fetcher,
             vk_fetcher=vk_fetcher,
-            tg_publisher=tg_publisher,
-            vk_publisher=vk_publisher,
         ),
         IntervalTrigger(minutes=config.monitoring.check_interval_minutes, jitter=jitter_seconds),
         # Без next_run_time IntervalTrigger ждёт первый полный интервал (до 4 часов)
