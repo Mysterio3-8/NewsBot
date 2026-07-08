@@ -52,6 +52,7 @@ SHORTS_OUTPUT_DIR = OUTPUT_DIR / "shorts"
 
 HELP_TEXT = (
     "Управление AI News Rewriter:\n"
+    "/menu — открыть кнопочное меню (удобнее, чем команды)\n"
     "/newpost — собрать пост вручную: текст/медиа + URL-кнопки + уникализация "
     "текста → публикация в канал (аналог «Создать пост»)\n"
     "/run — запустить сервис\n"
@@ -378,7 +379,9 @@ def build_dispatcher(
 
     @dp.message(Command("start"))
     async def on_start(message: Message) -> None:
-        await message.answer(handle_start(repo, message.from_user.id))
+        text = handle_start(repo, message.from_user.id)
+        markup = kb.main_menu() if is_authorized(repo, message.from_user.id) else None
+        await message.answer(text, reply_markup=markup)
 
     @dp.message(Command("help"))
     async def on_help(message: Message) -> None:
@@ -575,18 +578,36 @@ def build_dispatcher(
             return
         await message.answer_video(FSInputFile(result), caption="Черновик шортса — на проверку, не опубликован")
 
-    # --- Ручной конструктор постов («Создать пост») — FSM ---
+    # --- Кнопочное меню (стиль GRABBER) + FSM ---
+    # Reply-меню снизу открывает инлайн-подменю; часть команд остаётся для совместимости.
     # Регистрируется ДО общего медиа-хендлера (уникализатора) ниже: пока владелец в
-    # шагах конструктора, его текст/медиа ловят state-хендлеры, а не уникализатор.
+    # шагах конструктора/настройки, его текст/медиа ловят state-хендлеры, а не уникализатор.
     from aiogram.filters import StateFilter
     from aiogram.fsm.context import FSMContext
     from aiogram.fsm.state import State, StatesGroup
     from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
+    from app import bot_keyboards as kb
+
     class PostCreation(StatesGroup):
         waiting_content = State()
         configuring = State()
         waiting_button = State()
+
+    class SettingInput(StatesGroup):
+        waiting_value = State()  # ждём число для выбранной настройки (интервал/свежесть/лимит)
+
+    class AddSourceInput(StatesGroup):
+        waiting = State()  # ждём "tg|vk url имя"
+
+    def _load_settings_menu() -> InlineKeyboardMarkup:
+        config = load_config(config_path)
+        return kb.settings_menu(
+            interval=config.monitoring.check_interval_minutes,
+            freshness=config.publishing.schedule.publish_freshness_hours,
+            maxposts=config.publishing.schedule.max_posts_per_day,
+            provider=config.llm.provider,
+        )
 
     def _configure_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -621,6 +642,60 @@ def build_dispatcher(
         await state.clear()
         await message.answer("Отменено.")
 
+    @dp.message(Command("menu"))
+    async def on_menu(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer("Меню открыто 👇", reply_markup=kb.main_menu())
+
+    # --- Нажатия главного reply-меню. Регистрируются ДО state-хендлеров: тап по меню
+    # прерывает любой текущий шаг (state.clear) и переключает раздел. ---
+    @dp.message(F.text == kb.BTN_NEW_POST)
+    async def on_menu_newpost(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.set_state(PostCreation.waiting_content)
+        await message.answer("📝 Пришли пост: текст (можно с фото или видео одним сообщением).")
+
+    @dp.message(F.text == kb.BTN_AUTOPOSTING)
+    async def on_menu_autoposting(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer(
+            "🤖 Автопостинг новостей:",
+            reply_markup=kb.autoposting_menu(running=controller.is_running()),
+        )
+
+    @dp.message(F.text == kb.BTN_SOURCES)
+    async def on_menu_sources(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer("📰 Источники (тап — вкл/выкл):", reply_markup=kb.sources_menu(repo.list_sources()))
+
+    @dp.message(F.text == kb.BTN_SETTINGS)
+    async def on_menu_settings(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer("⚙️ Настройки темпа и LLM:", reply_markup=_load_settings_menu())
+
+    @dp.message(F.text == kb.BTN_TOOLS)
+    async def on_menu_tools(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer("🧰 Инструменты:", reply_markup=kb.tools_menu())
+
+    @dp.message(F.text == kb.BTN_STATUS)
+    async def on_menu_status(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer(render_status(controller, repo))
+
     @dp.message(StateFilter(PostCreation.waiting_content))
     async def on_post_content(message: Message, state: FSMContext) -> None:
         photo = message.photo[-1].file_id if message.photo else None
@@ -654,6 +729,30 @@ def build_dispatcher(
             f"Кнопка добавлена (всего {len(draft['buttons'])}). Что дальше?",
             reply_markup=_configure_keyboard(),
         )
+
+    @dp.message(StateFilter(SettingInput.waiting_value))
+    async def on_setting_value(message: Message, state: FSMContext) -> None:
+        field = (await state.get_data()).get("setting_field")
+        value = (message.text or "").strip()
+        if field == "interval":
+            result = set_check_interval(config_path, value)
+        elif field == "freshness":
+            result = set_schedule_number(
+                config_path, value, field="publish_freshness_hours", label="Окно свежести (часов)"
+            )
+        elif field == "maxposts":
+            result = set_schedule_number(
+                config_path, value, field="max_posts_per_day", label="Лимит постов в день"
+            )
+        else:
+            result = "Неизвестная настройка."
+        await state.clear()
+        await message.answer(result, reply_markup=_load_settings_menu())
+
+    @dp.message(StateFilter(AddSourceInput.waiting))
+    async def on_add_source_value(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(add_source(repo, message.text or ""), reply_markup=kb.sources_menu(repo.list_sources()))
 
     @dp.callback_query(F.data == "mp:cancel")
     async def on_mp_cancel(cb: CallbackQuery, state: FSMContext) -> None:
@@ -723,6 +822,174 @@ def build_dispatcher(
             return
         await state.clear()
         await cb.message.answer(f"✅ Опубликовано в {chat_id}.")
+        await cb.answer()
+
+    # --- Callback-роутинг разделов меню ---
+    @dp.callback_query(F.data == "menu:close")
+    async def on_menu_close(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:  # сообщение могло устареть — не критично
+            pass
+        await cb.answer("Закрыто")
+
+    @dp.callback_query(F.data == "auto:run")
+    async def on_auto_run(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        started = controller.start()
+        await cb.message.edit_reply_markup(reply_markup=kb.autoposting_menu(running=True))
+        await cb.answer("🟢 Запущен" if started else "Уже запущен")
+
+    @dp.callback_query(F.data == "auto:stop")
+    async def on_auto_stop(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        stopped = controller.stop()
+        await cb.message.edit_reply_markup(reply_markup=kb.autoposting_menu(running=False))
+        await cb.answer("🔴 Остановлен" if stopped else "Уже остановлен")
+
+    @dp.callback_query(F.data == "auto:status")
+    async def on_auto_status(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.message.answer(render_status(controller, repo))
+        await cb.answer()
+
+    @dp.callback_query(F.data == "auto:queue")
+    async def on_auto_queue(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.message.answer(render_queue(repo))
+        await cb.answer()
+
+    @dp.callback_query(F.data == "auto:publish")
+    async def on_auto_publish(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.answer("Публикую…")
+        await cb.message.answer(await publish_now(repo, load_config(config_path)))
+
+    @dp.callback_query(F.data == "set:interval")
+    async def on_set_interval(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.set_state(SettingInput.waiting_value)
+        await state.update_data(setting_field="interval")
+        await cb.message.answer("Пришли число минут (как часто проверять каналы):")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "set:freshness")
+    async def on_set_freshness(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.set_state(SettingInput.waiting_value)
+        await state.update_data(setting_field="freshness")
+        await cb.message.answer("Пришли число часов (окно свежести/бэклога):")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "set:maxposts")
+    async def on_set_maxposts(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.set_state(SettingInput.waiting_value)
+        await state.update_data(setting_field="maxposts")
+        await cb.message.answer("Пришли число (лимит постов в день):")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "set:provider")
+    async def on_set_provider(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        current = load_config(config_path).llm.provider
+        await cb.message.answer(
+            "Выбери LLM-провайдера:",
+            reply_markup=kb.provider_menu(sorted(LLM_PROVIDERS), current),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("prov:"))
+    async def on_provider_pick(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        provider = cb.data.split(":", 1)[1]
+        await cb.message.answer(switch_provider(config_path, provider))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("src:toggle:"))
+    async def on_src_toggle(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        source_id = int(cb.data.split(":")[2])
+        source = repo.get_source(source_id)
+        if source is not None:
+            repo.update_source(source_id, enabled=not source.enabled)
+        await cb.message.edit_reply_markup(reply_markup=kb.sources_menu(repo.list_sources()))
+        await cb.answer("Переключено")
+
+    @dp.callback_query(F.data == "src:add")
+    async def on_src_add(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.set_state(AddSourceInput.waiting)
+        await cb.message.answer("Пришли источник: <tg|vk> <url или group_id> <имя>\nНапример: tg https://t.me/novosti_efir Новости")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "tools:uniq")
+    async def on_tools_uniq(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.message.answer("🎨 Пришли видео или фото файлом (до 20 МБ) — верну 5 уникальных версий без потери качества.")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "tools:nature")
+    async def on_tools_nature(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.message.answer(render_nature_status(nature_controller), reply_markup=kb.process_menu("nature"))
+        await cb.answer()
+
+    @dp.callback_query(F.data == "tools:shorts")
+    async def on_tools_shorts(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.message.answer(render_shorts_status(shorts_controller), reply_markup=kb.process_menu("shorts"))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("nature:"))
+    async def on_nature_action(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        action = cb.data.split(":", 1)[1]
+        if nature_controller is None:
+            await cb.message.answer(render_nature_status(None))
+        elif action == "run":
+            nature_controller.start()
+            await cb.message.answer(render_nature_status(nature_controller))
+        elif action == "stop":
+            nature_controller.stop()
+            await cb.message.answer(render_nature_status(nature_controller))
+        else:
+            await cb.message.answer(render_nature_status(nature_controller))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("shorts:"))
+    async def on_shorts_action(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        action = cb.data.split(":", 1)[1]
+        if shorts_controller is None:
+            await cb.message.answer(render_shorts_status(None))
+        elif action == "run":
+            shorts_controller.start()
+            await cb.message.answer(render_shorts_status(shorts_controller))
+        elif action == "stop":
+            shorts_controller.stop()
+            await cb.message.answer(render_shorts_status(shorts_controller))
+        else:
+            await cb.message.answer(render_shorts_status(shorts_controller))
         await cb.answer()
 
     @dp.message(F.video | F.photo | F.document)
