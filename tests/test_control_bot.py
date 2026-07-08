@@ -110,8 +110,11 @@ def test_build_dispatcher_registers_media_handler():
     # /start /help /run /stop /status /queue /publish /testpost /provider
     # /sources /source_on /source_off /addsource /settings /interval /freshness /maxposts
     # /nature_run /nature_stop /nature_status
-    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 25 хендлеров
-    assert len(dp.message.handlers) == 25
+    # /shorts_run /shorts_stop /shorts_status /shorts + медиа = 25
+    # + конструктор постов: /newpost /cancel + 2 state-хендлера = 29
+    assert len(dp.message.handlers) == 29
+    # Инлайн-кнопки конструктора: mp:uniq/addbtn/preview/publish/cancel = 5 callback-хендлеров
+    assert len(dp.callback_query.handlers) == 5
 
 
 def test_build_nature_controller_none_without_env_path():

@@ -22,6 +22,7 @@ from app.config.loader import (
     update_config_section,
     update_schedule_config,
 )
+from app.core.manual_post import MAX_BUTTONS, PostButton, parse_button_input
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
@@ -51,6 +52,8 @@ SHORTS_OUTPUT_DIR = OUTPUT_DIR / "shorts"
 
 HELP_TEXT = (
     "Управление AI News Rewriter:\n"
+    "/newpost — собрать пост вручную: текст/медиа + URL-кнопки + уникализация "
+    "текста → публикация в канал (аналог «Создать пост»)\n"
     "/run — запустить сервис\n"
     "/stop — остановить сервис\n"
     "/status — статус + последние публикации\n"
@@ -572,6 +575,156 @@ def build_dispatcher(
             return
         await message.answer_video(FSInputFile(result), caption="Черновик шортса — на проверку, не опубликован")
 
+    # --- Ручной конструктор постов («Создать пост») — FSM ---
+    # Регистрируется ДО общего медиа-хендлера (уникализатора) ниже: пока владелец в
+    # шагах конструктора, его текст/медиа ловят state-хендлеры, а не уникализатор.
+    from aiogram.filters import StateFilter
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.state import State, StatesGroup
+    from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+
+    class PostCreation(StatesGroup):
+        waiting_content = State()
+        configuring = State()
+        waiting_button = State()
+
+    def _configure_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔀 Уникализировать текст", callback_data="mp:uniq")],
+                [InlineKeyboardButton(text="➕ Добавить кнопку", callback_data="mp:addbtn")],
+                [
+                    InlineKeyboardButton(text="👁 Превью", callback_data="mp:preview"),
+                    InlineKeyboardButton(text="✅ Опубликовать", callback_data="mp:publish"),
+                ],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="mp:cancel")],
+            ]
+        )
+
+    async def _callback_guard(cb: CallbackQuery) -> bool:
+        if is_authorized(repo, cb.from_user.id):
+            return True
+        await cb.answer("Доступ запрещён.", show_alert=True)
+        return False
+
+    @dp.message(Command("newpost"))
+    async def on_newpost(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.set_state(PostCreation.waiting_content)
+        await message.answer("📝 Пришли пост: текст (можно с фото или видео одним сообщением).")
+
+    @dp.message(Command("cancel"))
+    async def on_cancel(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await message.answer("Отменено.")
+
+    @dp.message(StateFilter(PostCreation.waiting_content))
+    async def on_post_content(message: Message, state: FSMContext) -> None:
+        photo = message.photo[-1].file_id if message.photo else None
+        video = message.video.file_id if message.video else None
+        await state.update_data(
+            draft={
+                "text": message.text or message.caption or "",
+                "photo": photo,
+                "video": video,
+                "buttons": [],
+            }
+        )
+        await state.set_state(PostCreation.configuring)
+        await message.answer("Пост принят. Что дальше?", reply_markup=_configure_keyboard())
+
+    @dp.message(StateFilter(PostCreation.waiting_button))
+    async def on_post_button(message: Message, state: FSMContext) -> None:
+        button = parse_button_input(message.text or "")
+        if button is None:
+            await message.answer("Формат: Текст | https://ссылка. Пришли ещё раз.")
+            return
+        data = await state.get_data()
+        draft = data["draft"]
+        if len(draft["buttons"]) >= MAX_BUTTONS:
+            await message.answer("Достигнут лимит кнопок.")
+        else:
+            draft["buttons"].append({"text": button.text, "url": button.url})
+            await state.update_data(draft=draft)
+        await state.set_state(PostCreation.configuring)
+        await message.answer(
+            f"Кнопка добавлена (всего {len(draft['buttons'])}). Что дальше?",
+            reply_markup=_configure_keyboard(),
+        )
+
+    @dp.callback_query(F.data == "mp:cancel")
+    async def on_mp_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.clear()
+        await cb.message.answer("Отменено.")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "mp:addbtn")
+    async def on_mp_addbtn(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.set_state(PostCreation.waiting_button)
+        await cb.message.answer("Пришли кнопку в формате: Текст | https://ссылка")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "mp:preview")
+    async def on_mp_preview(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        draft = (await state.get_data()).get("draft")
+        if not draft:
+            await cb.answer("Черновик пуст", show_alert=True)
+            return
+        buttons = [PostButton(**b) for b in draft["buttons"]]
+        await _send_post(cb.message.bot, cb.message.chat.id, draft, buttons)
+        await cb.answer("Превью выше")
+
+    @dp.callback_query(F.data == "mp:uniq")
+    async def on_mp_uniq(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        draft = (await state.get_data()).get("draft")
+        if not draft or not draft["text"].strip():
+            await cb.answer("Нет текста для уникализации", show_alert=True)
+            return
+        await cb.answer("Уникализирую…")
+        try:
+            new_text = await uniquify_post_text(config_path, draft["text"])
+        except Exception as error:  # LLM недоступна/лимит — не роняем бот
+            logger.exception("Уникализация текста ручного поста не удалась")
+            await cb.message.answer(f"Не вышло уникализировать: {error}")
+            return
+        draft["text"] = new_text
+        await state.update_data(draft=draft)
+        await cb.message.answer(
+            "🔀 Текст уникализирован:\n\n" + new_text, reply_markup=_configure_keyboard()
+        )
+
+    @dp.callback_query(F.data == "mp:publish")
+    async def on_mp_publish(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        draft = (await state.get_data()).get("draft")
+        if not draft:
+            await cb.answer("Черновик пуст", show_alert=True)
+            return
+        buttons = [PostButton(**b) for b in draft["buttons"]]
+        chat_id = load_config(config_path).publishing.telegram.destination
+        try:
+            await _send_post(cb.message.bot, chat_id, draft, buttons)
+        except Exception as error:  # канал недоступен/нет прав — не роняем бот
+            logger.exception("Ручная публикация не удалась")
+            await cb.message.answer(f"❌ Не опубликовалось: {error}")
+            await cb.answer()
+            return
+        await state.clear()
+        await cb.message.answer(f"✅ Опубликовано в {chat_id}.")
+        await cb.answer()
+
     @dp.message(F.video | F.photo | F.document)
     async def on_media(message: Message) -> None:
         if not await guard(message):
@@ -620,6 +773,55 @@ def _extract_media(message) -> tuple[object | None, str]:
         largest = message.photo[-1]
         return largest, f"{largest.file_unique_id}.jpg"
     return None, ""
+
+
+def _build_post_markup(buttons: list[PostButton]):
+    """InlineKeyboardMarkup из URL-кнопок под постом, либо None если кнопок нет."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    if not buttons:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=b.text, url=b.url)] for b in buttons]
+    )
+
+
+async def _send_post(bot, chat_id, draft: dict, buttons: list[PostButton]) -> None:
+    """Отправляет собранный пост в chat_id (канал при публикации или владельцу для
+    превью). Медиа пересылается по file_id — этот же бот и получил файл, и публикует,
+    поэтому file_id переиспользуется без повторной загрузки."""
+    markup = _build_post_markup(buttons)
+    text = (draft.get("text") or "").strip()
+    if draft.get("video"):
+        await bot.send_video(chat_id, draft["video"], caption=text or None, reply_markup=markup)
+    elif draft.get("photo"):
+        await bot.send_photo(chat_id, draft["photo"], caption=text or None, reply_markup=markup)
+    else:
+        await bot.send_message(chat_id, text or "(пусто)", reply_markup=markup)
+
+
+async def uniquify_post_text(config_path, text: str) -> str:
+    """Антиплагиат-рерайт текста ручного поста через тот же rewrite_post, что и
+    основной пайплайн. strip_markdown — чтобы **/* из рерайта не уходили в канал
+    сырыми. source="" — источник не упоминаем (это ручной пост владельца)."""
+    import asyncio
+
+    from app.core.llm.client import LLMClient
+    from app.core.llm.rewriter import rewrite_post
+    from app.core.publishing.text_formatting import strip_markdown
+
+    config = load_config(config_path)
+    client = LLMClient(config.llm)
+    rewritten = await asyncio.to_thread(
+        rewrite_post,
+        client,
+        text=text,
+        source="",
+        style=config.rewrite.style,
+        max_length=max(config.rewrite.max_length_chars, len(text)),
+        include_hashtags=False,
+    )
+    return strip_markdown(rewritten).strip()
 
 
 async def run_bot() -> None:
