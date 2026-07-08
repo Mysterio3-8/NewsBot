@@ -19,16 +19,56 @@ class Base(DeclarativeBase):
     pass
 
 
+class Channel(Base):
+    """Один целевой канал/паблик пользователя (новости / кино / городской / мемы...).
+    Мультиканальность: каждый канал — свой набор источников, свои таргеты публикации и
+    свой блок настроек (фильтр/оформление/лимит) в settings_json. AppConfig из config.yaml
+    задаёт ДЕФОЛТЫ, канал их переопределяет. Секреты не хранятся — только ИМЕНА env-
+    переменных (token_env), сами токены в .env (инвариант проекта)."""
+
+    __tablename__ = "channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Таргет Telegram: имя env с токеном бота + назначение (@канал или chat_id).
+    tg_token_env: Mapped[str] = mapped_column(String(100), default="TG_BOT_TOKEN")
+    tg_destination: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Таргет VK: имя env с групповым токеном + group_id + опц. личный upload-токен
+    # (group-токен не грузит фото/видео, VK error 27 — см. CLAUDE.md).
+    vk_token_env: Mapped[str] = mapped_column(String(100), default="VK_GROUP_TOKEN")
+    vk_destination: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vk_upload_token_env: Mapped[str] = mapped_column(
+        String(100), default="VK_PHOTO_UPLOAD_TOKEN"
+    )
+
+    # Блок настроек канала (фильтр on/off, оформление, лимит, стиль хуков) — JSON, чтобы
+    # добавлять настройки без миграций схемы. Пусто = наследуем дефолты из config.yaml.
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+
+    sources: Mapped[list["Source"]] = relationship(back_populates="channel")
+
+
 class Source(Base):
     __tablename__ = "sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # nullable: старые источники, созданные до мультиканальности, привязываются к
+    # «Каналу 1» миграцией ensure_default_channel при старте.
+    channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.id"), nullable=True
+    )
     type: Mapped[str] = mapped_column(String(10))  # "tg" | "vk"
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(String(500))
     priority: Mapped[int] = mapped_column(Integer, default=5)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    channel: Mapped["Channel"] = relationship(back_populates="sources")
     raw_posts: Mapped[list["RawPost"]] = relationship(back_populates="source")
 
 

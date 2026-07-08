@@ -8,7 +8,16 @@ from pathlib import Path
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.models import Base, ProcessedPost, PostHistory, RawPost, RejectedPost, Setting, Source
+from app.db.models import (
+    Base,
+    Channel,
+    ProcessedPost,
+    PostHistory,
+    RawPost,
+    RejectedPost,
+    Setting,
+    Source,
+)
 from app.paths import DATA_DIR
 
 DEFAULT_DB_PATH = DATA_DIR / "app.db"
@@ -33,6 +42,9 @@ def make_engine(db_path: Path | None = None):
     return create_engine(f"sqlite:///{path}")
 
 
+DEFAULT_CHANNEL_NAME = "Новости"
+
+
 def init_db(engine) -> None:
     """`create_all` создаёт только отсутствующие таблицы, не меняет существующие —
     поэтому дополнительно доливаем колонки, добавленные в модели позже (лёгкая
@@ -40,6 +52,32 @@ def init_db(engine) -> None:
     """
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
+    _ensure_default_channel(engine)
+
+
+def _ensure_default_channel(engine) -> None:
+    """Мультиканальность: источники, созданные до неё, не привязаны к каналу
+    (channel_id IS NULL). Заводим «Канал 1 (Новости)» и привязываем к нему все
+    бесхозные источники — прод продолжает работать как раньше. Таргеты канала
+    (destination) пока не заполняем: до расслоения пайплайна публикация идёт по
+    глобальному config.publishing, канал берёт его как fallback."""
+    session_factory = sessionmaker(bind=engine)
+    with session_factory() as session:
+        orphan_ids = [
+            row[0]
+            for row in session.query(Source.id).filter(Source.channel_id.is_(None)).all()
+        ]
+        if not orphan_ids:
+            return
+        channel = session.query(Channel).filter(Channel.name == DEFAULT_CHANNEL_NAME).first()
+        if channel is None:
+            channel = Channel(name=DEFAULT_CHANNEL_NAME, enabled=True)
+            session.add(channel)
+            session.flush()
+        session.query(Source).filter(Source.channel_id.is_(None)).update(
+            {Source.channel_id: channel.id}
+        )
+        session.commit()
 
 
 def _add_missing_columns(engine) -> None:
@@ -67,19 +105,87 @@ class Repository:
     def __init__(self, engine) -> None:
         self._session_factory: sessionmaker[Session] = sessionmaker(bind=engine)
 
-    def create_source(self, *, type: str, name: str, url: str, priority: int = 5) -> Source:
+    def create_channel(
+        self,
+        *,
+        name: str,
+        enabled: bool = True,
+        tg_token_env: str = "TG_BOT_TOKEN",
+        tg_destination: str | None = None,
+        vk_token_env: str = "VK_GROUP_TOKEN",
+        vk_destination: str | None = None,
+        vk_upload_token_env: str = "VK_PHOTO_UPLOAD_TOKEN",
+        settings_json: str = "{}",
+    ) -> Channel:
         with self._session_factory() as session:
-            source = Source(type=type, name=name, url=url, priority=priority, enabled=True)
+            channel = Channel(
+                name=name,
+                enabled=enabled,
+                tg_token_env=tg_token_env,
+                tg_destination=tg_destination,
+                vk_token_env=vk_token_env,
+                vk_destination=vk_destination,
+                vk_upload_token_env=vk_upload_token_env,
+                settings_json=settings_json,
+            )
+            session.add(channel)
+            session.commit()
+            session.refresh(channel)
+            return channel
+
+    def list_channels(self, *, enabled_only: bool = False) -> list[Channel]:
+        with self._session_factory() as session:
+            query = session.query(Channel)
+            if enabled_only:
+                query = query.filter(Channel.enabled.is_(True))
+            return query.order_by(Channel.id).all()
+
+    def get_channel(self, channel_id: int) -> Channel | None:
+        with self._session_factory() as session:
+            return session.get(Channel, channel_id)
+
+    def update_channel(self, channel_id: int, **fields) -> None:
+        with self._session_factory() as session:
+            session.query(Channel).filter(Channel.id == channel_id).update(fields)
+            session.commit()
+
+    def delete_channel(self, channel_id: int) -> None:
+        with self._session_factory() as session:
+            session.query(Channel).filter(Channel.id == channel_id).delete()
+            session.commit()
+
+    def create_source(
+        self,
+        *,
+        type: str,
+        name: str,
+        url: str,
+        priority: int = 5,
+        channel_id: int | None = None,
+    ) -> Source:
+        with self._session_factory() as session:
+            source = Source(
+                type=type,
+                name=name,
+                url=url,
+                priority=priority,
+                enabled=True,
+                channel_id=channel_id,
+            )
             session.add(source)
             session.commit()
             session.refresh(source)
             return source
 
-    def list_sources(self, *, source_type: str | None = None) -> list[Source]:
+    def list_sources(
+        self, *, source_type: str | None = None, channel_id: int | None = None
+    ) -> list[Source]:
         with self._session_factory() as session:
             query = session.query(Source)
             if source_type is not None:
                 query = query.filter(Source.type == source_type)
+            if channel_id is not None:
+                query = query.filter(Source.channel_id == channel_id)
             return query.all()
 
     def get_source(self, source_id: int) -> Source | None:
