@@ -26,7 +26,7 @@ from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
-from app.core.scheduler import pick_next_post_to_publish, start_of_today_utc
+from app.core.scheduler import start_of_today_utc
 from app.db.repository import Repository
 from app.factories import (
     build_image_providers,
@@ -63,23 +63,29 @@ def build_cycle_job(
             image_providers=image_providers,
         )
 
-        post = pick_next_post_to_publish(
-            repo,
-            max_posts_per_day=config.publishing.schedule.max_posts_per_day,
-            freshness_hours=config.publishing.schedule.publish_freshness_hours,
-        )
-        if post is None:
-            logger.info(_explain_no_post_reason(repo, config.publishing.schedule.max_posts_per_day))
+        schedule = config.publishing.schedule
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=schedule.publish_freshness_hours)
+        repo.expire_stale_queued_posts(cutoff)
+
+        # Публикуем ВСЕ свежие посты очереди за цикл (запрос пользователя 2026-07-07:
+        # "публиковать всё сразу, без лимита"), по порядку появления (oldest-first),
+        # а не один самый свежий, как раньше — из-за этого пачка постов терялась.
+        # list_fresh_queued_posts отдаёт created_at desc → reversed = хронология.
+        fresh = repo.list_fresh_queued_posts(cutoff)
+        if not fresh:
+            logger.info(_explain_no_post_reason(repo, schedule.max_posts_per_day))
             return
 
-        await _publish_to_all(
-            repo,
-            post_id=post.id,
-            config=config,
-            tg_publisher=tg_publisher,
-            vk_publisher=vk_publisher,
-            footer_links=footer_links,
-        )
+        for post in reversed(fresh):
+            await _publish_to_all(
+                repo,
+                post_id=post.id,
+                config=config,
+                tg_publisher=tg_publisher,
+                vk_publisher=vk_publisher,
+                footer_links=footer_links,
+            )
+            await asyncio.sleep(random.uniform(3, 8))  # лёгкая пауза между постами
 
     return cycle_job
 
@@ -127,8 +133,9 @@ async def _publish_to_all(
 
     if vk_publisher is not None and config.publishing.vk.enabled:
         # Небольшая случайная пауза перед второй сетью — чтобы TG и VK не публиковались
-        # день в день секунда в секунду (антибан: не выглядеть роботом).
-        delay_seconds = random.uniform(60, 300)
+        # секунда в секунду (антибан). Короткая (3-8с): режим немедленной публикации,
+        # длинная пауза 1-5 мин мешала бы публиковать пачку постов «сразу».
+        delay_seconds = random.uniform(3, 8)
         logger.info("Пауза %.0f сек перед публикацией в VK", delay_seconds)
         await asyncio.sleep(delay_seconds)
         try:

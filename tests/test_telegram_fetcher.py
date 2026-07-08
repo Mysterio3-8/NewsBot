@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.monitoring.telegram_fetcher import TelegramFetcher, message_to_post
+from app.core.monitoring.telegram_fetcher import (
+    TelegramFetcher,
+    group_album_messages,
+    message_to_post,
+)
 
 
 def make_message(**overrides):
@@ -208,3 +212,94 @@ async def test_fetch_recent_posts_skips_download_for_known_external_ids():
 
     assert [p.external_id for p in posts] == ["3"]
     fetcher._client.download_media.assert_awaited_once()  # только для сообщения id=3
+
+
+def test_group_album_messages_groups_by_grouped_id():
+    a = make_message(id=1, grouped_id=None)
+    b = make_message(id=2, grouped_id=99)
+    c = make_message(id=3, grouped_id=99)  # тот же альбом, что b
+    d = make_message(id=4, grouped_id=None)
+
+    groups = group_album_messages([a, b, c, d])
+
+    assert [[m.id for m in g] for g in groups] == [[1], [2, 3], [4]]
+
+
+def test_group_album_messages_keeps_separate_standalone_messages():
+    a = make_message(id=1, grouped_id=None)
+    b = make_message(id=2, grouped_id=None)
+    groups = group_album_messages([a, b])
+    assert [[m.id for m in g] for g in groups] == [[1], [2]]
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_posts_returns_all_after_cursor_ascending():
+    """Ключевой фикс 2026-07-07: пачка постов, вышедшая между проверками, берётся
+    ЦЕЛИКОМ по возрастанию id, а не только самый свежий."""
+    messages = [  # iter_messages отдаёт от новых к старым
+        make_message(id=5),
+        make_message(id=4),
+        make_message(id=3),
+    ]
+
+    async def fake_iter_messages(*args, **kwargs):
+        for message in messages:
+            yield message
+
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.iter_messages = fake_iter_messages
+    fetcher._client.__aenter__ = AsyncMock(return_value=fetcher._client)
+    fetcher._client.__aexit__ = AsyncMock(return_value=False)
+
+    posts = await fetcher.fetch_new_posts("https://t.me/test", after_id=2)
+
+    assert [p.external_id for p in posts] == ["3", "4", "5"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_posts_excludes_ids_at_or_below_cursor():
+    messages = [make_message(id=3), make_message(id=2), make_message(id=1)]
+
+    async def fake_iter_messages(*args, **kwargs):
+        for message in messages:
+            yield message
+
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.iter_messages = fake_iter_messages
+    fetcher._client.__aenter__ = AsyncMock(return_value=fetcher._client)
+    fetcher._client.__aexit__ = AsyncMock(return_value=False)
+
+    posts = await fetcher.fetch_new_posts("https://t.me/test", after_id=2)
+
+    assert [p.external_id for p in posts] == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_posts_merges_album_into_single_post_with_all_media():
+    """Альбом (несколько сообщений с общим grouped_id) = один пост со всеми фото,
+    external_id = максимальный id альбома (курсор перешагивает весь альбом)."""
+    messages = [
+        make_message(id=7, grouped_id=50, photo=object(), message=""),
+        make_message(id=6, grouped_id=50, photo=object(), message="Текст альбома"),
+        make_message(id=5, grouped_id=None, photo=object(), message="Одиночное фото"),
+    ]
+
+    async def fake_iter_messages(*args, **kwargs):
+        for message in messages:
+            yield message
+
+    fetcher = TelegramFetcher(api_id=1, api_hash="hash", session_name="test")
+    fetcher._client = MagicMock()
+    fetcher._client.iter_messages = fake_iter_messages
+    fetcher._client.download_media = AsyncMock(return_value="output/tg_raw_media/x.jpg")
+    fetcher._client.__aenter__ = AsyncMock(return_value=fetcher._client)
+    fetcher._client.__aexit__ = AsyncMock(return_value=False)
+
+    posts = await fetcher.fetch_new_posts("https://t.me/test", after_id=4)
+
+    assert [p.external_id for p in posts] == ["5", "7"]  # одиночное, затем альбом
+    album = posts[1]
+    assert album.text == "Текст альбома"
+    assert len(album.media_urls) == 2  # оба фото альбома скачаны

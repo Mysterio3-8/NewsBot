@@ -41,10 +41,10 @@ def test_bind_config_populates_fields(qapp, config_copy):
     page.bind_config(config, config_copy)
 
     assert page.mode_input.currentText() == "fixed_slots"
-    assert page.max_posts_per_day_input.value() == 50
+    assert page.max_posts_per_day_input.value() == 999  # «без лимита» (2026-07-07)
     assert page.important_score_threshold_input.value() == 65
-    assert page.min_interval_minutes_input.value() == 5
-    assert page.jitter_minutes_input.value() == 8
+    assert page.min_interval_minutes_input.value() == 0
+    assert page.jitter_minutes_input.value() == 1
     assert page.include_hashtags_input.isChecked() is False
     assert "08:00" in page.fixed_slots_input.toPlainText()
 

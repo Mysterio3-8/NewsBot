@@ -86,6 +86,11 @@ class ImagesConfig:
     count_per_post: int
     target_aspect_ratio: str
     uniquify: UniquifyConfig = field(default_factory=UniquifyConfig)
+    # «Лёгкий режим» (запрос пользователя 2026-07-07): медиа поста публикуются
+    # оригиналами как есть — без монтажа/вотермарка/уникализации/детекции чужих
+    # знаков и без подмены на сток. True → pipeline._prepare_images просто отдаёт
+    # скачанные файлы. False → прежняя цепочка обработки (монтаж/вотермарк).
+    keep_original: bool = False
 
 
 @dataclass(frozen=True)

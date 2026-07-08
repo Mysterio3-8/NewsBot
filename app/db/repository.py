@@ -141,6 +141,16 @@ class Repository:
             rows = session.query(RawPost.external_id).filter(RawPost.source_id == source_id).all()
             return {row[0] for row in rows}
 
+    def get_max_external_id(self, source_id: int) -> int | None:
+        """Максимальный числовой external_id уже обработанных постов источника —
+        для инициализации курсора мониторинга (fetch_new_posts) из истории, когда
+        курсор в settings ещё не сохранён (напр. после перехода со старой схемы по
+        времени). None, если постов нет или id не числовые."""
+        with self._session_factory() as session:
+            rows = session.query(RawPost.external_id).filter(RawPost.source_id == source_id).all()
+        ids = [int(row[0]) for row in rows if row[0] and str(row[0]).lstrip("-").isdigit()]
+        return max(ids) if ids else None
+
     def get_recent_content_hashes(self, source_id: int, limit: int = 200) -> list[int]:
         with self._session_factory() as session:
             rows = (

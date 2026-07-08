@@ -111,11 +111,11 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
     assert len(queued) == 1
 
 
-def test_process_fetched_post_caps_rewrite_length_to_original_post_length(tmp_path):
-    """По запросу пользователя: рерайт не должен быть длиннее исходного поста —
-    max_length передаётся в rewrite_post как min(конфиг, длина оригинала), а не
-    всегда фиксированный потолок из config.yaml (900 символов растягивал короткие
-    новости искусственными подробностями)."""
+def test_process_fetched_post_does_not_shorten_rewrite_below_original_length(tmp_path):
+    """Запрос пользователя 2026-07-07: рерайт НЕ укорачивать, смысл не резать.
+    max_length = max(конфиг, длина оригинала) — потолок не меньше длины исходника,
+    LLM не заставляют ужимать текст. Раньше был min(конфиг, len), из-за чего смысл
+    терялся на длинных постах."""
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
     client = Mock(spec=LLMClient)
@@ -154,7 +154,8 @@ def test_process_fetched_post_caps_rewrite_length_to_original_post_length(tmp_pa
         pipeline_module.generate_headlines = original_headlines
 
     _, kwargs = rewrite_mock.call_args
-    assert kwargs["max_length"] == len("Госдума приняла закон.")
+    # Короткий пост (< 900) → потолок остаётся конфиговым 900, текст не ужимается.
+    assert kwargs["max_length"] == 900
 
 
 def test_filter_watermarked_photos_drops_when_watermark_not_removable(monkeypatch):
@@ -311,6 +312,41 @@ def test_prepare_images_limits_stock_to_count_per_post(monkeypatch):
     )
 
     assert captured["count"] == 1
+
+
+def test_prepare_images_keep_original_returns_media_untouched(monkeypatch):
+    """Лёгкий режим (keep_original) 2026-07-07: медиа поста уходят ОРИГИНАЛАМИ —
+    без детекции чужих знаков, монтажа/вотермарка и сток-фолбэка. Пайплайн просто
+    отдаёт скачанные файлы."""
+    import app.core.pipeline as pipeline_module
+
+    filter_mock = Mock()
+    prepare_mock = Mock()
+    monkeypatch.setattr(pipeline_module, "_filter_watermarked_photos", filter_mock)
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", prepare_mock)
+
+    config = ImagesConfig(
+        providers_order=["source"],
+        count_per_post=1,
+        target_aspect_ratio="1:1",
+        uniquify=UniquifyConfig(enabled=False),
+        keep_original=True,
+    )
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=["a.jpg", "b.jpg"],
+        rewritten_text="текст",
+        images_config=config,
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+    )
+
+    assert result == ["a.jpg", "b.jpg"]
+    filter_mock.assert_not_called()
+    prepare_mock.assert_not_called()
 
 
 def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_path, monkeypatch):

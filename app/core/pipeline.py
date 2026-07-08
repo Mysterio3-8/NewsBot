@@ -128,8 +128,11 @@ def process_fetched_post(
         llm_client,
         text=post.text,
         source=source.name,
-        style=rewrite_config.style,
-        max_length=min(rewrite_config.max_length_chars, len(post.text)),
+        # Не укорачивать текст (запрос пользователя 2026-07-07: "текст не надо
+        # уменьшать, смысл не резать"). Раньше был min(config, len) — это заставляло
+        # LLM ужимать текст ниже длины оригинала и терять смысл. Теперь потолок не
+        # меньше длины исходника, LLM только переписывает под антиплагиат ≈ той же длины.
+        max_length=max(rewrite_config.max_length_chars, len(post.text)),
         include_hashtags=rewrite_config.include_hashtags,
     )
     headlines = generate_headlines(
@@ -189,6 +192,13 @@ def _prepare_images(
     он реально нужен, чтобы не тратить лимит Groq впустую."""
     if images_config is None or watermark_config is None:
         return None
+
+    # Лёгкий режим (keep_original): отдаём оригинальные скачанные медиа как есть —
+    # без монтажа/вотермарка/уникализации/детекции чужих знаков и без сток-фолбэка
+    # (запрос пользователя 2026-07-07). Все фото поста, до потолка медиагруппы TG/VK.
+    if images_config.keep_original:
+        originals = post_media_urls[:MAX_SOURCE_PHOTOS]
+        return [str(p) for p in originals] or None
 
     own_photos = _filter_watermarked_photos(llm_client, post_media_urls)
 

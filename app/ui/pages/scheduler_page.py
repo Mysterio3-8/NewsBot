@@ -43,7 +43,7 @@ class SchedulerPage(QWidget):
         self.interval_minutes_input = QSpinBox()
         self.interval_minutes_input.setRange(1, 1440)
         self.max_posts_per_day_input = QSpinBox()
-        self.max_posts_per_day_input.setRange(0, 100)
+        self.max_posts_per_day_input.setRange(0, 9999)  # 999 = «без лимита» (2026-07-07)
         self.min_interval_minutes_input = QSpinBox()
         self.min_interval_minutes_input.setRange(0, 1440)
         self.jitter_minutes_input = QSpinBox()

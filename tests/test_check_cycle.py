@@ -52,17 +52,25 @@ def make_post(external_id: str) -> FetchedPost:
     )
 
 
+def _tg_fetcher_with_new_posts(posts) -> Mock:
+    """TG-фетчер с новой курсорной сигнатурой: fetch_new_posts + get_latest_message_id."""
+    fetcher = Mock()
+    fetcher.fetch_new_posts = AsyncMock(return_value=posts)
+    fetcher.get_latest_message_id = AsyncMock(return_value=1000)
+    return fetcher
+
+
 @pytest.mark.asyncio
 async def test_run_check_cycle_logs_fetch_count_per_source(tmp_path, monkeypatch, caplog):
     """Регрессия: раньше единственный способ узнать, сколько постов реально нашлось
     у источника за цикл, был лезть в raw_posts руками — теперь видно прямо в логе."""
     repo = make_repo(tmp_path)
-    repo.create_source(type="tg", name="novosti_efir", url="https://t.me/novosti_efir")
+    source = repo.create_source(type="tg", name="novosti_efir", url="https://t.me/novosti_efir")
+    repo.set_setting(f"tg_cursor:{source.id}", "0")  # курсор задан — идём в fetch_new_posts
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
-    tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[])
+    tg_fetcher = _tg_fetcher_with_new_posts([])
 
     with caplog.at_level("INFO", logger="monitoring"):
         await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
@@ -74,12 +82,12 @@ async def test_run_check_cycle_logs_fetch_count_per_source(tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_run_check_cycle_processes_telegram_sources(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
-    repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    repo.set_setting(f"tg_cursor:{source.id}", "0")
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
-    tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[make_post("1")])
+    tg_fetcher = _tg_fetcher_with_new_posts([make_post("1")])
 
     import app.core.check_cycle as check_cycle_module
 
@@ -91,10 +99,31 @@ async def test_run_check_cycle_processes_telegram_sources(tmp_path, monkeypatch)
 
     await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
 
-    tg_fetcher.fetch_recent_posts.assert_awaited_once_with(
-        "https://t.me/x", max_age_hours=24, known_external_ids=set()
-    )
+    tg_fetcher.fetch_new_posts.assert_awaited_once()
+    call = tg_fetcher.fetch_new_posts.await_args
+    assert call.args[0] == "https://t.me/x"
+    assert call.kwargs["after_id"] == 0
     check_cycle_module.process_fetched_post.assert_called_once()
+    # Курсор сдвинулся за максимальный обработанный id
+    assert repo.get_setting(f"tg_cursor:{source.id}") == "1"
+
+
+@pytest.mark.asyncio
+async def test_run_check_cycle_bootstraps_cursor_on_first_run(tmp_path):
+    """Первый запуск без курсора и без истории: курсор инициализируется самым
+    свежим сообщением, бэкфилла всей истории канала не происходит."""
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    config = FakeAppConfig()
+    client = Mock(spec=LLMClient)
+
+    tg_fetcher = _tg_fetcher_with_new_posts([make_post("1")])
+
+    await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
+
+    tg_fetcher.get_latest_message_id.assert_awaited_once()
+    tg_fetcher.fetch_new_posts.assert_not_called()
+    assert repo.get_setting(f"tg_cursor:{source.id}") == "1000"
 
 
 @pytest.mark.asyncio
@@ -105,12 +134,12 @@ async def test_run_check_cycle_skips_disabled_sources(tmp_path):
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
-    tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[make_post("1")])
+    tg_fetcher = _tg_fetcher_with_new_posts([make_post("1")])
 
     await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
 
-    tg_fetcher.fetch_recent_posts.assert_not_called()
+    tg_fetcher.fetch_new_posts.assert_not_called()
+    tg_fetcher.get_latest_message_id.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -142,13 +171,13 @@ async def test_run_check_cycle_continues_when_vk_source_fetch_raises(tmp_path, m
     run_check_cycle в headless_service.cycle_job), и публикации молчали часами
     при полной очереди. Один сломанный источник не должен рушить остальные."""
     repo = make_repo(tmp_path)
-    repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    tg_source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
+    repo.set_setting(f"tg_cursor:{tg_source.id}", "0")
     repo.create_source(type="vk", name="Группа", url="12345", priority=5)
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
-    tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[make_post("1")])
+    tg_fetcher = _tg_fetcher_with_new_posts([make_post("1")])
     vk_fetcher = Mock()
     vk_fetcher.fetch_recent_posts = Mock(side_effect=RuntimeError("[5] User authorization failed: user is blocked"))
 
@@ -159,22 +188,25 @@ async def test_run_check_cycle_continues_when_vk_source_fetch_raises(tmp_path, m
     # Не должно поднять исключение наружу — цикл должен доработать до конца.
     await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=vk_fetcher)
 
-    tg_fetcher.fetch_recent_posts.assert_awaited_once()
+    tg_fetcher.fetch_new_posts.assert_awaited_once()
     check_cycle_module.process_fetched_post.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_run_check_cycle_continues_when_tg_source_fetch_raises(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
-    repo.create_source(type="tg", name="Сломанный", url="https://t.me/broken", priority=8)
-    repo.create_source(type="tg", name="Рабочий", url="https://t.me/ok", priority=5)
+    broken = repo.create_source(type="tg", name="Сломанный", url="https://t.me/broken", priority=8)
+    ok = repo.create_source(type="tg", name="Рабочий", url="https://t.me/ok", priority=5)
+    repo.set_setting(f"tg_cursor:{broken.id}", "0")
+    repo.set_setting(f"tg_cursor:{ok.id}", "0")
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
     tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(
+    tg_fetcher.fetch_new_posts = AsyncMock(
         side_effect=[RuntimeError("сеть недоступна"), [make_post("1")]]
     )
+    tg_fetcher.get_latest_message_id = AsyncMock(return_value=1000)
 
     import app.core.check_cycle as check_cycle_module
 
@@ -182,19 +214,19 @@ async def test_run_check_cycle_continues_when_tg_source_fetch_raises(tmp_path, m
 
     await run_check_cycle(repo, config, client, tg_fetcher=tg_fetcher, vk_fetcher=None)
 
-    assert tg_fetcher.fetch_recent_posts.await_count == 2
+    assert tg_fetcher.fetch_new_posts.await_count == 2
     check_cycle_module.process_fetched_post.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_run_check_cycle_continues_after_single_post_error(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
-    repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    source = repo.create_source(type="tg", name="Канал", url="https://t.me/x")
+    repo.set_setting(f"tg_cursor:{source.id}", "0")
     config = FakeAppConfig()
     client = Mock(spec=LLMClient)
 
-    tg_fetcher = Mock()
-    tg_fetcher.fetch_recent_posts = AsyncMock(return_value=[make_post("1"), make_post("2")])
+    tg_fetcher = _tg_fetcher_with_new_posts([make_post("1"), make_post("2")])
 
     import app.core.check_cycle as check_cycle_module
 

@@ -14,8 +14,16 @@ def test_load_config_returns_typed_config():
 def test_load_config_reads_headline_card_section():
     config = load_config()
 
-    assert config.headline_card.enabled is True
+    # Монтаж выключен в лёгком режиме (2026-07-07), но секция всё равно читается.
+    assert config.headline_card.enabled is False
     assert config.headline_card.corner_fade_corners == ["bottom-left", "top-right"]
+
+
+def test_load_config_reads_images_keep_original():
+    """Лёгкий режим 2026-07-07: медиа поста публикуются оригиналами как есть."""
+    config = load_config()
+
+    assert config.images.keep_original is True
 
 
 def test_load_config_defaults_headline_card_when_section_missing(tmp_path):
