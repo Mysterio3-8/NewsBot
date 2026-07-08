@@ -128,6 +128,7 @@ def process_fetched_post(
         llm_client,
         text=post.text,
         source=source.name,
+        style=rewrite_config.style,
         # Не укорачивать текст (запрос пользователя 2026-07-07: "текст не надо
         # уменьшать, смысл не резать"). Раньше был min(config, len) — это заставляло
         # LLM ужимать текст ниже длины оригинала и терять смысл. Теперь потолок не

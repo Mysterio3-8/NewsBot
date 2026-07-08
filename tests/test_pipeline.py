@@ -1,7 +1,7 @@
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, create_autospec
 
 from PIL import Image
 
@@ -83,7 +83,11 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
     original_rewrite = pipeline_module.rewrite_post
     original_headlines = pipeline_module.generate_headlines
     pipeline_module.classify_post = with_classification_mock
-    pipeline_module.rewrite_post = Mock(return_value="Переписанный текст новости")
+    # create_autospec (не Mock(spec=...) — тот НЕ проверяет сигнатуру вызова): защита
+    # от рассинхрона сигнатуры. Был реальный прод-баг 2026-07-08 — pipeline звал
+    # rewrite_post без style, обычный Mock() это не ловил.
+    rewrite_autospec = create_autospec(original_rewrite, return_value="Переписанный текст новости")
+    pipeline_module.rewrite_post = rewrite_autospec
     pipeline_module.generate_headlines = Mock(return_value=["Заголовок один", "Заголовок два"])
 
     try:
@@ -133,7 +137,7 @@ def test_process_fetched_post_does_not_shorten_rewrite_below_original_length(tmp
             is_news=True, category="политика", score=90, reasons=["важно"], reject_reason=None
         )
     )
-    rewrite_mock = Mock(return_value="Переписанный текст новости")
+    rewrite_mock = create_autospec(original_rewrite, return_value="Переписанный текст новости")
     pipeline_module.rewrite_post = rewrite_mock
     pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
 
@@ -384,7 +388,7 @@ def test_process_fetched_post_applies_video_watermark_when_video_present(tmp_pat
             is_news=True, category="политика", score=90, reasons=["важно"], reject_reason=None
         )
     )
-    pipeline_module.rewrite_post = Mock(return_value="Переписанный текст новости")
+    pipeline_module.rewrite_post = create_autospec(original_rewrite, return_value="Переписанный текст новости")
     pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
 
     watermark_config = WatermarkConfig(
