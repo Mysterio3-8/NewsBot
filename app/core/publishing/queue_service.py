@@ -33,6 +33,7 @@ async def publish_queued_post(
     footer_links: FooterLinks | None = None,
     max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY,
     min_interval_minutes: int = DEFAULT_MIN_INTERVAL_MINUTES,
+    channel_id: int | None = None,
     include_hashtags: bool = False,
 ) -> PublishResult:
     processed = repo.get_processed_post(post_id)
@@ -45,6 +46,7 @@ async def publish_queued_post(
         network="tg",
         max_posts_per_day=max_posts_per_day,
         min_interval_minutes=min_interval_minutes,
+        channel_id=channel_id,
     )
     if blocked is not None:
         # Пост НЕ помечаем failed — он остаётся queued и уйдёт, когда стопор снимется.

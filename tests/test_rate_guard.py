@@ -126,3 +126,36 @@ def test_blocked_when_already_published_to_same_network_vk(tmp_path):
     )
     assert reason is not None
     assert "уже опубликован в vk" in reason
+
+
+def test_per_channel_limit_isolates_channels(tmp_path):
+    """Защита от бана + изоляция каналов: дневной лимит считается по публикациям
+    КОНКРЕТНОГО канала — публикации другого канала на него не влияют."""
+    repo = make_repo(tmp_path)
+    now = datetime.datetime.utcnow()
+    ch_a = repo.create_channel(name="A")
+    ch_b = repo.create_channel(name="B")
+    src_a = repo.create_source(type="vk", name="sa", url="-1", channel_id=ch_a.id)
+    src_b = repo.create_source(type="vk", name="sb", url="-2", channel_id=ch_b.id)
+
+    for i in range(4):  # канал A выложил 4 поста
+        raw = repo.create_raw_post(source_id=src_a.id, external_id=f"a{i}", raw_text="t")
+        p = repo.create_processed_post(raw_post_id=raw.id, score=90, status="queued")
+        repo.mark_published(p.id, "vk", now)
+
+    # у канала B 0 публикаций → его лимит 4 не тронут, несмотря на 4 поста канала A
+    raw_b = repo.create_raw_post(source_id=src_b.id, external_id="b1", raw_text="t")
+    post_b = repo.create_processed_post(raw_post_id=raw_b.id, score=90, status="queued")
+    assert check_publish_allowed(
+        repo, post_b.id, network="vk", max_posts_per_day=4,
+        min_interval_minutes=0, channel_id=ch_b.id, now=now,
+    ) is None
+
+    # у канала A уже 4 → его лимит достигнут
+    raw_a = repo.create_raw_post(source_id=src_a.id, external_id="a_new", raw_text="t")
+    post_a = repo.create_processed_post(raw_post_id=raw_a.id, score=90, status="queued")
+    reason = check_publish_allowed(
+        repo, post_a.id, network="vk", max_posts_per_day=4,
+        min_interval_minutes=0, channel_id=ch_a.id, now=now,
+    )
+    assert reason is not None and "дневной лимит" in reason

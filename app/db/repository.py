@@ -407,25 +407,39 @@ class Repository:
                 .all()
             )
 
-    def count_published_since(self, since: datetime.datetime) -> int:
+    def count_published_since(
+        self, since: datetime.datetime, *, channel_id: int | None = None
+    ) -> int:
+        """channel_id ограничивает счётчик публикациями канала (join source→channel) —
+        для per-channel лимита (защита от бана: кино не заспамит VK лимитом другого
+        канала). None — все каналы (глобальный лимит, обратная совместимость)."""
         with self._session_factory() as session:
-            return (
-                session.query(ProcessedPost)
-                .filter(ProcessedPost.status == "published", ProcessedPost.published_at >= since)
-                .count()
+            query = session.query(ProcessedPost).filter(
+                ProcessedPost.status == "published", ProcessedPost.published_at >= since
             )
-
-    def get_last_published_at(self) -> datetime.datetime | None:
-        with self._session_factory() as session:
-            row = (
-                session.query(ProcessedPost.published_at)
-                .filter(
-                    ProcessedPost.status == "published",
-                    ProcessedPost.published_at.is_not(None),
+            if channel_id is not None:
+                query = (
+                    query.join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
+                    .join(Source, RawPost.source_id == Source.id)
+                    .filter(Source.channel_id == channel_id)
                 )
-                .order_by(ProcessedPost.published_at.desc())
-                .first()
+            return query.count()
+
+    def get_last_published_at(
+        self, *, channel_id: int | None = None
+    ) -> datetime.datetime | None:
+        with self._session_factory() as session:
+            query = session.query(ProcessedPost.published_at).filter(
+                ProcessedPost.status == "published",
+                ProcessedPost.published_at.is_not(None),
             )
+            if channel_id is not None:
+                query = (
+                    query.join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
+                    .join(Source, RawPost.source_id == Source.id)
+                    .filter(Source.channel_id == channel_id)
+                )
+            row = query.order_by(ProcessedPost.published_at.desc()).first()
             return row[0] if row else None
 
     def get_raw_post(self, raw_post_id: int) -> RawPost | None:

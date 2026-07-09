@@ -17,6 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config.loader import AppConfig
+from app.core.channel_settings import ChannelSettings
 from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
@@ -136,8 +137,16 @@ async def _publish_channel_post(
 ) -> None:
     """Публикует пост в таргеты КОНКРЕТНОГО канала. Сеть пропускается, если у канала не
     задано её назначение (напр. кино/мемы пока только VK, tg_destination пуст) или сеть
-    выключена глобально. Статус ('published'/'failed') ставит publish_queued_post*."""
+    выключена глобально. Статус ('published'/'failed') ставит publish_queued_post*.
+    Лимит публикаций и счётчик — per-channel (защита от бана + изоляция каналов): у канала
+    свой max_posts_per_day (ChannelSettings) и свой счётчик за сутки (channel_id)."""
     schedule = config.publishing.schedule
+    settings = ChannelSettings.from_json(channel.settings_json)
+    max_per_day = (
+        settings.max_posts_per_day
+        if settings.max_posts_per_day is not None
+        else schedule.max_posts_per_day
+    )
     if tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination:
         try:
             await publish_queued_post(
@@ -146,8 +155,9 @@ async def _publish_channel_post(
                 post_id=post_id,
                 chat_id=channel.tg_destination,
                 footer_links=footer_links,
-                max_posts_per_day=schedule.max_posts_per_day,
+                max_posts_per_day=max_per_day,
                 min_interval_minutes=schedule.min_interval_minutes,
+                channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
         except Exception:
@@ -168,8 +178,9 @@ async def _publish_channel_post(
                 post_id=post_id,
                 group_id=int(channel.vk_destination),
                 footer_links=footer_links,
-                max_posts_per_day=schedule.max_posts_per_day,
+                max_posts_per_day=max_per_day,
                 min_interval_minutes=schedule.min_interval_minutes,
+                channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
         except Exception:

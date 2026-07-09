@@ -26,6 +26,7 @@ def check_publish_allowed(
     network: str,
     max_posts_per_day: int,
     min_interval_minutes: int,
+    channel_id: int | None = None,
     now: datetime.datetime | None = None,
 ) -> str | None:
     """Возвращает None, если публиковать можно, либо строку-причину, если нельзя.
@@ -53,11 +54,11 @@ def check_publish_allowed(
     now = now or datetime.datetime.utcnow()
     since = _start_of_today_utc(now)
 
-    published_today = repo.count_published_since(since)
+    published_today = repo.count_published_since(since, channel_id=channel_id)
     if published_today >= max_posts_per_day:
         return f"дневной лимит публикаций достигнут ({published_today}/{max_posts_per_day})"
 
-    last_published_at = repo.get_last_published_at()
+    last_published_at = repo.get_last_published_at(channel_id=channel_id)
     if last_published_at is not None:
         if last_published_at.tzinfo is not None and now.tzinfo is None:
             now = now.replace(tzinfo=last_published_at.tzinfo)

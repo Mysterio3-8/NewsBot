@@ -31,6 +31,7 @@ def publish_queued_post_vk(
     footer_links: FooterLinks | None = None,
     max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY,
     min_interval_minutes: int = DEFAULT_MIN_INTERVAL_MINUTES,
+    channel_id: int | None = None,
     include_hashtags: bool = False,
 ) -> VKPublishResult:
     processed = repo.get_processed_post(post_id)
@@ -43,6 +44,7 @@ def publish_queued_post_vk(
         network="vk",
         max_posts_per_day=max_posts_per_day,
         min_interval_minutes=min_interval_minutes,
+        channel_id=channel_id,
     )
     if blocked is not None:
         logger.warning("Публикация поста %d в VK отклонена антиспам-стопором: %s", post_id, blocked)
