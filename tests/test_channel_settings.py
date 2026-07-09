@@ -22,3 +22,20 @@ def test_from_json_reads_max_posts_per_day():
 def test_to_json_roundtrip():
     original = ChannelSettings(filters_enabled=False, max_posts_per_day=3)
     assert ChannelSettings.from_json(original.to_json()) == original
+
+
+def test_from_json_reads_interval_and_footer():
+    s = ChannelSettings.from_json(
+        '{"filters_enabled": false, "max_posts_per_day": 3, '
+        '"min_interval_minutes": 480, "tg_footer_url": "https://t.me/x"}'
+    )
+    assert s.min_interval_minutes == 480
+    assert s.tg_footer_url == "https://t.me/x"
+
+
+def test_to_json_roundtrip_with_interval_and_footer():
+    original = ChannelSettings(
+        filters_enabled=False, max_posts_per_day=3,
+        min_interval_minutes=480, tg_footer_url="https://t.me/x",
+    )
+    assert ChannelSettings.from_json(original.to_json()) == original

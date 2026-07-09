@@ -22,7 +22,7 @@ from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
-from app.core.publishing.footer import build_footer_links_from_config
+from app.core.publishing.footer import FooterLinks, build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.vk_publisher import VKPublisher
@@ -147,6 +147,17 @@ async def _publish_channel_post(
         if settings.max_posts_per_day is not None
         else schedule.max_posts_per_day
     )
+    min_interval = (
+        settings.min_interval_minutes
+        if settings.min_interval_minutes is not None
+        else schedule.min_interval_minutes
+    )
+    # Свой футер канала (ссылка в конце, напр. на TG-канал кино) переопределяет глобальный.
+    channel_footer = (
+        FooterLinks(label="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
+        if settings.tg_footer_url
+        else footer_links
+    )
     if tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination:
         try:
             await publish_queued_post(
@@ -154,9 +165,9 @@ async def _publish_channel_post(
                 tg_publisher,
                 post_id=post_id,
                 chat_id=channel.tg_destination,
-                footer_links=footer_links,
+                footer_links=channel_footer,
                 max_posts_per_day=max_per_day,
-                min_interval_minutes=schedule.min_interval_minutes,
+                min_interval_minutes=min_interval,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
@@ -177,9 +188,9 @@ async def _publish_channel_post(
                 vk_publisher,
                 post_id=post_id,
                 group_id=int(channel.vk_destination),
-                footer_links=footer_links,
+                footer_links=channel_footer,
                 max_posts_per_day=max_per_day,
-                min_interval_minutes=schedule.min_interval_minutes,
+                min_interval_minutes=min_interval,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
