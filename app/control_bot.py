@@ -209,9 +209,21 @@ def register_owner(repo: Repository, user_id: int) -> None:
     repo.set_setting(OWNER_SETTING_KEY, str(user_id))
 
 
+CONTROL_BOT_EXTRA_IDS_ENV = "CONTROL_BOT_EXTRA_OWNER_IDS"
+
+
+def _extra_authorized_ids() -> set[int]:
+    """Доп. авторизованные пользователи (напр. напарник) — список Telegram user_id через
+    запятую в CONTROL_BOT_EXTRA_OWNER_IDS. Помимо основного владельца из get_owner_id."""
+    raw = os.environ.get(CONTROL_BOT_EXTRA_IDS_ENV, "")
+    return {int(part) for part in raw.replace(" ", "").split(",") if part}
+
+
 def is_authorized(repo: Repository, user_id: int) -> bool:
     owner = get_owner_id(repo)
-    return owner is not None and owner == user_id
+    if owner is not None and owner == user_id:
+        return True
+    return user_id in _extra_authorized_ids()
 
 
 def handle_start(repo: Repository, user_id: int) -> str:

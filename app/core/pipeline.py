@@ -64,12 +64,15 @@ def process_fetched_post(
     scoring_weights: ScoringWeights,
     rewrite_config: RewriteConfig,
     max_post_age_hours: float,
+    filters_enabled: bool = True,
     images_config: ImagesConfig | None = None,
     watermark_config: WatermarkConfig | None = None,
     headline_card_config: HeadlineCardConfig | None = None,
     image_providers: dict[str, ImageProvider] | None = None,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
+    filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
+    min_score, оставляем только дедуп, чтобы не публиковать один пост дважды.
     images_config/watermark_config/image_providers опциональны — без них пост
     обрабатывается как раньше, но без картинок (обратная совместимость для тестов)."""
     if post.external_id in repo.get_existing_external_ids(source.id):
@@ -88,41 +91,51 @@ def process_fetched_post(
         video_path=post.video_path,
     )
 
-    reason = _check_local_filters(post, filters, content_hash, recent_hashes)
+    if filters_enabled:
+        reason = _check_local_filters(post, filters, content_hash, recent_hashes)
+    else:
+        reason = _check_duplicate_only(post, filters, content_hash, recent_hashes)
     if reason is not None:
         return ProcessingOutcome(accepted=None, rejected=_reject(repo, raw_post.id, reason))
 
-    try:
-        classification = classify_post(
-            llm_client, text=post.text, source=source.name, keywords=filters.whitelist_keywords
-        )
-    except (ClassificationError, LLMUnavailableError) as error:
-        logger.warning("Классификация не удалась для raw_post %d: %s", raw_post.id, error)
-        return ProcessingOutcome(
-            accepted=None, rejected=_reject(repo, raw_post.id, "error_classification")
+    if filters_enabled:
+        try:
+            classification = classify_post(
+                llm_client, text=post.text, source=source.name, keywords=filters.whitelist_keywords
+            )
+        except (ClassificationError, LLMUnavailableError) as error:
+            logger.warning("Классификация не удалась для raw_post %d: %s", raw_post.id, error)
+            return ProcessingOutcome(
+                accepted=None, rejected=_reject(repo, raw_post.id, "error_classification")
+            )
+
+        if not classification.is_news:
+            reason = classification.reject_reason or "не новость по мнению LLM"
+            return ProcessingOutcome(accepted=None, rejected=_reject(repo, raw_post.id, reason))
+
+        matched_keywords = find_whitelisted_keywords(post.text, filters.whitelist_keywords)
+        post_age_hours = _post_age_hours(post, max_post_age_hours)
+        score = compute_score(
+            news_value_score=classification.score,
+            whitelist_matched=bool(matched_keywords),
+            source_views=post.views,
+            min_views=filters.min_views,
+            post_age_hours=post_age_hours,
+            max_post_age_hours=max_post_age_hours,
+            source_priority=source.priority,
+            weights=scoring_weights,
         )
 
-    if not classification.is_news:
-        reason = classification.reject_reason or "не новость по мнению LLM"
-        return ProcessingOutcome(accepted=None, rejected=_reject(repo, raw_post.id, reason))
-
-    matched_keywords = find_whitelisted_keywords(post.text, filters.whitelist_keywords)
-    post_age_hours = _post_age_hours(post, max_post_age_hours)
-    score = compute_score(
-        news_value_score=classification.score,
-        whitelist_matched=bool(matched_keywords),
-        source_views=post.views,
-        min_views=filters.min_views,
-        post_age_hours=post_age_hours,
-        max_post_age_hours=max_post_age_hours,
-        source_priority=source.priority,
-        weights=scoring_weights,
-    )
-
-    if score < filters.min_score:
-        return ProcessingOutcome(
-            accepted=None, rejected=_reject(repo, raw_post.id, "низкий скоринг", score=score)
-        )
+        if score < filters.min_score:
+            return ProcessingOutcome(
+                accepted=None, rejected=_reject(repo, raw_post.id, "низкий скоринг", score=score)
+            )
+        category = classification.category
+    else:
+        # «Лить всё»: без LLM-гейта новостей и порога скоринга. Фиксированный проходной
+        # скор (публикация в headless идёт по created_at, не по score).
+        score = 100.0
+        category = None
 
     rewritten_text = rewrite_post(
         llm_client,
@@ -165,7 +178,7 @@ def process_fetched_post(
     processed = repo.create_processed_post(
         raw_post_id=raw_post.id,
         score=score,
-        category=classification.category,
+        category=category,
         rewritten_text=rewritten_text,
         headline=headline,
         image_paths=image_paths,
@@ -330,6 +343,29 @@ def _check_local_filters(
     blacklisted_word = find_blacklisted_word(post.text, filters.stop_words)
     if blacklisted_word is not None:
         return f"стоп-слово: {blacklisted_word}"
+
+    if content_hash is not None:
+        duplicate_hash = find_similar_hash(
+            content_hash, recent_hashes, filters.duplicate_similarity_threshold
+        )
+        if duplicate_hash is not None:
+            return "дубль по SimHash"
+
+    return None
+
+
+def _check_duplicate_only(
+    post: FetchedPost,
+    filters: FiltersConfig,
+    content_hash: int | None,
+    recent_hashes: list[int],
+) -> str | None:
+    """Режим «лить всё» (filters_enabled=False): пропускаем стоп-слова и LLM-гейт, но
+    дедуп по SimHash и структурную проверку оставляем — чтобы один и тот же пост не
+    ушёл в канал дважды и не проскочил не-текстовый мусор."""
+    structural_reason = is_structural_non_news(post.post_type)
+    if structural_reason is not None:
+        return structural_reason
 
     if content_hash is not None:
         duplicate_hash = find_similar_hash(

@@ -544,3 +544,89 @@ def test_process_fetched_post_rejects_on_classification_error(tmp_path):
 
     assert outcome.accepted is None
     assert outcome.rejected.reason == "error_classification"
+
+
+def test_process_fetched_post_filters_disabled_accepts_non_news(tmp_path):
+    """Кино/мемы (filters_enabled=False): пост принимается без LLM-гейта новостей и
+    порога скоринга — classify_post даже не вызывается, «лить всё подряд»."""
+    repo = make_repo(tmp_path)
+    channel = repo.create_channel(name="Кино")
+    source = repo.create_source(
+        type="vk", name="Кинопремьеры", url="58170807", channel_id=channel.id
+    )
+    client = Mock(spec=LLMClient)
+    client.load_prompt.side_effect = lambda name: f"<{name}>"
+
+    import app.core.pipeline as pipeline_module
+
+    original_classify = pipeline_module.classify_post
+    original_rewrite = pipeline_module.rewrite_post
+    original_headlines = pipeline_module.generate_headlines
+    classify_spy = Mock()
+    pipeline_module.classify_post = classify_spy
+    pipeline_module.rewrite_post = create_autospec(
+        original_rewrite, return_value="Рерайт описания фильма"
+    )
+    pipeline_module.generate_headlines = Mock(return_value=["Ундина"])
+
+    try:
+        outcome = process_fetched_post(
+            repo,
+            source,
+            make_post(text="Ундина (2009) — драма про рыбака и русалку", external_id="9"),
+            llm_client=client,
+            # даже с недостижимым порогом и чужим whitelist пост проходит — фильтры off
+            filters=make_filters(min_score=99, whitelist_keywords=["Госдума"]),
+            scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG,
+            max_post_age_hours=24,
+            filters_enabled=False,
+        )
+    finally:
+        pipeline_module.classify_post = original_classify
+        pipeline_module.rewrite_post = original_rewrite
+        pipeline_module.generate_headlines = original_headlines
+
+    assert outcome is not None
+    assert outcome.rejected is None
+    assert outcome.accepted is not None
+    assert outcome.accepted.status == "queued"
+    classify_spy.assert_not_called()
+
+
+def test_process_fetched_post_filters_disabled_still_dedups(tmp_path):
+    """Даже в режиме «лить всё» дедуп сохраняется — один и тот же пост не уходит дважды."""
+    repo = make_repo(tmp_path)
+    channel = repo.create_channel(name="Кино")
+    source = repo.create_source(
+        type="vk", name="Кинопремьеры", url="58170807", channel_id=channel.id
+    )
+    client = Mock(spec=LLMClient)
+    client.load_prompt.side_effect = lambda name: f"<{name}>"
+
+    import app.core.pipeline as pipeline_module
+
+    original_rewrite = pipeline_module.rewrite_post
+    original_headlines = pipeline_module.generate_headlines
+    pipeline_module.rewrite_post = create_autospec(original_rewrite, return_value="Рерайт")
+    pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
+
+    text = "Ундина 2009 драма мелодрама детектив про рыбака Сиракуза и его дочь Энни"
+    try:
+        first = process_fetched_post(
+            repo, source, make_post(text=text, external_id="1"),
+            llm_client=client, filters=make_filters(), scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG, max_post_age_hours=24, filters_enabled=False,
+        )
+        second = process_fetched_post(
+            repo, source, make_post(text=text, external_id="2"),
+            llm_client=client, filters=make_filters(), scoring_weights=WEIGHTS,
+            rewrite_config=REWRITE_CONFIG, max_post_age_hours=24, filters_enabled=False,
+        )
+    finally:
+        pipeline_module.rewrite_post = original_rewrite
+        pipeline_module.generate_headlines = original_headlines
+
+    assert first.accepted is not None
+    assert second.accepted is None
+    assert second.rejected.reason == "дубль по SimHash"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 
 from app.config.loader import AppConfig
+from app.core.channel_settings import ChannelSettings
 from app.core.images.providers.base import ImageProvider
 from app.core.llm.client import LLMClient
 from app.core.monitoring.models import FetchedPost
@@ -27,6 +28,8 @@ async def run_check_cycle(
     vk_fetcher: VKFetcher | None = None,
     image_providers: dict[str, ImageProvider] | None = None,
 ) -> None:
+    settings_cache: dict[int, ChannelSettings] = {}
+
     if tg_fetcher is not None:
         for source in repo.list_sources(source_type="tg"):
             if not source.enabled:
@@ -42,7 +45,8 @@ async def run_check_cycle(
                 logger.exception("Не удалось получить посты из источника %s", source.name)
                 continue
             logger.info("Источник %s (tg): получено %d новых постов", source.name, len(posts))
-            _process_posts(repo, source, posts, llm_client, config, image_providers)
+            settings = _channel_settings_for(repo, source, settings_cache)
+            _process_posts(repo, source, posts, llm_client, config, image_providers, settings)
             _advance_tg_cursor(repo, source, posts)
 
     if vk_fetcher is not None:
@@ -59,7 +63,24 @@ async def run_check_cycle(
                 logger.exception("Не удалось получить посты из источника %s", source.name)
                 continue
             logger.info("Источник %s (vk): получено %d постов", source.name, len(posts))
-            _process_posts(repo, source, posts, llm_client, config, image_providers)
+            settings = _channel_settings_for(repo, source, settings_cache)
+            _process_posts(repo, source, posts, llm_client, config, image_providers, settings)
+
+
+def _channel_settings_for(
+    repo: Repository, source: Source, cache: dict[int, ChannelSettings]
+) -> ChannelSettings:
+    """Настройки канала источника (фильтр on/off и т.д.). Источник без канала (channel_id
+    None — на проде не бывает после миграции) наследует глобальные дефолты."""
+    channel_id = source.channel_id
+    if channel_id is None:
+        return ChannelSettings()
+    if channel_id not in cache:
+        channel = repo.get_channel(channel_id)
+        cache[channel_id] = (
+            ChannelSettings.from_json(channel.settings_json) if channel else ChannelSettings()
+        )
+    return cache[channel_id]
 
 
 def _tg_cursor_key(source_id: int) -> str:
@@ -113,6 +134,7 @@ def _process_posts(
     llm_client: LLMClient,
     config: AppConfig,
     image_providers: dict[str, ImageProvider] | None,
+    settings: ChannelSettings,
 ) -> None:
     for post in posts:
         try:
@@ -125,6 +147,7 @@ def _process_posts(
                 scoring_weights=config.scoring_weights,
                 rewrite_config=config.rewrite,
                 max_post_age_hours=config.monitoring.max_post_age_hours,
+                filters_enabled=settings.filters_enabled,
                 images_config=config.images,
                 watermark_config=config.watermark,
                 headline_card_config=config.headline_card,
