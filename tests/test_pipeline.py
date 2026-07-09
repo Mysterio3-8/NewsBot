@@ -116,16 +116,16 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
 
 
 def test_process_fetched_post_does_not_shorten_rewrite_below_original_length(tmp_path):
-    """Запрос пользователя 2026-07-07: рерайт НЕ укорачивать, смысл не резать.
-    max_length = max(конфиг, длина оригинала) — потолок не меньше длины исходника,
-    LLM не заставляют ужимать текст. Раньше был min(конфиг, len), из-за чего смысл
-    терялся на длинных постах."""
+    """Запрос пользователя 2026-07-09: объём рерайта ≈ как у оригинала, не сокращая и
+    не раздувая. max_length = длина оригинала — не заставляет ужимать (смысл цел) и не
+    даёт растягивать короткие посты до конфигового потолка (раньше был max(900, len))."""
     repo = make_repo(tmp_path)
     source = repo.create_source(type="tg", name="Канал", url="https://t.me/x", priority=8)
     client = Mock(spec=LLMClient)
     client.load_prompt.side_effect = lambda name: f"<{name}>"
 
-    short_post = make_post(text="Госдума приняла закон.")  # короче 900, whitelist-слово для проходного скора
+    text = "Госдума приняла закон о бюджете на следующий год после долгих обсуждений."
+    short_post = make_post(text=text)
 
     import app.core.pipeline as pipeline_module
 
@@ -158,8 +158,8 @@ def test_process_fetched_post_does_not_shorten_rewrite_below_original_length(tmp
         pipeline_module.generate_headlines = original_headlines
 
     _, kwargs = rewrite_mock.call_args
-    # Короткий пост (< 900) → потолок остаётся конфиговым 900, текст не ужимается.
-    assert kwargs["max_length"] == 900
+    # Потолок = длина оригинала: не ужимаем и не раздуваем — держим объём исходника.
+    assert kwargs["max_length"] == len(text)
 
 
 def test_filter_watermarked_photos_drops_when_watermark_not_removable(monkeypatch):
@@ -630,3 +630,60 @@ def test_process_fetched_post_filters_disabled_still_dedups(tmp_path):
     assert first.accepted is not None
     assert second.accepted is None
     assert second.rejected.reason == "дубль по SimHash"
+
+
+def test_prepare_images_keep_original_falls_back_to_stock_when_no_own_photo(monkeypatch):
+    """keep_original + нет своего фото (2026-07-09): берём сток (Pexels) по запросу из
+    текста, без вотермарка — пост без картинки читается плохо."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_safe_image_query", lambda *a, **k: "город ночь")
+    monkeypatch.setattr(pipeline_module, "resolve_to_local_file", lambda result, path: path)
+
+    provider = Mock()
+    provider.search.return_value = ["http://img1"]
+    config = ImagesConfig(
+        providers_order=["source", "pexels"],
+        count_per_post=1,
+        target_aspect_ratio="1:1",
+        uniquify=UniquifyConfig(enabled=False),
+        keep_original=True,
+    )
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=7,
+        post_media_urls=[],  # нет своих фото
+        rewritten_text="текст",
+        images_config=config,
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={"pexels": provider},
+    )
+
+    assert result is not None and len(result) == 1
+    provider.search.assert_called_once_with("город ночь", 1)
+
+
+def test_prepare_images_keep_original_no_photo_no_stock_returns_none(monkeypatch):
+    """keep_original + нет своего фото + нет сток-провайдеров → пост без фото (None)."""
+    config = ImagesConfig(
+        providers_order=["source"],
+        count_per_post=1,
+        target_aspect_ratio="1:1",
+        uniquify=UniquifyConfig(enabled=False),
+        keep_original=True,
+    )
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=8,
+        post_media_urls=[],
+        rewritten_text="текст",
+        images_config=config,
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+    )
+
+    assert result is None

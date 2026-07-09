@@ -29,6 +29,7 @@ from app.core.filtering.scoring import compute_score
 from app.core.images.image_pipeline import prepare_images_for_post
 from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
+from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
 from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
@@ -142,11 +143,11 @@ def process_fetched_post(
         text=post.text,
         source=source.name,
         style=rewrite_config.style,
-        # Не укорачивать текст (запрос пользователя 2026-07-07: "текст не надо
-        # уменьшать, смысл не резать"). Раньше был min(config, len) — это заставляло
-        # LLM ужимать текст ниже длины оригинала и терять смысл. Теперь потолок не
-        # меньше длины исходника, LLM только переписывает под антиплагиат ≈ той же длины.
-        max_length=max(rewrite_config.max_length_chars, len(post.text)),
+        # Объём рерайта ≈ как у оригинала (запрос пользователя 2026-07-09: "по объёму
+        # примерно по оригиналу, не сокращая и не добавляя"). Потолок = длина исходника:
+        # не заставляет ужимать (смысл сохраняется) и не даёт раздувать вдвое (раньше
+        # был max(900, len) — LLM растягивал короткие посты до 900). Промпт держит длину.
+        max_length=len(post.text),
         include_hashtags=rewrite_config.include_hashtags,
     )
     headlines = generate_headlines(
@@ -207,12 +208,17 @@ def _prepare_images(
     if images_config is None or watermark_config is None:
         return None
 
-    # Лёгкий режим (keep_original): отдаём оригинальные скачанные медиа как есть —
-    # без монтажа/вотермарка/уникализации/детекции чужих знаков и без сток-фолбэка
-    # (запрос пользователя 2026-07-07). Все фото поста, до потолка медиагруппы TG/VK.
+    # Лёгкий режим (keep_original): свои медиа поста отдаём как есть — без монтажа/
+    # вотермарка/уникализации. Но если своего фото НЕТ, пост без картинки читается плохо
+    # (запрос пользователя 2026-07-09) — берём сток (Pexels и др.) по запросу из текста,
+    # тоже без обработки (лёгкий режим консистентен).
     if images_config.keep_original:
         originals = post_media_urls[:MAX_SOURCE_PHOTOS]
-        return [str(p) for p in originals] or None
+        if originals:
+            return [str(p) for p in originals]
+        return _fetch_stock_plain(
+            llm_client, rewritten_text, raw_post_id, images_config, image_providers
+        )
 
     own_photos = _filter_watermarked_photos(llm_client, post_media_urls)
 
@@ -249,6 +255,39 @@ def _prepare_images(
         return None
 
     return [str(p) for p in image_paths] or None
+
+
+def _fetch_stock_plain(
+    llm_client: LLMClient,
+    rewritten_text: str,
+    raw_post_id: int,
+    images_config: ImagesConfig,
+    image_providers: dict[str, ImageProvider] | None,
+) -> list[str] | None:
+    """Сток-фото для лёгкого режима, когда у поста нет своего: скачиваем по запросу из
+    текста и отдаём БЕЗ вотермарка/монтажа (в отличие от prepare_images_for_post, который
+    всегда применяет watermarker). Провайдеры — из providers_order, кроме source."""
+    providers = dict(image_providers or {})
+    stock_names = [n for n in images_config.providers_order if n != "source" and n in providers]
+    if not stock_names:
+        return None
+
+    query = _safe_image_query(llm_client, rewritten_text)
+    if not query:
+        return None
+
+    output_dir = OUTPUT_DIR / "raw" / str(raw_post_id)
+    for name in stock_names:
+        results = providers[name].search(query, images_config.count_per_post)
+        if not results:
+            continue
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = [
+            resolve_to_local_file(result, output_dir / f"stock_{index}.jpg")
+            for index, result in enumerate(results)
+        ]
+        return [str(p) for p in paths]
+    return None
 
 
 def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:
