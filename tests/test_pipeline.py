@@ -115,6 +115,55 @@ def test_process_fetched_post_accepts_good_news(tmp_path):
     assert len(queued) == 1
 
 
+def test_process_fetched_post_logs_pipeline_stages(tmp_path, caplog):
+    """ТЗ 2026-07-10: сквозное логирование этапов — по логам должно быть видно
+    путь поста от приёма до постановки в очередь без похода в БД."""
+    import logging
+
+    repo = make_repo(tmp_path)
+    source = repo.create_source(type="tg", name="Новостной канал", url="https://t.me/x", priority=8)
+    client = Mock(spec=LLMClient)
+    client.load_prompt.side_effect = lambda name: f"<{name}>"
+
+    import app.core.pipeline as pipeline_module
+
+    original_classify = pipeline_module.classify_post
+    original_rewrite = pipeline_module.rewrite_post
+    original_headlines = pipeline_module.generate_headlines
+    pipeline_module.classify_post = Mock(
+        return_value=ClassificationResult(
+            is_news=True, category="политика", score=90, reasons=["важно"], reject_reason=None
+        )
+    )
+    pipeline_module.rewrite_post = create_autospec(
+        original_rewrite, return_value="Переписанный текст новости"
+    )
+    pipeline_module.generate_headlines = Mock(return_value=["Заголовок"])
+
+    try:
+        with caplog.at_level(logging.INFO, logger="monitoring"):
+            process_fetched_post(
+                repo,
+                source,
+                make_post(),
+                llm_client=client,
+                filters=make_filters(),
+                scoring_weights=WEIGHTS,
+                rewrite_config=REWRITE_CONFIG,
+                max_post_age_hours=24,
+            )
+    finally:
+        pipeline_module.classify_post = original_classify
+        pipeline_module.rewrite_post = original_rewrite
+        pipeline_module.generate_headlines = original_headlines
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "принят в обработку" in messages
+    assert "рерайт готов" in messages
+    assert "медиа подготовлено" in messages
+    assert "поставлен в очередь публикации" in messages
+
+
 def test_process_fetched_post_does_not_shorten_rewrite_below_original_length(tmp_path):
     """Запрос пользователя 2026-07-09: объём рерайта ≈ как у оригинала, не сокращая и
     не раздувая. max_length = длина оригинала — не заставляет ужимать (смысл цел) и не
@@ -687,3 +736,77 @@ def test_prepare_images_keep_original_no_photo_no_stock_returns_none(monkeypatch
     )
 
     assert result is None
+
+
+def test_prepare_images_movie_title_mode_searches_by_movie_name(monkeypatch):
+    """Кино-канал (image_query_mode='movie_title'): не берём фото источника/сток —
+    ищем кадры конкретного фильма через провайдер из image_search_providers."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_safe_movie_query", lambda *a, **k: "Ундина (2009) кадр из фильма")
+    captured = {}
+
+    def fake_prepare(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", fake_prepare)
+
+    _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=42,
+        post_media_urls=["a.jpg"],  # даже если есть своё фото — в movie_title его не берём
+        rewritten_text="рецензия на Ундину",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={"google": Mock(), "pexels": Mock()},
+        image_query_mode="movie_title",
+        image_search_providers=["google"],
+    )
+
+    assert captured["providers_order"] == ["google"]
+    assert captured["query"] == "Ундина (2009) кадр из фильма"
+
+
+def test_prepare_images_movie_title_mode_without_provider_returns_none(monkeypatch):
+    """image_providers_order пуст/провайдер недоступен (нет ключа) → пост без фото,
+    не падаем."""
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=43,
+        post_media_urls=[],
+        rewritten_text="текст",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},  # google не сконфигурирован (нет GOOGLE_CSE_KEY)
+        image_query_mode="movie_title",
+        image_search_providers=["google"],
+    )
+    assert result is None
+
+
+def test_prepare_images_movie_title_mode_no_title_extracted_returns_none(monkeypatch):
+    """LLM не смог извлечь название фильма — пустой запрос, не ищем наугад."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_safe_movie_query", lambda *a, **k: "")
+    prepare_mock = Mock()
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", prepare_mock)
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=44,
+        post_media_urls=[],
+        rewritten_text="текст без названия",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={"google": Mock()},
+        image_query_mode="movie_title",
+        image_search_providers=["google"],
+    )
+
+    assert result is None
+    prepare_mock.assert_not_called()

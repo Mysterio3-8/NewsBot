@@ -66,9 +66,19 @@
   `publish_queued_post*` принимают `channel_id`; headless берёт лимит из `ChannelSettings.
   max_posts_per_day` (кино 4/день) или глобальный. Кино не заспамит VK лимитом другого
   канала. Готово 2026-07-09, 474 теста. (LLM-throttle уже был: Groq 20с/вызов + 429 backoff.)
-- [ ] **2.5 — свой поиск фото по фильму** (Google/др. API): парсинг названия фильма из
-  поста → поиск кадров → замена медиа источника. Новое требование пользователя 2026-07-09.
-  Плюс per-channel `keep_original=false` (сейчас глобальный).
+- [x] **2.5 — свой поиск фото по фильму (Google Custom Search).** `GoogleImageProvider`
+  (`app/core/images/providers/google_provider.py`) — Custom Search JSON API,
+  `searchType=image`, graceful на сетевых ошибках (100 запросов/день free tier, не роняет
+  пост при 429). `generate_movie_search_query` (`app/core/llm/movie_query_generator.py` +
+  `prompts/movie_query.txt`) — LLM извлекает НАЗВАНИЕ фильма из текста (не нейтральный
+  сток-запрос, как у news-канала). `ChannelSettings.image_query_mode="movie_title"` +
+  `image_providers_order=["google"]` — pipeline._prepare_movie_images полностью обходит
+  keep_original/сток источника: всегда ищет кадры по названию, накладывает watermark
+  (лого) через тот же prepare_images_for_post, что и обычный сток-путь (код монтажа не
+  дублируется — коллаж/плашка появятся сами, когда включат headline_card под кино-стиль).
+  Секреты `GOOGLE_CSE_ID`/`GOOGLE_CSE_KEY` в `.env` (+ `.env.example`). seed кино обновлён
+  под movie_title режим. Готово 2026-07-10, 508 тестов. **Канал остаётся ВЫКЛЮЧЕН** —
+  ждёт кино-стиль headline_card (белая плашка+лого, срез 2) перед первым live-постом.
 - [ ] **3 — городской канал.** Веб-фетчер (`partizansk.org/news`, HTML/RSS) + TG-источники,
   анти-реклама LLM-фильтр, кросс-дедуп между источниками канала, хуки в рерайте, без видео.
 - [ ] **4 — мем-канал.** VK `bog_memes` → уникализация видео + вотермарк + хэштеги.

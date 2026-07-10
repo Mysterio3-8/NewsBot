@@ -26,6 +26,16 @@ class ChannelSettings:
     tg_footer_url: str | None = None
     """Ссылка, добавляемая в конец поста этого канала (напр. ссылка на TG-канал). None → нет."""
 
+    image_query_mode: str = "generic"
+    """"generic" → обычный сток-запрос по смыслу текста (Pexels/Unsplash/Pixabay).
+    "movie_title" → LLM извлекает НАЗВАНИЕ ФИЛЬМА из текста, ищем реальные кадры/постеры
+    (кино-канал) через image_providers_order (обычно ["google"]), а не сток."""
+
+    image_providers_order: list[str] | None = None
+    """Переопределяет глобальный images.providers_order для этого канала. None →
+    глобальный порядок. Обязателен при image_query_mode="movie_title" (сток не найдёт
+    кадры конкретного фильма)."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -36,6 +46,8 @@ class ChannelSettings:
             max_posts_per_day=data.get("max_posts_per_day"),
             min_interval_minutes=data.get("min_interval_minutes"),
             tg_footer_url=data.get("tg_footer_url"),
+            image_query_mode=data.get("image_query_mode", "generic"),
+            image_providers_order=data.get("image_providers_order"),
         )
 
     def to_json(self) -> str:
@@ -46,4 +58,8 @@ class ChannelSettings:
             payload["min_interval_minutes"] = self.min_interval_minutes
         if self.tg_footer_url is not None:
             payload["tg_footer_url"] = self.tg_footer_url
+        if self.image_query_mode != "generic":
+            payload["image_query_mode"] = self.image_query_mode
+        if self.image_providers_order is not None:
+            payload["image_providers_order"] = self.image_providers_order
         return json.dumps(payload, ensure_ascii=False)

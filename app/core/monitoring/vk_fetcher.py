@@ -72,8 +72,8 @@ class VKFetcher:
         count: int = 50,
         known_external_ids: set[str] | None = None,
     ) -> list[FetchedPost]:
-        """known_external_ids — уже обработанные ID этого источника (см.
-        Repository.get_existing_external_ids). Без этого фильтра фото уже известных
+        """known_external_ids — последние обработанные ID этого источника (см.
+        Repository.get_recent_external_ids). Без этого фильтра фото уже известных
         постов скачивались бы заново на КАЖДОМ цикле проверки, пока пост не выпадет
         из окна max_age_hours — тот же баг, что забивал диск на 100% для TelegramFetcher
         (см. известные грабли в CLAUDE.md), пока там не добавили тот же фильтр."""

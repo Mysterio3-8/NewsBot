@@ -39,3 +39,32 @@ def test_to_json_roundtrip_with_interval_and_footer():
         min_interval_minutes=480, tg_footer_url="https://t.me/x",
     )
     assert ChannelSettings.from_json(original.to_json()) == original
+
+
+def test_from_json_reads_movie_mode():
+    s = ChannelSettings.from_json(
+        '{"filters_enabled": false, "image_query_mode": "movie_title", '
+        '"image_providers_order": ["google"]}'
+    )
+    assert s.image_query_mode == "movie_title"
+    assert s.image_providers_order == ["google"]
+
+
+def test_default_image_query_mode_is_generic():
+    assert ChannelSettings().image_query_mode == "generic"
+    assert ChannelSettings.from_json(None).image_providers_order is None
+
+
+def test_to_json_roundtrip_with_movie_mode():
+    original = ChannelSettings(
+        filters_enabled=False,
+        image_query_mode="movie_title",
+        image_providers_order=["google"],
+    )
+    assert ChannelSettings.from_json(original.to_json()) == original
+
+
+def test_to_json_omits_generic_mode_for_compact_output():
+    """generic — дефолт, не нужно засорять JSON лишним полем для News-канала."""
+    payload = ChannelSettings().to_json()
+    assert "image_query_mode" not in payload

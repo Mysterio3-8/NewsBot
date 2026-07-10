@@ -57,7 +57,7 @@ async def run_check_cycle(
                 posts = vk_fetcher.fetch_recent_posts(
                     int(source.url),
                     max_age_hours=config.monitoring.max_post_age_hours,
-                    known_external_ids=repo.get_existing_external_ids(source.id),
+                    known_external_ids=repo.get_recent_external_ids(source.id),
                 )
             except Exception:
                 logger.exception("Не удалось получить посты из источника %s", source.name)
@@ -111,7 +111,7 @@ async def _fetch_tg_new_posts(
         source.url,
         after_id=after_id,
         limit=config.monitoring.fetch_batch_size,
-        known_external_ids=repo.get_existing_external_ids(source.id),
+        known_external_ids=repo.get_recent_external_ids(source.id),
     )
 
 
@@ -152,6 +152,8 @@ def _process_posts(
                 watermark_config=config.watermark,
                 headline_card_config=config.headline_card,
                 image_providers=image_providers,
+                image_query_mode=settings.image_query_mode,
+                image_search_providers=settings.image_providers_order,
             )
         except Exception:
             logger.exception(

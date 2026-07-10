@@ -235,6 +235,32 @@ async def test_cycle_job_tg_failure_does_not_block_vk(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cycle_job_skips_vk_when_breaker_open_but_still_posts_tg(tmp_path, monkeypatch):
+    """Антибан: если circuit breaker открыт для VK-токена (недавно был rate limit),
+    в VK не постим этот цикл, но TG (независимая сеть) уходит как обычно."""
+    from app.core.publishing.circuit_breaker import CircuitBreaker
+    from app.core.publishing.vk_errors import VKErrorClass
+
+    m = _patch_env(monkeypatch)
+    repo = make_repo(tmp_path)
+    _add_channel_post(repo, vk_token_env="VK_GROUP_TOKEN")
+    # Открываем цепь для VK заранее (как будто прошлый цикл словил ошибку 6).
+    CircuitBreaker(repo).record_failure("vk", "VK_GROUP_TOKEN", VKErrorClass.RATE_LIMIT)
+    config = FakeAppConfig()
+
+    tg_publisher = AsyncMock(spec=TelegramPublisher)
+    tg_publisher.publish.return_value = PublishResult(success=True, message_id=1, error=None)
+    vk_publisher = Mock(spec=VKPublisher)
+    _mock_publishers(monkeypatch, m, tg=tg_publisher, vk=vk_publisher)
+
+    job = build_cycle_job(repo, config, Mock(), tg_fetcher=Mock(), vk_fetcher=Mock())
+    await job()
+
+    tg_publisher.publish.assert_awaited_once()
+    vk_publisher.publish.assert_not_called()  # VK пропущен — breaker открыт
+
+
+@pytest.mark.asyncio
 async def test_cycle_job_skips_disabled_network(tmp_path, monkeypatch):
     m = _patch_env(monkeypatch)
     repo = make_repo(tmp_path)

@@ -47,6 +47,11 @@ def seed_cinema(repo: Repository) -> None:
         max_posts_per_day=3,
         min_interval_minutes=480,  # 8ч между постами → 3/день, без пачки
         tg_footer_url="https://t.me/kinobestfilmss",
+        # Не оригинальные фото источника и не нейтральный сток — реальные кадры/постеры
+        # КОНКРЕТНОГО фильма (LLM извлекает название → Google Custom Search). Требует
+        # GOOGLE_CSE_KEY + GOOGLE_CSE_ID в .env (см. app/core/images/providers/google_provider.py).
+        image_query_mode="movie_title",
+        image_providers_order=["google"],
     )
     channel = _ensure_channel(
         repo,

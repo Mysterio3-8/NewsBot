@@ -22,10 +22,12 @@ from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
+from app.core.publishing.circuit_breaker import CircuitBreaker
 from app.core.publishing.footer import FooterLinks, build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
-from app.core.publishing.vk_publisher import VKPublisher
+from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
+from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.scheduler import start_of_today_utc
 from app.db.models import Channel
@@ -54,6 +56,10 @@ def build_cycle_job(
     для всех каналов, публикация — раздельная: каждый канал в свою VK-группу/TG-канал."""
     image_providers = build_image_providers()
     footer_links = build_footer_links_from_config(config.footer)
+    # Circuit breaker общий на весь цикл: при серии ошибок VK (rate limit/бан) открывает
+    # паузу на сеть+токен, не давая долбить упавший API (антибан). Состояние в БД —
+    # переживает рестарт сервиса.
+    breaker = CircuitBreaker(repo)
 
     # Publisher'ы кэшируются по имени env-переменной с токеном — чтобы не создавать
     # новый клиент на каждый канал в каждом цикле (несколько каналов могут постить одним
@@ -103,6 +109,7 @@ def build_cycle_job(
                     tg_publisher=_tg_publisher_for(channel),
                     vk_publisher=_vk_publisher_for(channel),
                     footer_links=footer_links,
+                    breaker=breaker,
                 )
                 await asyncio.sleep(random.uniform(3, 8))  # лёгкая пауза между постами
 
@@ -134,6 +141,7 @@ async def _publish_channel_post(
     tg_publisher: TelegramPublisher | None,
     vk_publisher: VKPublisher | None,
     footer_links,
+    breaker: CircuitBreaker,
 ) -> None:
     """Публикует пост в таргеты КОНКРЕТНОГО канала. Сеть пропускается, если у канала не
     задано её назначение (напр. кино/мемы пока только VK, tg_destination пуст) или сеть
@@ -177,13 +185,20 @@ async def _publish_channel_post(
             )
 
     if vk_publisher is not None and config.publishing.vk.enabled and channel.vk_destination:
+        vk_token_env = channel.vk_token_env or config.publishing.vk.token_env
+        if breaker.is_open("vk", vk_token_env):
+            logger.warning(
+                "Публикация в VK пропущена для поста %d (канал %s): circuit breaker открыт (%s)",
+                post_id, channel.name, vk_token_env,
+            )
+            return
         # Небольшая случайная пауза перед второй сетью — чтобы TG и VK не публиковались
         # секунда в секунду (антибан). Короткая (3-8с): режим немедленной публикации.
         delay_seconds = random.uniform(3, 8)
         logger.info("Пауза %.0f сек перед публикацией в VK", delay_seconds)
         await asyncio.sleep(delay_seconds)
         try:
-            publish_queued_post_vk(
+            result = publish_queued_post_vk(
                 repo,
                 vk_publisher,
                 post_id=post_id,
@@ -194,10 +209,25 @@ async def _publish_channel_post(
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
+            _record_vk_breaker(breaker, vk_token_env, result)
         except Exception:
             logger.exception(
                 "Публикация в VK не удалась для поста %d (канал %s)", post_id, channel.name
             )
+            breaker.record_failure("vk", vk_token_env, VKErrorClass.TRANSIENT)
+
+
+def _record_vk_breaker(
+    breaker: CircuitBreaker, token_env: str, result: VKPublishResult
+) -> None:
+    """Успех закрывает цепь, реальный сбой VK — двигает breaker к паузе. Отказ
+    rate_guard (throttled) — НЕ сетевая ошибка, breaker не трогаем."""
+    if result.success:
+        breaker.record_success("vk", token_env)
+        return
+    if result.error and result.error.startswith("throttled:"):
+        return
+    breaker.record_failure("vk", token_env, classify_vk_code(result.error_code))
 
 
 def _sync_default_channel_targets(repo: Repository, config: AppConfig) -> None:

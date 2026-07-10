@@ -208,3 +208,37 @@ def test_publish_retries_and_fails_after_exhausting_attempts():
     assert result.success is False
     assert "сеть недоступна" in result.error
     assert publisher._api.wall.post.call_count == 4
+
+
+def test_publish_fails_fast_on_rate_limit_without_retrying():
+    """Антибан: VK error 6 (too many req/s) — НЕ долбить ретраями (это углубляет
+    флуд-бан), выйти сразу и отдать код 6, чтобы circuit breaker открыл паузу."""
+    publisher = make_publisher()
+
+    class _ApiError(Exception):
+        code = 6
+
+    publisher._api.wall.post.side_effect = _ApiError("[6] Too many requests per second")
+
+    with patch("app.core.publishing.vk_publisher.time.sleep"):
+        result = publisher.publish(group_id=123, text="новость")
+
+    assert result.success is False
+    assert result.error_code == 6
+    assert publisher._api.wall.post.call_count == 1  # без ретраев
+
+
+def test_publish_fails_fast_on_auth_blocked():
+    publisher = make_publisher()
+
+    class _ApiError(Exception):
+        code = 5
+
+    publisher._api.wall.post.side_effect = _ApiError("[5] User authorization failed")
+
+    with patch("app.core.publishing.vk_publisher.time.sleep"):
+        result = publisher.publish(group_id=123, text="новость")
+
+    assert result.success is False
+    assert result.error_code == 5
+    assert publisher._api.wall.post.call_count == 1

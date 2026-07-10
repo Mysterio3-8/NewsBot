@@ -6,6 +6,7 @@ import os
 from app.config.loader import AppConfig
 from app.core.images.providers.base import ImageProvider
 from app.db.models import Channel
+from app.core.images.providers.google_provider import GoogleImageProvider
 from app.core.images.providers.pexels_provider import PexelsProvider
 from app.core.images.providers.pixabay_provider import PixabayProvider
 from app.core.images.providers.unsplash_provider import UnsplashProvider
@@ -85,5 +86,10 @@ def build_image_providers() -> dict[str, ImageProvider]:
     pixabay_key = os.environ.get("PIXABAY_API_KEY")
     if pixabay_key:
         providers["pixabay"] = PixabayProvider(pixabay_key)
+
+    google_key = os.environ.get("GOOGLE_CSE_KEY")
+    google_cx = os.environ.get("GOOGLE_CSE_ID")
+    if google_key and google_cx:
+        providers["google"] = GoogleImageProvider(google_key, google_cx)
 
     return providers

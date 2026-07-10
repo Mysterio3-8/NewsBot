@@ -9,9 +9,15 @@ from pathlib import Path
 import requests
 import vk_api
 
+from app.core.publishing.vk_errors import VKErrorClass, classify_vk_error
+
 logger = logging.getLogger("publishing")
 
 RETRY_DELAYS_SECONDS = [0, 5, 30, 120]
+
+# На этих классах ошибок ретраить нельзя — дальнейшие попытки только углубляют
+# флуд-бан. Выходим сразу, отдаём код наверх, circuit breaker откроет паузу.
+_FAIL_FAST_CLASSES = frozenset({VKErrorClass.RATE_LIMIT, VKErrorClass.AUTH_BLOCKED})
 
 
 @dataclass(frozen=True)
@@ -19,6 +25,7 @@ class VKPublishResult:
     success: bool
     post_id: int | None
     error: str | None
+    error_code: int | None = None
 
 
 class VKPublisher:
@@ -77,9 +84,16 @@ class VKPublisher:
                     len(RETRY_DELAYS_SECONDS),
                     error,
                 )
+                if classify_vk_error(error) in _FAIL_FAST_CLASSES:
+                    break  # rate-limit/бан — не долбить, отдать код наверх для breaker
 
         logger.error("Публикация в VK не удалась после всех попыток: %s", last_error)
-        return VKPublishResult(success=False, post_id=None, error=str(last_error))
+        return VKPublishResult(
+            success=False,
+            post_id=None,
+            error=str(last_error),
+            error_code=getattr(last_error, "code", None),
+        )
 
     def _build_attachments(
         self, group_id: int, image_paths: list[Path], video_path: Path | None

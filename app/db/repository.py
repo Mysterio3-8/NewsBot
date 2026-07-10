@@ -242,9 +242,30 @@ class Repository:
             session.refresh(raw_post)
             return raw_post
 
-    def get_existing_external_ids(self, source_id: int) -> set[str]:
+    def has_external_id(self, source_id: int, external_id: str) -> bool:
+        """Точная проверка «этот пост уже обрабатывали» для пайплайна — прямой
+        запрос существования, не грузит всю историю источника в память."""
         with self._session_factory() as session:
-            rows = session.query(RawPost.external_id).filter(RawPost.source_id == source_id).all()
+            row = (
+                session.query(RawPost.id)
+                .filter(RawPost.source_id == source_id, RawPost.external_id == external_id)
+                .first()
+            )
+            return row is not None
+
+    def get_recent_external_ids(self, source_id: int, limit: int = 1000) -> set[str]:
+        """Последние N external_id источника — вторичная защита от повторной обработки
+        (первичная для TG — курсор мониторинга, для VK — возрастное окно). Ограничено
+        окном, чтобы не тянуть всю историю источника из БД на каждом цикле: раньше
+        безлимитный запрос рос вечно вместе с числом обработанных постов."""
+        with self._session_factory() as session:
+            rows = (
+                session.query(RawPost.external_id)
+                .filter(RawPost.source_id == source_id)
+                .order_by(RawPost.id.desc())
+                .limit(limit)
+                .all()
+            )
             return {row[0] for row in rows}
 
     def get_max_external_id(self, source_id: int) -> int | None:

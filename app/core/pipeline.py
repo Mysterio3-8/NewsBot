@@ -36,6 +36,7 @@ from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
 from app.core.llm.headline_generator import generate_headlines
 from app.core.llm.image_query_generator import generate_image_query
+from app.core.llm.movie_query_generator import generate_movie_search_query
 from app.core.llm.rewriter import rewrite_post
 from app.core.monitoring.models import FetchedPost
 from app.core.video.watermark import VideoWatermarker, VideoWatermarkError
@@ -70,13 +71,17 @@ def process_fetched_post(
     watermark_config: WatermarkConfig | None = None,
     headline_card_config: HeadlineCardConfig | None = None,
     image_providers: dict[str, ImageProvider] | None = None,
+    image_query_mode: str = "generic",
+    image_search_providers: list[str] | None = None,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
     min_score, оставляем только дедуп, чтобы не публиковать один пост дважды.
     images_config/watermark_config/image_providers опциональны — без них пост
-    обрабатывается как раньше, но без картинок (обратная совместимость для тестов)."""
-    if post.external_id in repo.get_existing_external_ids(source.id):
+    обрабатывается как раньше, но без картинок (обратная совместимость для тестов).
+    image_query_mode="movie_title" (кино-канал) — вместо своих фото/стока ищем реальные
+    кадры/постеры фильма через image_search_providers (см. ChannelSettings)."""
+    if repo.has_external_id(source.id, post.external_id):
         return None
 
     content_hash = compute_simhash(post.text) if post.text else None
@@ -90,6 +95,14 @@ def process_fetched_post(
         fetched_at=post.published_at,
         media=json.dumps(post.media_urls) if post.media_urls else None,
         video_path=post.video_path,
+    )
+    logger.info(
+        "[пост %s] принят в обработку (источник=%s, медиа=%d фото%s, фильтры=%s)",
+        post.external_id,
+        source.name,
+        len(post.media_urls),
+        ", видео" if post.video_path else "",
+        "вкл" if filters_enabled else "выкл",
     )
 
     if filters_enabled:
@@ -150,6 +163,12 @@ def process_fetched_post(
         max_length=len(post.text),
         include_hashtags=rewrite_config.include_hashtags,
     )
+    logger.info(
+        "[пост %s] рерайт готов (%d → %d символов)",
+        post.external_id,
+        len(post.text),
+        len(rewritten_text),
+    )
     headlines = generate_headlines(
         llm_client,
         text=rewritten_text,
@@ -168,12 +187,20 @@ def process_fetched_post(
         watermark_config=watermark_config,
         headline_card_config=headline_card_config,
         image_providers=image_providers,
+        image_query_mode=image_query_mode,
+        image_search_providers=image_search_providers,
     )
     video_path = _prepare_video(
         raw_post_id=raw_post.id,
         post_video_path=post.video_path,
         watermark_config=watermark_config,
         images_config=images_config,
+    )
+    logger.info(
+        "[пост %s] медиа подготовлено (изображений=%s, видео=%s)",
+        post.external_id,
+        len(image_paths) if image_paths else 0,
+        "да" if video_path else "нет",
     )
 
     processed = repo.create_processed_post(
@@ -185,6 +212,12 @@ def process_fetched_post(
         image_paths=image_paths,
         video_path=video_path,
         status="queued",
+    )
+    logger.info(
+        "[пост %s] поставлен в очередь публикации (processed_post=%d, score=%.1f)",
+        post.external_id,
+        processed.id,
+        score,
     )
     return ProcessingOutcome(accepted=processed, rejected=None)
 
@@ -200,6 +233,8 @@ def _prepare_images(
     watermark_config: WatermarkConfig | None,
     headline_card_config: HeadlineCardConfig | None = None,
     image_providers: dict[str, ImageProvider] | None,
+    image_query_mode: str = "generic",
+    image_search_providers: list[str] | None = None,
 ) -> list[str] | None:
     """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
     отфильтрованы как чужой водяной знак, см. _filter_watermarked_photos), для
@@ -207,6 +242,22 @@ def _prepare_images(
     он реально нужен, чтобы не тратить лимит Groq впустую."""
     if images_config is None or watermark_config is None:
         return None
+
+    # Кино-канал (image_query_mode="movie_title"): не берём фото источника и не идём
+    # в обычный сток — ищем РЕАЛЬНЫЕ кадры/постеры конкретного фильма по названию,
+    # извлечённому LLM (см. ChannelSettings.image_query_mode, MULTICHANNEL.md срез 2.5).
+    if image_query_mode == "movie_title":
+        return _prepare_movie_images(
+            llm_client,
+            raw_post_id=raw_post_id,
+            rewritten_text=rewritten_text,
+            headline=headline,
+            images_config=images_config,
+            watermark_config=watermark_config,
+            headline_card_config=headline_card_config,
+            image_providers=image_providers,
+            providers_order=image_search_providers or [],
+        )
 
     # Лёгкий режим (keep_original): свои медиа поста отдаём как есть — без монтажа/
     # вотермарка/уникализации. Но если своего фото НЕТ, пост без картинки читается плохо
@@ -288,6 +339,62 @@ def _fetch_stock_plain(
         ]
         return [str(p) for p in paths]
     return None
+
+
+def _prepare_movie_images(
+    llm_client: LLMClient,
+    *,
+    raw_post_id: int,
+    rewritten_text: str,
+    headline: str | None,
+    images_config: ImagesConfig,
+    watermark_config: WatermarkConfig,
+    headline_card_config: HeadlineCardConfig | None,
+    image_providers: dict[str, ImageProvider] | None,
+    providers_order: list[str],
+) -> list[str] | None:
+    """Кино-канал: ищет реальные кадры/постеры конкретного фильма (Google Custom Search,
+    обычно) вместо оригинальных фото источника или нейтрального стока. Watermark (лого)
+    накладывается как обычно через prepare_images_for_post; коллаж/плашка появятся, когда
+    включат headline_card под кино-стиль — код монтажа общий, не дублируется здесь."""
+    providers = dict(image_providers or {})
+    search_names = [name for name in providers_order if name in providers]
+    if not search_names:
+        logger.warning(
+            "raw_post %d: не задан провайдер поиска кадров (image_providers_order канала)",
+            raw_post_id,
+        )
+        return None
+
+    query = _safe_movie_query(llm_client, rewritten_text)
+    if not query:
+        return None
+
+    try:
+        watermarker = Watermarker(watermark_config, images_config.uniquify, headline_card_config)
+        image_paths = prepare_images_for_post(
+            providers_order=search_names,
+            providers=providers,
+            query=query,
+            count=images_config.count_per_post,
+            post_id=raw_post_id,
+            headline=headline,
+            watermarker=watermarker,
+            target_aspect_ratio=images_config.target_aspect_ratio,
+            raw_output_dir=OUTPUT_DIR / "raw" / str(raw_post_id),
+        )
+    except WatermarkError as error:
+        logger.warning("Watermark не удался для кадров фильма raw_post %d: %s", raw_post_id, error)
+        return None
+
+    return [str(p) for p in image_paths] or None
+
+
+def _safe_movie_query(llm_client: LLMClient, rewritten_text: str) -> str:
+    try:
+        return generate_movie_search_query(llm_client, text=rewritten_text)
+    except LLMUnavailableError:
+        return ""
 
 
 def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:

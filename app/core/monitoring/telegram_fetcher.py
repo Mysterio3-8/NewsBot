@@ -133,8 +133,8 @@ class TelegramFetcher:
         limit: int = 50,
         known_external_ids: set[str] | None = None,
     ) -> list[FetchedPost]:
-        """known_external_ids — уже обработанные ID этого источника (см.
-        Repository.get_existing_external_ids). Без этого фильтра одни и те же
+        """known_external_ids — последние обработанные ID этого источника (см.
+        Repository.get_recent_external_ids). Без этого фильтра одни и те же
         сообщения скачивались бы заново на КАЖДОМ цикле проверки, пока они попадают
         в окно max_age_hours — на проде это раздуло диск до 100% (один файл скачан
         245 раз) прежде чем нашли причину."""
@@ -219,6 +219,8 @@ class TelegramFetcher:
         except Exception as error:
             logger.warning("Не удалось скачать фото из TG-сообщения %d: %s", message.id, error)
             return []
+        if path:
+            logger.debug("Скачано фото из TG-сообщения %d → %s", message.id, path)
         return [path] if path else []
 
     async def _download_video(self, message: Any) -> str | None:
@@ -233,4 +235,6 @@ class TelegramFetcher:
         except Exception as error:
             logger.warning("Не удалось скачать видео из TG-сообщения %d: %s", message.id, error)
             return None
+        if path:
+            logger.debug("Скачано видео из TG-сообщения %d → %s", message.id, path)
         return path

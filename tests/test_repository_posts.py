@@ -13,8 +13,23 @@ def test_create_raw_post_and_lookup_existing_ids(tmp_path):
 
     repo.create_raw_post(source_id=source.id, external_id="100", raw_text="текст", content_hash=42)
 
-    assert repo.get_existing_external_ids(source.id) == {"100"}
+    assert repo.has_external_id(source.id, "100") is True
+    assert repo.has_external_id(source.id, "999") is False
+    assert repo.get_recent_external_ids(source.id) == {"100"}
     assert repo.get_recent_content_hashes(source.id) == [42]
+
+
+def test_get_recent_external_ids_is_bounded_to_most_recent_window(tmp_path):
+    repo = make_test_repository(tmp_path)
+    source = repo.create_source(type="tg", name="TG", url="https://t.me/x")
+
+    for external_id in range(1, 6):
+        repo.create_raw_post(
+            source_id=source.id, external_id=str(external_id), raw_text="t", content_hash=None
+        )
+
+    # окно меньше числа постов — возвращаются только последние вставленные
+    assert repo.get_recent_external_ids(source.id, limit=2) == {"4", "5"}
 
 
 def test_create_raw_post_handles_content_hash_above_signed_64_boundary(tmp_path):
