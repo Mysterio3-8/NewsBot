@@ -16,6 +16,7 @@ from aiogram.types import (
 
 BTN_NEW_POST = "📝 Создать пост"
 BTN_AUTOPOSTING = "🤖 Автопостинг"
+BTN_CHANNELS = "📺 Каналы"
 BTN_SOURCES = "📰 Источники"
 BTN_SETTINGS = "⚙️ Настройки"
 BTN_TOOLS = "🧰 Инструменты"
@@ -24,6 +25,7 @@ BTN_STATUS = "📊 Статус"
 MAIN_MENU_BUTTONS = (
     BTN_NEW_POST,
     BTN_AUTOPOSTING,
+    BTN_CHANNELS,
     BTN_SOURCES,
     BTN_SETTINGS,
     BTN_TOOLS,
@@ -36,11 +38,52 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_NEW_POST), KeyboardButton(text=BTN_AUTOPOSTING)],
-            [KeyboardButton(text=BTN_SOURCES), KeyboardButton(text=BTN_SETTINGS)],
-            [KeyboardButton(text=BTN_TOOLS), KeyboardButton(text=BTN_STATUS)],
+            [KeyboardButton(text=BTN_CHANNELS), KeyboardButton(text=BTN_SOURCES)],
+            [KeyboardButton(text=BTN_SETTINGS), KeyboardButton(text=BTN_TOOLS)],
+            [KeyboardButton(text=BTN_STATUS)],
         ],
         resize_keyboard=True,
         is_persistent=True,
+    )
+
+
+def channels_menu(channels) -> InlineKeyboardMarkup:
+    """Список каналов — каждая кнопка открывает карточку канала."""
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{'🟢' if c.enabled else '⚪'} {c.name}",
+            callback_data=f"ch:open:{c.id}",
+        )]
+        for c in sorted(channels, key=lambda c: c.id)
+    ]
+    rows.append(_close_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def channel_card_menu(channel, settings) -> InlineKeyboardMarkup:
+    """Карточка канala: вкл/выкл, настройки (значения на кнопках), источники, назад."""
+    toggle = (
+        InlineKeyboardButton(text="⏹ Выключить канал", callback_data=f"ch:toggle:{channel.id}")
+        if channel.enabled
+        else InlineKeyboardButton(text="▶️ Включить канал", callback_data=f"ch:toggle:{channel.id}")
+    )
+    maxposts = settings.max_posts_per_day if settings.max_posts_per_day is not None else "глоб."
+    interval = settings.min_interval_minutes if settings.min_interval_minutes is not None else "глоб."
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [toggle],
+            [
+                InlineKeyboardButton(text=f"📈 Лимит/день: {maxposts}", callback_data=f"ch:set:{channel.id}:maxposts"),
+                InlineKeyboardButton(text=f"⏱ Интервал: {interval}", callback_data=f"ch:set:{channel.id}:interval"),
+            ],
+            [InlineKeyboardButton(
+                text=f"🔍 Фильтр новостей: {'вкл' if settings.filters_enabled else 'выкл'}",
+                callback_data=f"ch:filter:{channel.id}",
+            )],
+            [InlineKeyboardButton(text="📰 Источники канала", callback_data=f"ch:sources:{channel.id}")],
+            [InlineKeyboardButton(text="⬅️ К списку каналов", callback_data="ch:list")],
+            _close_row(),
+        ]
     )
 
 

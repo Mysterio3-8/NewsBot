@@ -107,11 +107,11 @@ def test_build_dispatcher_registers_media_handler():
     from unittest.mock import Mock
 
     dp = bot.build_dispatcher(Mock(), Mock(), "config.yaml")
-    # Команды (25) + конструктор постов /newpost /cancel + 2 state = 29,
-    # + кнопочное меню: /menu, 6 reply-кнопок, 2 state (настройка/добавление источника) = 38
-    assert len(dp.message.handlers) == 38
-    # Callback: конструктор mp:* (5) + меню (auto/set/prov/src/tools/nature/shorts/close) = 23
-    assert len(dp.callback_query.handlers) == 23
+    # 38 было до управления каналами; +2 message (reply-кнопка «Каналы» + FSM ввода
+    # настройки канала) = 40
+    assert len(dp.message.handlers) == 40
+    # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29
+    assert len(dp.callback_query.handlers) == 29
 
 
 def test_build_nature_controller_none_without_env_path():

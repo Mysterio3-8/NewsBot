@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 
@@ -22,6 +23,7 @@ from app.config.loader import (
     update_config_section,
     update_schedule_config,
 )
+from app.core.channel_settings import ChannelSettings
 from app.core.manual_post import MAX_BUTTONS, PostButton, parse_button_input
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
@@ -305,6 +307,81 @@ def add_source(repo: Repository, arg: str) -> str:
     source = repo.create_source(type=src_type, name=name, url=url)
     repo.update_source(source.id, enabled=False)
     return f"Источник [{source.id}] {name} добавлен (выключен). Включить: /source_on {source.id}"
+
+
+def render_channels(repo: Repository) -> str:
+    """Список каналов с их статусом — для меню «Каналы» (мультиканальность)."""
+    channels = repo.list_channels()
+    if not channels:
+        return "Каналов нет."
+    lines = ["📺 Каналы (🟢 вкл / ⚪ выкл):\n"]
+    for c in channels:
+        mark = "🟢" if c.enabled else "⚪"
+        lines.append(f"{mark} {c.name}")
+    lines.append("\nВыбери канал кнопкой ниже, чтобы настроить.")
+    return "\n".join(lines)
+
+
+def render_channel_card(repo: Repository, channel_id: int) -> str:
+    """Карточка канала: таргеты, настройки, число источников."""
+    channel = repo.get_channel(channel_id)
+    if channel is None:
+        return "Канал не найден."
+    settings = ChannelSettings.from_json(channel.settings_json)
+    n_src = len(repo.list_sources(channel_id=channel_id))
+    return (
+        f"📺 {channel.name}\n\n"
+        f"Статус: {'🟢 включён' if channel.enabled else '⚪ выключен'}\n"
+        f"VK: {channel.vk_destination or '—'}\n"
+        f"TG: {channel.tg_destination or '—'}\n"
+        f"Лимит/день: {settings.max_posts_per_day if settings.max_posts_per_day is not None else 'глобальный'}\n"
+        f"Интервал: {settings.min_interval_minutes if settings.min_interval_minutes is not None else 'глобальный'} мин\n"
+        f"Фильтр новостей: {'вкл' if settings.filters_enabled else 'выкл (лить всё)'}\n"
+        f"Источников: {n_src}"
+    )
+
+
+def toggle_channel(repo: Repository, channel_id: int) -> str:
+    """Включить/выключить канал. Выключенный не публикует (cycle_job его пропускает)."""
+    channel = repo.get_channel(channel_id)
+    if channel is None:
+        return "Канал не найден."
+    new_state = not channel.enabled
+    repo.update_channel(channel_id, enabled=new_state)
+    return f"Канал «{channel.name}»: {'включён 🟢' if new_state else 'выключен ⚪'}"
+
+
+def toggle_channel_filter(repo: Repository, channel_id: int) -> str:
+    """Переключить новостной фильтр канала (вкл = фильтруем как новости, выкл = лить всё)."""
+    channel = repo.get_channel(channel_id)
+    if channel is None:
+        return "Канал не найден."
+    settings = ChannelSettings.from_json(channel.settings_json)
+    settings = dataclasses.replace(settings, filters_enabled=not settings.filters_enabled)
+    repo.update_channel(channel_id, settings_json=settings.to_json())
+    return f"Фильтр канала «{channel.name}»: {'вкл' if settings.filters_enabled else 'выкл (лить всё)'}"
+
+
+def set_channel_setting(repo: Repository, channel_id: int, field: str, value_str: str) -> str:
+    """Изменить числовую настройку канала (maxposts/interval) из бота."""
+    value_str = value_str.strip()
+    if not value_str.isdigit():
+        return "Нужно число. Попробуй ещё раз."
+    value = int(value_str)
+    channel = repo.get_channel(channel_id)
+    if channel is None:
+        return "Канал не найден."
+    settings = ChannelSettings.from_json(channel.settings_json)
+    if field == "maxposts":
+        settings = dataclasses.replace(settings, max_posts_per_day=value)
+        label = "лимит/день"
+    elif field == "interval":
+        settings = dataclasses.replace(settings, min_interval_minutes=value)
+        label = "интервал (мин)"
+    else:
+        return "Неизвестная настройка."
+    repo.update_channel(channel_id, settings_json=settings.to_json())
+    return f"Канал «{channel.name}»: {label} = {value} ✅"
 
 
 def render_settings(config: AppConfig) -> str:
@@ -627,6 +704,9 @@ def build_dispatcher(
     class AddSourceInput(StatesGroup):
         waiting = State()  # ждём "tg|vk url имя"
 
+    class ChannelSettingInput(StatesGroup):
+        waiting_value = State()  # ждём число для настройки канала (лимит/интервал)
+
     # Единое меню-сообщение на чат: навигация РЕДАКТИРУЕТ его, а не плодит новые
     # (запрос пользователя 2026-07-08). chat_id -> message_id последнего меню.
     menu_messages: dict[int, int] = {}
@@ -753,6 +833,13 @@ def build_dispatcher(
         await state.clear()
         await _show_section(message, "📰 Источники (тап — вкл/выкл):", kb.sources_menu(repo.list_sources()))
 
+    @dp.message(F.text == kb.BTN_CHANNELS)
+    async def on_menu_channels(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await _show_section(message, render_channels(repo), kb.channels_menu(repo.list_channels()))
+
     @dp.message(F.text == kb.BTN_SETTINGS)
     async def on_menu_settings(message: Message, state: FSMContext) -> None:
         if not await guard(message):
@@ -833,6 +920,22 @@ def build_dispatcher(
         result = add_source(repo, message.text or "")
         await _edit_menu_message(
             message, "📰 Источники (тап — вкл/выкл):\n\n" + result, kb.sources_menu(repo.list_sources())
+        )
+
+    @dp.message(StateFilter(ChannelSettingInput.waiting_value))
+    async def on_channel_setting_value(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        channel_id = data.get("channel_id")
+        field = data.get("setting_field")
+        set_channel_setting(repo, channel_id, field, message.text or "")
+        await state.clear()
+        channel = repo.get_channel(channel_id)
+        if channel is None:
+            await _edit_menu_message(message, "Канал не найден.", None)
+            return
+        settings = ChannelSettings.from_json(channel.settings_json)
+        await _edit_menu_message(
+            message, render_channel_card(repo, channel_id), kb.channel_card_menu(channel, settings)
         )
 
     @dp.callback_query(F.data == "mp:cancel")
@@ -1025,6 +1128,72 @@ def build_dispatcher(
             "➕ Пришли источник: <tg|vk> <url или group_id> <имя>\nНапример: tg https://t.me/novosti_efir Новости",
             None,
         )
+        await cb.answer()
+
+    # --- Управление каналами (мультиканальность) ---
+    async def _show_channel_card(cb: CallbackQuery, channel_id: int) -> None:
+        channel = repo.get_channel(channel_id)
+        if channel is None:
+            await cb.answer("Канал не найден", show_alert=True)
+            return
+        settings = ChannelSettings.from_json(channel.settings_json)
+        await _edit_current(
+            cb, render_channel_card(repo, channel_id), kb.channel_card_menu(channel, settings)
+        )
+
+    @dp.callback_query(F.data == "ch:list")
+    async def on_ch_list(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await _edit_current(cb, render_channels(repo), kb.channels_menu(repo.list_channels()))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("ch:open:"))
+    async def on_ch_open(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await _show_channel_card(cb, int(cb.data.split(":")[2]))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("ch:toggle:"))
+    async def on_ch_toggle(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        channel_id = int(cb.data.split(":")[2])
+        result = toggle_channel(repo, channel_id)
+        await _show_channel_card(cb, channel_id)
+        await cb.answer(result)
+
+    @dp.callback_query(F.data.startswith("ch:filter:"))
+    async def on_ch_filter(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        channel_id = int(cb.data.split(":")[2])
+        result = toggle_channel_filter(repo, channel_id)
+        await _show_channel_card(cb, channel_id)
+        await cb.answer(result)
+
+    @dp.callback_query(F.data.startswith("ch:sources:"))
+    async def on_ch_sources(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        channel_id = int(cb.data.split(":")[2])
+        await _edit_current(
+            cb,
+            "📰 Источники канала (тап — вкл/выкл):",
+            kb.sources_menu(repo.list_sources(channel_id=channel_id)),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("ch:set:"))
+    async def on_ch_set(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, channel_id, field = cb.data.split(":")
+        await state.set_state(ChannelSettingInput.waiting_value)
+        await state.update_data(channel_id=int(channel_id), setting_field=field)
+        label = "лимит постов/день" if field == "maxposts" else "интервал в минутах"
+        await _edit_current(cb, f"Пришли число — {label}:", None)
         await cb.answer()
 
     @dp.callback_query(F.data == "tools:uniq")
