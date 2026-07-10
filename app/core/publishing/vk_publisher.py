@@ -31,8 +31,9 @@ class VKPublishResult:
 
 class VKPublisher:
     # Дефолты класса — часть тестов создаёт экземпляр через __new__ (минуя __init__)
-    # и не трогает лимитер; без этих дефолтов такой экземпляр падал бы AttributeError.
+    # и не трогает лимитеры; без этих дефолтов такой экземпляр падал бы AttributeError.
     _bucket: TokenBucket | None = None
+    _cooldown: TokenBucket | None = None
     _group_key: str | None = None
     _upload_key: str | None = None
 
@@ -42,6 +43,7 @@ class VKPublisher:
         *,
         upload_token: str | None = None,
         token_bucket: TokenBucket | None = None,
+        cooldown_bucket: TokenBucket | None = None,
     ) -> None:
         self._api = vk_api.VkApi(token=group_token).get_api()
         # photos.*/video.save требуют user-контекст (group-токен получает ошибку 27 —
@@ -52,10 +54,16 @@ class VKPublisher:
         self._upload_api = (
             vk_api.VkApi(token=upload_token).get_api() if upload_token else self._api
         )
-        # token_bucket — общий процесс-wide лимитер (ТЗ: не более 2 запр/сек на токен).
+        # token_bucket — технический burst-лимитер (не более 2 запр/сек на токен),
+        # нужен ВНУТРИ одной загрузки (getWallUploadServer→saveWallPhoto — иначе рвётся
+        # upload_url). cooldown_bucket — ЖЁСТКИЙ лимит НА ОПЕРАЦИЮ личного токена (ТЗ
+        # пользователя 2026-07-10: "даже если публикация будет идти через 10 минут,
+        # главное бана избежать") — ждём ОДИН раз перед началом загрузки медиа поста
+        # целиком, не между сырыми вызовами внутри неё (см. _build_attachments).
         # Групповой и личный токен пейсятся НЕЗАВИСИМО (разные ключи) — если это один
         # физический токен (upload_token не задан), ключи совпадают, что и нужно.
         self._bucket = token_bucket
+        self._cooldown = cooldown_bucket
         self._group_key = token_key(group_token)
         self._upload_key = token_key(upload_token) if upload_token else self._group_key
 
@@ -120,6 +128,15 @@ class VKPublisher:
     def _build_attachments(
         self, group_id: int, image_paths: list[Path], video_path: Path | None
     ) -> list[str]:
+        if not image_paths and video_path is None:
+            return []  # нет медиа — личный токен вообще не трогаем, ждать нечего
+
+        # ЖЁСТКИЙ кулдаун — ОДИН раз перед началом загрузки МЕДИА ЭТОГО ПОСТА целиком
+        # (не между getWallUploadServer/saveWallPhoto — там нужна скорость, иначе рвётся
+        # upload_url). Именно здесь личный токен впервые трогается для этого поста.
+        if self._cooldown is not None:
+            self._cooldown.wait(self._upload_key)
+
         # Видео есть — прикрепляем ТОЛЬКО его, фото игнорируем: так VK-пост
         # совпадает с TG-постом (TelegramPublisher при наличии видео шлёт только
         # видео). Один и тот же пост во всех соцсетях — явный запрос пользователя

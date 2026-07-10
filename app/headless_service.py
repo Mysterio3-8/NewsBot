@@ -52,6 +52,7 @@ def build_cycle_job(
     tg_fetcher: TelegramFetcher | None,
     vk_fetcher: VKFetcher | None,
     vk_token_bucket: TokenBucket | None = None,
+    vk_cooldown_bucket: TokenBucket | None = None,
 ):
     """Один автономный цикл: собрать свежие посты всех источников → опубликовать посты
     КАЖДОГО канала в его собственные таргеты (мультиканальность). Читалка (fetcher) общая
@@ -77,7 +78,7 @@ def build_cycle_job(
     def _vk_publisher_for(channel: Channel) -> VKPublisher | None:
         if channel.vk_token_env not in vk_pub_cache:
             vk_pub_cache[channel.vk_token_env] = build_vk_publisher_for_channel(
-                channel, token_bucket=vk_token_bucket
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
             )
         return vk_pub_cache[channel.vk_token_env]
 
@@ -263,12 +264,17 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     tg_fetcher = build_telegram_fetcher()
-    # Один лимитер на весь процесс: чтение источников (VKFetcher, VK_USER_TOKEN) и
-    # публикация медиа (VKPublisher, VK_PHOTO_UPLOAD_TOKEN — часто тот же личный
-    # аккаунт) держат общий темп ≤2 запр/сек НА ТОКЕН (правило VK) — минимизирует
-    # нагрузку личного токена, который постит именно group_token (см. CHECKLIST.md).
+    # Два лимитера на весь процесс, общие для чтения (VKFetcher, VK_USER_TOKEN) и
+    # публикации медиа (VKPublisher, VK_PHOTO_UPLOAD_TOKEN — часто тот же личный
+    # аккаунт): vk_token_bucket — технический burst-лимит ≤2 запр/сек (правило VK,
+    # нужен внутри одной загрузки). vk_cooldown_bucket — ЖЁСТКИЙ лимит НА ОПЕРАЦИЮ
+    # личного токена (явный запрос пользователя 2026-07-10: "даже если публикация
+    # будет идти через 10 минут, главное бана избежать") — config.antiban,
+    # 0 отключает. Групповой токен (публикация текста) этим не ограничен.
     vk_token_bucket = TokenBucket()
-    vk_fetcher = build_vk_fetcher(token_bucket=vk_token_bucket)
+    cooldown_seconds = config.antiban.vk_personal_token_cooldown_seconds
+    vk_cooldown_bucket = TokenBucket(1 / cooldown_seconds) if cooldown_seconds > 0 else None
+    vk_fetcher = build_vk_fetcher(token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket)
     _sync_default_channel_targets(repo, config)
 
     if tg_fetcher is None and vk_fetcher is None:
@@ -290,6 +296,7 @@ async def run_forever(
             tg_fetcher=tg_fetcher,
             vk_fetcher=vk_fetcher,
             vk_token_bucket=vk_token_bucket,
+            vk_cooldown_bucket=vk_cooldown_bucket,
         ),
         IntervalTrigger(minutes=config.monitoring.check_interval_minutes, jitter=jitter_seconds),
         # Без next_run_time IntervalTrigger ждёт первый полный интервал (до 4 часов)

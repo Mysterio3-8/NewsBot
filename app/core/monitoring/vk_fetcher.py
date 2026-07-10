@@ -62,18 +62,28 @@ def _classify_vk_post_type(item: dict[str, Any]) -> str:
 
 class VKFetcher:
     # Дефолты класса — тесты создают экземпляр через __new__ (минуя __init__) и не
-    # трогают лимитер; без этих дефолтов такой экземпляр падал бы AttributeError.
+    # трогают лимитеры; без этих дефолтов такой экземпляр падал бы AttributeError.
     _bucket: TokenBucket | None = None
     _bucket_key: str | None = None
+    _cooldown: TokenBucket | None = None
 
-    def __init__(self, user_token: str, *, token_bucket: TokenBucket | None = None) -> None:
-        """token_bucket — общий процесс-wide лимитер (ТЗ: не более 2 запр/сек на
-        токен). Личный VK-токен (VK_USER_TOKEN) используется ТОЛЬКО для чтения
-        источников — минимизируем и темп его вызовов через этот лимитер."""
+    def __init__(
+        self,
+        user_token: str,
+        *,
+        token_bucket: TokenBucket | None = None,
+        cooldown_bucket: TokenBucket | None = None,
+    ) -> None:
+        """token_bucket — технический burst-лимитер (не более 2 запр/сек на токен).
+        cooldown_bucket — ЖЁСТКИЙ лимит на ОПЕРАЦИИ личного токена (ТЗ пользователя
+        2026-07-10: "даже если публикация будет идти через 10 минут, главное бана
+        избежать") — личный VK-токен (VK_USER_TOKEN) используется ТОЛЬКО для чтения
+        источников, минимизируем темп его вызовов обоими лимитерами."""
         session = vk_api.VkApi(token=user_token)
         self._api = session.get_api()
         self._bucket = token_bucket
         self._bucket_key = token_key(user_token)
+        self._cooldown = cooldown_bucket
 
     def fetch_recent_posts(
         self,
@@ -92,6 +102,8 @@ class VKFetcher:
         known_ids = known_external_ids or set()
         posts: list[FetchedPost] = []
 
+        if self._cooldown is not None:
+            self._cooldown.wait(self._bucket_key)
         if self._bucket is not None:
             self._bucket.wait(self._bucket_key)
         response = self._api.wall.get(owner_id=-abs(group_id), count=count)

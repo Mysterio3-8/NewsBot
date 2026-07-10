@@ -290,6 +290,53 @@ def test_publish_without_token_bucket_skips_pacing():
     assert result.success is True
 
 
+def test_publish_with_photo_waits_cooldown_once_before_touching_personal_token():
+    """Жёсткий кулдаун (ТЗ 2026-07-10) срабатывает РОВНО ОДИН раз за пост — перед
+    началом загрузки медиа целиком, не между getWallUploadServer/saveWallPhoto/
+    wall.post (иначе рвётся upload_url и публикация растягивается на часы)."""
+    cooldown = MagicMock()
+    group_api = MagicMock()
+    upload_api = MagicMock()
+    upload_api.photos.getWallUploadServer.return_value = {"upload_url": "http://upload"}
+    upload_api.photos.saveWallPhoto.return_value = [{"owner_id": -123, "id": 999}]
+    upload_api.wall.post.return_value = {"post_id": 3}
+
+    with patch("app.core.publishing.vk_publisher.vk_api.VkApi") as mock_vk_api:
+        mock_vk_api.side_effect = [
+            MagicMock(get_api=MagicMock(return_value=group_api)),
+            MagicMock(get_api=MagicMock(return_value=upload_api)),
+        ]
+        publisher = VKPublisher(
+            "group-token", upload_token="user-token", cooldown_bucket=cooldown
+        )
+
+    upload_response = MagicMock()
+    upload_response.json.return_value = {"photo": "p", "server": 1, "hash": "h"}
+    upload_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
+        patch("builtins.open", mock_open(read_data=b"fake-image-bytes")),
+    ):
+        result = publisher.publish(group_id=123, text="новость", image_paths=["fake.jpg"])
+
+    assert result.success is True
+    cooldown.wait.assert_called_once_with(token_key("user-token"))
+
+
+def test_publish_text_only_never_touches_cooldown_bucket():
+    """Нет медиа — личный токен вообще не трогаем, кулдаун ждать нечего."""
+    cooldown = MagicMock()
+    with patch("app.core.publishing.vk_publisher.vk_api.VkApi") as mock_vk_api:
+        mock_vk_api.return_value.get_api.return_value = MagicMock()
+        publisher = VKPublisher("group-token", cooldown_bucket=cooldown)
+    publisher._api.wall.post.return_value = {"post_id": 1}
+
+    publisher.publish(group_id=123, text="новость")
+
+    cooldown.wait.assert_not_called()
+
+
 def test_publish_fails_fast_on_auth_blocked():
     publisher = make_publisher()
 

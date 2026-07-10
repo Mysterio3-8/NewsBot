@@ -160,6 +160,25 @@ def test_init_derives_bucket_key_from_user_token():
 
     assert fetcher._bucket_key == token_key("secret-token")
     assert fetcher._bucket is None
+    assert fetcher._cooldown is None
+
+
+def test_fetch_recent_posts_waits_cooldown_before_wall_get():
+    """Жёсткий кулдаун (ТЗ 2026-07-10): "даже если публикация будет идти через
+    10 минут, главное бана избежать" — чтение источников тоже под кулдауном."""
+    now = datetime.now(timezone.utc)
+    item = make_item(id=2, date=int(now.timestamp()))
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [item]}
+    cooldown = MagicMock()
+    fetcher._cooldown = cooldown
+    fetcher._bucket_key = "fake-key"
+
+    fetcher.fetch_recent_posts(123, max_age_hours=24)
+
+    cooldown.wait.assert_called_once_with("fake-key")
 
 
 def test_fetch_recent_posts_without_token_bucket_skips_pacing():

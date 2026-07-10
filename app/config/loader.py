@@ -182,6 +182,14 @@ class FooterConfig:
 
 
 @dataclass(frozen=True)
+class AntibanConfig:
+    # Минимум (секунд) между ОПЕРАЦИЯМИ личного VK-токена — см. комментарий в
+    # config.yaml. Дефолт совпадает с explicit-запросом пользователя (до 10 минут
+    # допустимой задержки публикации ради защиты личного аккаунта от бана).
+    vk_personal_token_cooldown_seconds: int = 600
+
+
+@dataclass(frozen=True)
 class AppConfig:
     app: AppSection
     llm: LLMConfig
@@ -195,6 +203,7 @@ class AppConfig:
     publishing: PublishingConfig
     logging: LoggingConfig
     footer: FooterConfig
+    antiban: AntibanConfig
 
 
 class ConfigValidationError(ValueError):
@@ -276,6 +285,11 @@ def _build_headline_card_config(raw: dict) -> HeadlineCardConfig:
     return HeadlineCardConfig(**headline_card_raw) if headline_card_raw else HeadlineCardConfig()
 
 
+def _build_antiban_config(raw: dict) -> AntibanConfig:
+    antiban_raw = raw.get("antiban")
+    return AntibanConfig(**antiban_raw) if antiban_raw else AntibanConfig()
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or CONFIG_PATH
     if not config_path.exists():
@@ -314,4 +328,5 @@ def load_config(path: Path | None = None) -> AppConfig:
         publishing=publishing,
         logging=LoggingConfig(**raw["logging"]),
         footer=FooterConfig(**raw["footer"]),
+        antiban=_build_antiban_config(raw),
     )

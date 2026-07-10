@@ -59,12 +59,20 @@ class FakeMonitoringConfig:
     check_interval_minutes = 240
 
 
+class FakeAntibanConfig:
+    # 0 = отключить жёсткий кулдаун в тестах (иначе TokenBucket(1/600) реально ждал бы
+    # минуты между вызовами — asyncio.sleep пропатчен, но TokenBucket использует
+    # time.sleep напрямую, не await).
+    vk_personal_token_cooldown_seconds = 0
+
+
 class FakeAppConfig:
     publishing = FakePublishingConfig()
     footer = FakeFooterConfig()
     filters = FakeFiltersConfig()
     rewrite = FakeRewriteConfig()
     monitoring = FakeMonitoringConfig()
+    antiban = FakeAntibanConfig()
 
 
 def _patch_env(monkeypatch):
