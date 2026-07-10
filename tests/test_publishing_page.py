@@ -67,7 +67,7 @@ def test_publish_passes_footer_links_through(qapp, tmp_path):
 
     publisher = AsyncMock(spec=TelegramPublisher)
     publisher.publish.return_value = PublishResult(success=True, message_id=1, error=None)
-    footer_links = FooterLinks(label="Подписывайтесь на нас", telegram_url="https://t.me/x")
+    footer_links = FooterLinks(telegram_url="https://t.me/x")
 
     page = PublishingPage()
     page.bind(repo, publisher, "@channel", footer_links)
@@ -76,4 +76,4 @@ def test_publish_passes_footer_links_through(qapp, tmp_path):
     with patch("app.ui.pages.publishing_page.QMessageBox.information"):
         page._on_publish()
 
-    assert "Подписывайтесь на нас" in publisher.publish.call_args.kwargs["text"]
+    assert "Новости в трёх словах" in publisher.publish.call_args.kwargs["text"]

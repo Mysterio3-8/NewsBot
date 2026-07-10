@@ -61,7 +61,7 @@ async def test_publish_queued_post_escapes_html_and_appends_footer(tmp_path):
 
     publisher = AsyncMock(spec=TelegramPublisher)
     publisher.publish.return_value = PublishResult(success=True, message_id=1, error=None)
-    footer_links = FooterLinks(label="Подписывайтесь на нас", telegram_url="https://t.me/x")
+    footer_links = FooterLinks(telegram_url="https://t.me/x")
 
     await publish_queued_post(
         repo, publisher, post_id=processed.id, chat_id="@channel", footer_links=footer_links
@@ -70,7 +70,7 @@ async def test_publish_queued_post_escapes_html_and_appends_footer(tmp_path):
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
         "Рост &amp; падение\n\n"
-        'Подписывайтесь на нас: <a href="https://t.me/x">Telegram</a>'
+        '<a href="https://t.me/x">Новости в трёх словах</a>'
     )
 
 
@@ -89,7 +89,7 @@ async def test_publish_queued_post_moves_hashtags_after_footer(tmp_path):
 
     publisher = AsyncMock(spec=TelegramPublisher)
     publisher.publish.return_value = PublishResult(success=True, message_id=1, error=None)
-    footer_links = FooterLinks(label="Подписывайтесь на нас", telegram_url="https://t.me/x")
+    footer_links = FooterLinks(telegram_url="https://t.me/x")
 
     await publish_queued_post(
         repo,
@@ -103,7 +103,7 @@ async def test_publish_queued_post_moves_hashtags_after_footer(tmp_path):
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
         "Текст новости.\n\n"
-        'Подписывайтесь на нас: <a href="https://t.me/x">Telegram</a>\n\n'
+        '<a href="https://t.me/x">Новости в трёх словах</a>\n\n'
         "#технологии #apple"
     )
 

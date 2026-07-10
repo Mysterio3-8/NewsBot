@@ -57,7 +57,7 @@ def test_publish_queued_post_vk_uses_bracket_link_footer_and_moves_hashtags(tmp_
 
     publisher = Mock(spec=VKPublisher)
     publisher.publish.return_value = VKPublishResult(success=True, post_id=1, error=None)
-    footer_links = FooterLinks(label="Подписывайтесь на нас", telegram_url="https://t.me/x")
+    footer_links = FooterLinks(telegram_url="https://t.me/x")
 
     publish_queued_post_vk(
         repo,
@@ -71,7 +71,7 @@ def test_publish_queued_post_vk_uses_bracket_link_footer_and_moves_hashtags(tmp_
     _, kwargs = publisher.publish.call_args
     assert kwargs["text"] == (
         "Текст новости.\n\n"
-        "Подписывайтесь на нас: [https://t.me/x|Telegram]\n\n"
+        "Подписывайтесь на Telegram-канал:\nhttps://t.me/x\n\n"
         "#технологии #apple"
     )
 

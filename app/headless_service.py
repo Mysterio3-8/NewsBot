@@ -161,8 +161,10 @@ async def _publish_channel_post(
         else schedule.min_interval_minutes
     )
     # Свой футер канала (ссылка в конце, напр. на TG-канал кино) переопределяет глобальный.
+    # telegram_signature — брендовая подпись для TG-рендера; VK/IG получат призыв
+    # подписаться + этот же tg_footer_url (см. footer.build_vk_footer).
     channel_footer = (
-        FooterLinks(label="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
+        FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
         if settings.tg_footer_url
         else footer_links
     )

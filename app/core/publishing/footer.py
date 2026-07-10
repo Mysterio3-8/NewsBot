@@ -1,60 +1,45 @@
-"""Подпись-футер со ссылками на TG/VK в конце опубликованного поста."""
+"""Подпись-футер в конце опубликованного поста — разная по сетям (ТЗ 2026-07-10):
+
+- Telegram: фирменная подпись именованной гиперссылкой на свой TG-канал.
+- VK / Instagram: призыв подписаться на Telegram + голый URL канала.
+
+Голый URL для VK — намеренно: обычная ссылка в тексте VK кликабельна автоматически,
+а скобочная wiki-разметка [url|текст] внешние домены (t.me) не разлинковывает — из-за
+этого футеры на проде ранее отключили (2026-07-04). Голый URL эту проблему снимает.
+"""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from app.config.loader import FooterConfig
 
-_VK_GROUP_ID_PATTERN = re.compile(r"vk\.com/(club|public)(\d+)")
-
 
 @dataclass(frozen=True)
 class FooterLinks:
-    label: str
     telegram_url: str | None = None
-    vk_url: str | None = None
+    telegram_signature: str = "Новости в трёх словах"
+    subscribe_cta: str = "Подписывайтесь на Telegram-канал:"
 
 
 def build_footer_links_from_config(footer_config: FooterConfig) -> FooterLinks | None:
     if not footer_config.enabled:
         return None
     return FooterLinks(
-        label=footer_config.label,
         telegram_url=footer_config.telegram_url or None,
-        vk_url=footer_config.vk_url or None,
+        telegram_signature=footer_config.telegram_signature,
+        subscribe_cta=footer_config.subscribe_cta,
     )
 
 
 def build_html_footer(links: FooterLinks) -> str:
-    """Для Telegram — именованные гиперссылки (HTML parse_mode)."""
-    parts = []
-    if links.telegram_url:
-        parts.append(f'<a href="{links.telegram_url}">Telegram</a>')
-    if links.vk_url:
-        parts.append(f'<a href="{links.vk_url}">VK</a>')
-    if not parts:
+    """Telegram — фирменная подпись гиперссылкой на канал (HTML parse_mode)."""
+    if not links.telegram_url:
         return ""
-    return f"{links.label}: " + " | ".join(parts)
+    return f'<a href="{links.telegram_url}">{links.telegram_signature}</a>'
 
 
 def build_vk_footer(links: FooterLinks) -> str:
-    """Для VK — именованные ссылки через wiki-разметку [ссылка|Текст].
-    Ссылка на саму VK-группу — через внутренний формат [club<id>|Текст]: обычный
-    полный URL на СВОЮ же группу VK не всегда разлинковывает надёжно, внутренняя
-    ссылка на club/public ID — штатный VK-способ сослаться на сообщество."""
-    parts = []
-    if links.telegram_url:
-        parts.append(f"[{links.telegram_url}|Telegram]")
-    if links.vk_url:
-        parts.append(f"[{_vk_reference(links.vk_url)}|VK]")
-    if not parts:
+    """VK / Instagram — призыв подписаться на Telegram + голый (кликабельный) URL."""
+    if not links.telegram_url:
         return ""
-    return f"{links.label}: " + " ".join(parts)
-
-
-def _vk_reference(vk_url: str) -> str:
-    match = _VK_GROUP_ID_PATTERN.search(vk_url)
-    if match:
-        return f"{match.group(1)}{match.group(2)}"
-    return vk_url
+    return f"{links.subscribe_cta}\n{links.telegram_url}"

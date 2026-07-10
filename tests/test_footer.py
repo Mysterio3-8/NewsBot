@@ -7,60 +7,62 @@ from app.core.publishing.footer import (
 )
 
 
-def test_build_html_footer_with_both_links():
+def test_build_html_footer_is_branded_hyperlink_to_telegram():
+    """TG (ТЗ 2026-07-10): фирменная подпись именованной гиперссылкой на канал."""
     links = FooterLinks(
-        label="Подписывайтесь на нас",
         telegram_url="https://t.me/NewsThreeWord",
-        vk_url="https://vk.com/club123456",
+        telegram_signature="🔢 Новости в трёх словах",
     )
-    result = build_html_footer(links)
-    assert result == (
-        "Подписывайтесь на нас: "
-        '<a href="https://t.me/NewsThreeWord">Telegram</a> | '
-        '<a href="https://vk.com/club123456">VK</a>'
+    assert build_html_footer(links) == (
+        '<a href="https://t.me/NewsThreeWord">🔢 Новости в трёх словах</a>'
     )
 
 
-def test_build_html_footer_with_only_telegram():
-    links = FooterLinks(label="Подписывайтесь на нас", telegram_url="https://t.me/x")
-    assert build_html_footer(links) == 'Подписывайтесь на нас: <a href="https://t.me/x">Telegram</a>'
+def test_build_html_footer_empty_when_no_telegram_url():
+    assert build_html_footer(FooterLinks(telegram_url=None)) == ""
 
 
-def test_build_html_footer_empty_when_no_links():
-    assert build_html_footer(FooterLinks(label="x")) == ""
-
-
-def test_build_vk_footer_uses_internal_club_reference_for_vk_link():
-    """Регрессия: полный URL на СВОЮ же VK-группу в скобках не разлинковывался
-    надёжно на реальной публикации — нужен внутренний формат [club<id>|Текст]."""
+def test_build_vk_footer_is_subscribe_cta_plus_plain_url():
+    """VK/Instagram (ТЗ 2026-07-10): призыв подписаться + голый URL. Голый URL —
+    намеренно: в VK он кликабелен автоматически, скобки внешние домены не линкуют."""
     links = FooterLinks(
-        label="Подписывайтесь на нас",
         telegram_url="https://t.me/NewsThreeWord",
-        vk_url="https://vk.com/club123456",
+        subscribe_cta="Подписывайтесь на Telegram-канал:",
     )
-    result = build_vk_footer(links)
-    assert result == (
-        "Подписывайтесь на нас: "
-        "[https://t.me/NewsThreeWord|Telegram] [club123456|VK]"
+    assert build_vk_footer(links) == (
+        "Подписывайтесь на Telegram-канал:\nhttps://t.me/NewsThreeWord"
     )
 
 
-def test_build_vk_footer_falls_back_to_raw_url_when_not_club_or_public():
-    links = FooterLinks(label="Подписывайтесь на нас", vk_url="https://vk.com/somevanityname")
-    result = build_vk_footer(links)
-    assert result == "Подписывайтесь на нас: [https://vk.com/somevanityname|VK]"
-
-
-def test_build_vk_footer_empty_when_no_links():
-    assert build_vk_footer(FooterLinks(label="x")) == ""
+def test_build_vk_footer_empty_when_no_telegram_url():
+    assert build_vk_footer(FooterLinks(telegram_url=None)) == ""
 
 
 def test_build_footer_links_from_config_returns_none_when_disabled():
-    config = FooterConfig(enabled=False, label="x", telegram_url="https://t.me/x", vk_url="")
+    config = FooterConfig(
+        enabled=False, label="x", telegram_url="https://t.me/x", vk_url=""
+    )
     assert build_footer_links_from_config(config) is None
 
 
-def test_build_footer_links_from_config_maps_fields_and_empty_vk_to_none():
-    config = FooterConfig(enabled=True, label="Подписывайтесь", telegram_url="https://t.me/x", vk_url="")
-    links = build_footer_links_from_config(config)
-    assert links == FooterLinks(label="Подписывайтесь", telegram_url="https://t.me/x", vk_url=None)
+def test_build_footer_links_from_config_maps_signature_and_cta():
+    config = FooterConfig(
+        enabled=True,
+        label="устар.",
+        telegram_url="https://t.me/x",
+        vk_url="",
+        telegram_signature="🔢 Бренд",
+        subscribe_cta="Подпишись:",
+    )
+    assert build_footer_links_from_config(config) == FooterLinks(
+        telegram_url="https://t.me/x",
+        telegram_signature="🔢 Бренд",
+        subscribe_cta="Подпишись:",
+    )
+
+
+def test_footer_config_defaults_allow_missing_yaml_keys():
+    """Старый config.yaml без новых ключей грузится на дефолтах, не падает."""
+    config = FooterConfig(enabled=True, label="x", telegram_url="https://t.me/x", vk_url="")
+    assert config.telegram_signature == "Новости в трёх словах"
+    assert config.subscribe_cta == "Подписывайтесь на Telegram-канал:"

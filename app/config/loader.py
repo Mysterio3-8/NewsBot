@@ -175,6 +175,10 @@ class FooterConfig:
     label: str
     telegram_url: str
     vk_url: str
+    # Подписи по сетям (ТЗ 2026-07-10). Дефолты — чтобы старый config.yaml без этих
+    # ключей грузился без ошибок (FooterConfig(**raw["footer"]) не передаст отсутствующие).
+    telegram_signature: str = "Новости в трёх словах"
+    subscribe_cta: str = "Подписывайтесь на Telegram-канал:"
 
 
 @dataclass(frozen=True)
