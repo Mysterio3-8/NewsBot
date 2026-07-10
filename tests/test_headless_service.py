@@ -98,7 +98,9 @@ def _mock_publishers(monkeypatch, module, *, tg=None, vk=None):
     if tg is not None:
         monkeypatch.setattr(module, "build_telegram_publisher_for_channel", lambda ch: tg)
     if vk is not None:
-        monkeypatch.setattr(module, "build_vk_publisher_for_channel", lambda ch: vk)
+        monkeypatch.setattr(
+            module, "build_vk_publisher_for_channel", lambda ch, **kwargs: vk
+        )
 
 
 @pytest.mark.asyncio
@@ -303,7 +305,7 @@ async def test_run_forever_schedules_immediate_first_cycle(tmp_path, monkeypatch
 
     monkeypatch.setattr(headless_module, "AsyncIOScheduler", FakeScheduler)
     monkeypatch.setattr(headless_module, "build_telegram_fetcher", lambda: None)
-    monkeypatch.setattr(headless_module, "build_vk_fetcher", lambda: None)
+    monkeypatch.setattr(headless_module, "build_vk_fetcher", lambda **kwargs: None)
 
     repo = make_repo(tmp_path)
     config = FakeAppConfig()

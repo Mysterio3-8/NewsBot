@@ -9,6 +9,7 @@ from pathlib import Path
 import requests
 import vk_api
 
+from app.core.publishing.token_bucket import TokenBucket, token_key
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_error
 
 logger = logging.getLogger("publishing")
@@ -29,7 +30,19 @@ class VKPublishResult:
 
 
 class VKPublisher:
-    def __init__(self, group_token: str, *, upload_token: str | None = None) -> None:
+    # Дефолты класса — часть тестов создаёт экземпляр через __new__ (минуя __init__)
+    # и не трогает лимитер; без этих дефолтов такой экземпляр падал бы AttributeError.
+    _bucket: TokenBucket | None = None
+    _group_key: str | None = None
+    _upload_key: str | None = None
+
+    def __init__(
+        self,
+        group_token: str,
+        *,
+        upload_token: str | None = None,
+        token_bucket: TokenBucket | None = None,
+    ) -> None:
         self._api = vk_api.VkApi(token=group_token).get_api()
         # photos.*/video.save требуют user-контекст (group-токен получает ошибку 27 —
         # см. известные грабли в CLAUDE.md) — если задан отдельный upload_token (личный
@@ -39,6 +52,12 @@ class VKPublisher:
         self._upload_api = (
             vk_api.VkApi(token=upload_token).get_api() if upload_token else self._api
         )
+        # token_bucket — общий процесс-wide лимитер (ТЗ: не более 2 запр/сек на токен).
+        # Групповой и личный токен пейсятся НЕЗАВИСИМО (разные ключи) — если это один
+        # физический токен (upload_token не задан), ключи совпадают, что и нужно.
+        self._bucket = token_bucket
+        self._group_key = token_key(group_token)
+        self._upload_key = token_key(upload_token) if upload_token else self._group_key
 
     def publish(
         self,
@@ -63,11 +82,14 @@ class VKPublisher:
         # всё равно публикует от имени группы. Без вложений — как раньше, group_token
         # (минимизирует, что личный аккаунт делает в автоматическом режиме).
         poster_api = self._upload_api if attachments else self._api
+        poster_key = self._upload_key if attachments else self._group_key
         last_error: Exception | None = None
 
         for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
             if delay:
                 time.sleep(delay)
+            if self._bucket is not None:
+                self._bucket.wait(poster_key)
             try:
                 response = poster_api.wall.post(
                     owner_id=-abs(group_id),
@@ -118,11 +140,19 @@ class VKPublisher:
                 logger.warning("VK: не удалось загрузить фото %s, публикую без него: %s", path, error)
         return attachments
 
+    def _wait_upload(self) -> None:
+        if self._bucket is not None:
+            self._bucket.wait(self._upload_key)
+
     def _upload_photo(self, group_id: int, image_path: Path) -> str:
+        # Личный upload-токен грузит фото — двумя отдельными VK API-вызовами, каждый
+        # пейсится независимо (лимит VK — на запрос, не на операцию).
+        self._wait_upload()
         upload_server = self._upload_api.photos.getWallUploadServer(group_id=abs(group_id))
         with open(image_path, "rb") as file:
             upload_result = self._upload_to_server(upload_server["upload_url"], file)
 
+        self._wait_upload()
         saved = self._upload_api.photos.saveWallPhoto(
             group_id=abs(group_id),
             photo=upload_result["photo"],
@@ -145,6 +175,7 @@ class VKPublisher:
         # которую VK не может распарсить как флаг и отвечает generic [10] Internal
         # server error (подтверждено вживую 2026-07-04) — выглядело как архитектурный
         # запрет видео через групповой upload-токен, а на деле баг сериализации параметра.
+        self._wait_upload()
         save_result = self._upload_api.video.save(
             name=video_path.stem, group_id=abs(group_id), wallpost=0
         )

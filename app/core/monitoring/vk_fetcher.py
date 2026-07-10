@@ -10,6 +10,7 @@ import requests
 import vk_api
 
 from app.core.monitoring.models import FetchedPost
+from app.core.publishing.token_bucket import TokenBucket, token_key
 from app.paths import OUTPUT_DIR
 
 logger = logging.getLogger("monitoring")
@@ -60,9 +61,19 @@ def _classify_vk_post_type(item: dict[str, Any]) -> str:
 
 
 class VKFetcher:
-    def __init__(self, user_token: str) -> None:
+    # Дефолты класса — тесты создают экземпляр через __new__ (минуя __init__) и не
+    # трогают лимитер; без этих дефолтов такой экземпляр падал бы AttributeError.
+    _bucket: TokenBucket | None = None
+    _bucket_key: str | None = None
+
+    def __init__(self, user_token: str, *, token_bucket: TokenBucket | None = None) -> None:
+        """token_bucket — общий процесс-wide лимитер (ТЗ: не более 2 запр/сек на
+        токен). Личный VK-токен (VK_USER_TOKEN) используется ТОЛЬКО для чтения
+        источников — минимизируем и темп его вызовов через этот лимитер."""
         session = vk_api.VkApi(token=user_token)
         self._api = session.get_api()
+        self._bucket = token_bucket
+        self._bucket_key = token_key(user_token)
 
     def fetch_recent_posts(
         self,
@@ -81,6 +92,8 @@ class VKFetcher:
         known_ids = known_external_ids or set()
         posts: list[FetchedPost] = []
 
+        if self._bucket is not None:
+            self._bucket.wait(self._bucket_key)
         response = self._api.wall.get(owner_id=-abs(group_id), count=count)
         for item in response["items"]:
             post = vk_post_to_fetched_post(item)

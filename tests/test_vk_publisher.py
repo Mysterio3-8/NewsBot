@@ -1,6 +1,7 @@
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
+from app.core.publishing.token_bucket import token_key
 from app.core.publishing.vk_publisher import VKPublisher
 
 
@@ -226,6 +227,67 @@ def test_publish_fails_fast_on_rate_limit_without_retrying():
     assert result.success is False
     assert result.error_code == 6
     assert publisher._api.wall.post.call_count == 1  # без ретраев
+
+
+def test_publish_text_only_paces_wall_post_with_group_key():
+    """ТЗ: не более 2 запр/сек на токен — text-only пост пейсится ключом группового
+    токена (личный токен вообще не тронут, когда вложений нет)."""
+    bucket = MagicMock()
+    with patch("app.core.publishing.vk_publisher.vk_api.VkApi") as mock_vk_api:
+        mock_vk_api.return_value.get_api.return_value = MagicMock()
+        publisher = VKPublisher("group-token", token_bucket=bucket)
+    publisher._api.wall.post.return_value = {"post_id": 1}
+
+    publisher.publish(group_id=123, text="новость")
+
+    bucket.wait.assert_called_once_with(token_key("group-token"))
+
+
+def test_publish_with_photo_paces_every_upload_call_with_upload_key():
+    """Личный upload-токен грузит фото ДВУМЯ VK API-вызовами (getWallUploadServer +
+    saveWallPhoto), плюс финальный wall.post уходит тем же токеном (см. регрессию
+    2026-07-05 про owner_id) — все три пейсятся ключом ЛИЧНОГО токена, не группового."""
+    bucket = MagicMock()
+    group_api = MagicMock()
+    upload_api = MagicMock()
+    upload_api.photos.getWallUploadServer.return_value = {"upload_url": "http://upload"}
+    upload_api.photos.saveWallPhoto.return_value = [{"owner_id": -123, "id": 999}]
+    upload_api.wall.post.return_value = {"post_id": 2}
+
+    with patch("app.core.publishing.vk_publisher.vk_api.VkApi") as mock_vk_api:
+        mock_vk_api.side_effect = [
+            MagicMock(get_api=MagicMock(return_value=group_api)),
+            MagicMock(get_api=MagicMock(return_value=upload_api)),
+        ]
+        publisher = VKPublisher("group-token", upload_token="user-token", token_bucket=bucket)
+
+    upload_response = MagicMock()
+    upload_response.json.return_value = {"photo": "p", "server": 1, "hash": "h"}
+    upload_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
+        patch("builtins.open", mock_open(read_data=b"fake-image-bytes")),
+    ):
+        result = publisher.publish(group_id=123, text="новость", image_paths=["fake.jpg"])
+
+    assert result.success is True
+    expected_key = token_key("user-token")
+    assert bucket.wait.call_args_list == [call(expected_key)] * 3
+    group_api.wall.post.assert_not_called()
+
+
+def test_publish_without_token_bucket_skips_pacing():
+    """token_bucket не передан (напр. ручные пути UI/testpost) — публикация работает
+    как раньше, без задержек."""
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = publisher._api
+    publisher._api.wall.post.return_value = {"post_id": 1}
+
+    result = publisher.publish(group_id=123, text="новость")
+
+    assert result.success is True
 
 
 def test_publish_fails_fast_on_auth_blocked():

@@ -13,6 +13,7 @@ from app.core.images.providers.unsplash_provider import UnsplashProvider
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.telegram_publisher import TelegramPublisher
+from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_publisher import VKPublisher
 
 
@@ -23,7 +24,9 @@ def build_telegram_publisher(config: AppConfig) -> TelegramPublisher | None:
     return TelegramPublisher(bot_token)
 
 
-def build_vk_publisher(config: AppConfig) -> VKPublisher | None:
+def build_vk_publisher(
+    config: AppConfig, *, token_bucket: TokenBucket | None = None
+) -> VKPublisher | None:
     group_token = os.environ.get(config.publishing.vk.token_env)
     if not group_token:
         return None
@@ -31,7 +34,7 @@ def build_vk_publisher(config: AppConfig) -> VKPublisher | None:
     # group-токен не может (VK error 27, см. CLAUDE.md). wall.post всегда идёт через
     # group_token. Не задан — best-effort продолжает публиковать текстом без вложения.
     upload_token = os.environ.get("VK_PHOTO_UPLOAD_TOKEN")
-    return VKPublisher(group_token, upload_token=upload_token)
+    return VKPublisher(group_token, upload_token=upload_token, token_bucket=token_bucket)
 
 
 def build_telegram_publisher_for_channel(channel: Channel) -> TelegramPublisher | None:
@@ -44,14 +47,16 @@ def build_telegram_publisher_for_channel(channel: Channel) -> TelegramPublisher 
     return TelegramPublisher(bot_token)
 
 
-def build_vk_publisher_for_channel(channel: Channel) -> VKPublisher | None:
+def build_vk_publisher_for_channel(
+    channel: Channel, *, token_bucket: TokenBucket | None = None
+) -> VKPublisher | None:
     """Publisher канала: групповой токен из channel.vk_token_env + опц. личный upload-
     токен из channel.vk_upload_token_env (group-токен не грузит медиа, VK error 27)."""
     group_token = os.environ.get(channel.vk_token_env)
     if not group_token:
         return None
     upload_token = os.environ.get(channel.vk_upload_token_env)
-    return VKPublisher(group_token, upload_token=upload_token)
+    return VKPublisher(group_token, upload_token=upload_token, token_bucket=token_bucket)
 
 
 def build_telegram_fetcher() -> TelegramFetcher | None:
@@ -63,11 +68,11 @@ def build_telegram_fetcher() -> TelegramFetcher | None:
     return TelegramFetcher(api_id=int(api_id), api_hash=api_hash, session_name=session_name)
 
 
-def build_vk_fetcher() -> VKFetcher | None:
+def build_vk_fetcher(*, token_bucket: TokenBucket | None = None) -> VKFetcher | None:
     user_token = os.environ.get("VK_USER_TOKEN")
     if not user_token:
         return None
-    return VKFetcher(user_token)
+    return VKFetcher(user_token, token_bucket=token_bucket)
 
 
 def build_image_providers() -> dict[str, ImageProvider]:

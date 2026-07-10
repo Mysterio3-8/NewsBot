@@ -7,7 +7,14 @@ VK: не более 2 запросов/сек на один токен (поль
 """
 from __future__ import annotations
 
+import hashlib
 import time
+
+
+def token_key(secret: str) -> str:
+    """Стабильный нечувствительный к содержимому ключ для TokenBucket — сам токен
+    не должен оседать как строка-ключ в долгоживущей структуре процесса."""
+    return hashlib.sha256(secret.encode()).hexdigest()[:16]
 
 
 class TokenBucket:

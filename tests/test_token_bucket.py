@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.publishing.token_bucket import TokenBucket
+from app.core.publishing.token_bucket import TokenBucket, token_key
 
 
 class _FakeClock:
@@ -51,3 +51,16 @@ def test_different_tokens_independent():
 def test_rejects_non_positive_rate():
     with pytest.raises(ValueError):
         TokenBucket(0)
+
+
+def test_token_key_is_deterministic_for_same_secret():
+    assert token_key("vk1.a.secret") == token_key("vk1.a.secret")
+
+
+def test_token_key_differs_for_different_secrets():
+    assert token_key("vk1.a.secret-one") != token_key("vk1.a.secret-two")
+
+
+def test_token_key_does_not_contain_raw_secret():
+    key = token_key("vk1.a.super-secret-token")
+    assert "super-secret-token" not in key

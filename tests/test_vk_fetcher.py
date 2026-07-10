@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import app.core.monitoring.vk_fetcher as vk_fetcher_module
+from app.core.publishing.token_bucket import token_key
 from app.core.monitoring.vk_fetcher import VKFetcher, vk_post_to_fetched_post
 
 
@@ -132,6 +133,46 @@ def test_fetch_recent_posts_downloads_photos_to_local_paths(tmp_path, monkeypatc
     [local_path] = posts[0].media_urls
     assert local_path == str(tmp_path / "5_0.jpg")
     assert (tmp_path / "5_0.jpg").read_bytes() == b"fake-jpeg-bytes"
+
+
+def test_fetch_recent_posts_paces_wall_get_with_token_bucket():
+    """ТЗ: минимизировать/лимитировать личный VK-токен (VK_USER_TOKEN, чтение
+    источников) — не более 2 запр/сек на токен."""
+    now = datetime.now(timezone.utc)
+    item = make_item(id=2, date=int(now.timestamp()))
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [item]}
+    bucket = MagicMock()
+    fetcher._bucket = bucket
+    fetcher._bucket_key = "fake-key"
+
+    fetcher.fetch_recent_posts(123, max_age_hours=24)
+
+    bucket.wait.assert_called_once_with("fake-key")
+
+
+def test_init_derives_bucket_key_from_user_token():
+    with patch("app.core.monitoring.vk_fetcher.vk_api.VkApi") as mock_vk_api:
+        mock_vk_api.return_value.get_api.return_value = MagicMock()
+        fetcher = VKFetcher("secret-token")
+
+    assert fetcher._bucket_key == token_key("secret-token")
+    assert fetcher._bucket is None
+
+
+def test_fetch_recent_posts_without_token_bucket_skips_pacing():
+    now = datetime.now(timezone.utc)
+    item = make_item(id=2, date=int(now.timestamp()))
+
+    fetcher = VKFetcher.__new__(VKFetcher)
+    fetcher._api = MagicMock()
+    fetcher._api.wall.get.return_value = {"items": [item]}
+
+    posts = fetcher.fetch_recent_posts(123, max_age_hours=24)
+
+    assert [p.external_id for p in posts] == ["2"]
 
 
 def test_fetch_recent_posts_skips_photo_that_fails_to_download(tmp_path, monkeypatch):

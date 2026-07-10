@@ -26,6 +26,7 @@ from app.core.publishing.circuit_breaker import CircuitBreaker
 from app.core.publishing.footer import FooterLinks, build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
+from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
@@ -50,6 +51,7 @@ def build_cycle_job(
     *,
     tg_fetcher: TelegramFetcher | None,
     vk_fetcher: VKFetcher | None,
+    vk_token_bucket: TokenBucket | None = None,
 ):
     """Один автономный цикл: собрать свежие посты всех источников → опубликовать посты
     КАЖДОГО канала в его собственные таргеты (мультиканальность). Читалка (fetcher) общая
@@ -74,7 +76,9 @@ def build_cycle_job(
 
     def _vk_publisher_for(channel: Channel) -> VKPublisher | None:
         if channel.vk_token_env not in vk_pub_cache:
-            vk_pub_cache[channel.vk_token_env] = build_vk_publisher_for_channel(channel)
+            vk_pub_cache[channel.vk_token_env] = build_vk_publisher_for_channel(
+                channel, token_bucket=vk_token_bucket
+            )
         return vk_pub_cache[channel.vk_token_env]
 
     async def cycle_job() -> None:
@@ -259,7 +263,12 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     tg_fetcher = build_telegram_fetcher()
-    vk_fetcher = build_vk_fetcher()
+    # Один лимитер на весь процесс: чтение источников (VKFetcher, VK_USER_TOKEN) и
+    # публикация медиа (VKPublisher, VK_PHOTO_UPLOAD_TOKEN — часто тот же личный
+    # аккаунт) держат общий темп ≤2 запр/сек НА ТОКЕН (правило VK) — минимизирует
+    # нагрузку личного токена, который постит именно group_token (см. CHECKLIST.md).
+    vk_token_bucket = TokenBucket()
+    vk_fetcher = build_vk_fetcher(token_bucket=vk_token_bucket)
     _sync_default_channel_targets(repo, config)
 
     if tg_fetcher is None and vk_fetcher is None:
@@ -280,6 +289,7 @@ async def run_forever(
             llm_client,
             tg_fetcher=tg_fetcher,
             vk_fetcher=vk_fetcher,
+            vk_token_bucket=vk_token_bucket,
         ),
         IntervalTrigger(minutes=config.monitoring.check_interval_minutes, jitter=jitter_seconds),
         # Без next_run_time IntervalTrigger ждёт первый полный интервал (до 4 часов)
