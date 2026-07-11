@@ -20,10 +20,11 @@ def test_load_config_reads_headline_card_section():
 
 
 def test_load_config_reads_images_keep_original():
-    """Лёгкий режим 2026-07-07: медиа поста публикуются оригиналами как есть."""
+    """2026-07-11: вотермарк снова включён (было true — "лёгкий режим" 2026-07-07,
+    отменено по жалобе пользователя на фото без лого)."""
     config = load_config()
 
-    assert config.images.keep_original is True
+    assert config.images.keep_original is False
 
 
 def test_load_config_reads_antiban_section():
