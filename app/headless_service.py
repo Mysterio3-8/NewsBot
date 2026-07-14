@@ -257,9 +257,10 @@ def _sync_default_channel_targets(repo: Repository, config: AppConfig) -> None:
     )
 
 
-def build_weekly_repost_job(repo: Repository, config: AppConfig):
+def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKFetcher | None):
     """Раз в неделю: для каждого канала с weekly_repost — перезалить лучший пост за
-    7 дней (по просмотрам+лайкам VK). Запрос пользователя 2026-07-14 (Кино)."""
+    7 дней (по просмотрам+лайкам VK). Запрос пользователя 2026-07-14 (Кино). Вовлечённость
+    читается личным токеном (vk_fetcher) — групповым wall.getById недоступен (VK [27])."""
     footer_links = build_footer_links_from_config(config.footer)
 
     async def weekly_job() -> None:
@@ -278,6 +279,7 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig):
                     channel,
                     tg_publisher=build_telegram_publisher_for_channel(channel),
                     vk_publisher=build_vk_publisher_for_channel(channel),
+                    vk_fetcher=vk_fetcher,
                     footer_links=channel_footer,
                 )
             except Exception:
@@ -339,7 +341,7 @@ async def run_forever(
     # Еженедельный репост лучшего поста (каналы с weekly_repost, напр. Кино). Первый
     # запуск — через неделю (не сразу, чтобы накопилась статистика вовлечённости).
     scheduler.add_job(
-        build_weekly_repost_job(repo, config),
+        build_weekly_repost_job(repo, config, vk_fetcher),
         IntervalTrigger(weeks=1),
     )
 

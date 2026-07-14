@@ -85,6 +85,26 @@ class VKFetcher:
         self._bucket_key = token_key(user_token)
         self._cooldown = cooldown_bucket
 
+    def fetch_engagement(self, group_id: int, vk_post_ids: list[int]) -> dict[int, int]:
+        """Просмотры+лайки постов группы (для еженедельного репоста лучшего). Личный
+        VK_USER_TOKEN — wall.getById групповым токеном недоступен (VK [27]). Возвращает
+        {vk_post_id: просмотры + лайки}; недоступные посты пропускаются."""
+        if not vk_post_ids:
+            return {}
+        owner = -abs(group_id)
+        refs = ",".join(f"{owner}_{pid}" for pid in vk_post_ids)
+        try:
+            items = self._api.wall.getById(posts=refs)
+        except Exception as error:
+            logger.warning("VK wall.getById не удался: %s", error)
+            return {}
+        scores: dict[int, int] = {}
+        for item in items or []:
+            views = (item.get("views") or {}).get("count", 0)
+            likes = (item.get("likes") or {}).get("count", 0)
+            scores[item["id"]] = int(views) + int(likes)
+        return scores
+
     def fetch_recent_posts(
         self,
         group_id: int,

@@ -11,6 +11,7 @@ import json
 import logging
 from pathlib import Path
 
+from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.footer import FooterLinks
 from app.core.publishing.queue_service import _build_publish_text
 from app.core.publishing.telegram_publisher import TelegramPublisher
@@ -26,18 +27,19 @@ REPOST_WINDOW_DAYS = 7
 
 def pick_best_post(
     repo: Repository,
-    vk_publisher: VKPublisher,
+    vk_fetcher: VKFetcher,
     channel: Channel,
     *,
     days: int = REPOST_WINDOW_DAYS,
 ) -> ProcessedPost | None:
     """Лучший пост канала за последние `days` дней по (просмотры + лайки VK). None —
-    нет кандидатов (ничего не публиковалось в VK с сохранённым vk_post_id)."""
+    нет кандидатов (ничего не публиковалось в VK с сохранённым vk_post_id). Вовлечённость
+    читается ЛИЧНЫМ токеном (vk_fetcher) — групповым wall.getById недоступен (VK [27])."""
     since = datetime.datetime.utcnow() - datetime.timedelta(days=days)
     candidates = repo.list_channel_posts_published_to_vk_since(channel.id, since)
     if not candidates:
         return None
-    scores = vk_publisher.fetch_engagement(
+    scores = vk_fetcher.fetch_engagement(
         int(channel.vk_destination), [c.vk_post_id for c in candidates]
     )
     return max(candidates, key=lambda p: scores.get(p.vk_post_id, 0))
@@ -49,13 +51,14 @@ async def repost_best_post(
     *,
     tg_publisher: TelegramPublisher | None,
     vk_publisher: VKPublisher | None,
+    vk_fetcher: VKFetcher | None,
     footer_links: FooterLinks | None,
     days: int = REPOST_WINDOW_DAYS,
 ) -> None:
-    """Выбрать лучший пост канала за неделю и перезалить его в TG+VK."""
-    if vk_publisher is None or not channel.vk_destination:
+    """Выбрать лучший пост канала за неделю (по вовлечённости) и перезалить в TG+VK."""
+    if vk_publisher is None or vk_fetcher is None or not channel.vk_destination:
         return
-    best = pick_best_post(repo, vk_publisher, channel, days=days)
+    best = pick_best_post(repo, vk_fetcher, channel, days=days)
     if best is None:
         logger.info("Еженедельный репост [%s]: нет кандидатов за %d дней", channel.name, days)
         return
