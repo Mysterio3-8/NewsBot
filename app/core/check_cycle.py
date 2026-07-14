@@ -188,6 +188,7 @@ def _process_posts(
                 image_search_providers=settings.image_providers_order,
                 rewrite_prompt=settings.rewrite_prompt or "rewrite",
                 rewrite_max_length=settings.rewrite_max_length,
+                rewrite_length_factor=settings.rewrite_length_factor,
                 split_collage=settings.split_collage,
             )
         except Exception:

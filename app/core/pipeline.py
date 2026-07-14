@@ -78,6 +78,7 @@ def process_fetched_post(
     image_search_providers: list[str] | None = None,
     rewrite_prompt: str = "rewrite",
     rewrite_max_length: int | None = None,
+    rewrite_length_factor: float | None = None,
     split_collage: bool = False,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
@@ -163,10 +164,14 @@ def process_fetched_post(
         source=source.name,
         style=rewrite_config.style,
         # Объём рерайта ≈ как у оригинала (запрос пользователя 2026-07-09: "по объёму
-        # Новости: потолок = длина исходника (не ужимать, не раздувать). Кино:
-        # rewrite_max_length из настроек канала (подробнее, не сокращая смысл —
-        # запрос пользователя 2026-07-14).
-        max_length=rewrite_max_length if rewrite_max_length else len(post.text),
+        # Длина рерайта. Кино: factor × длина оригинала («чуть больше оригинала», запрос
+        # пользователя 2026-07-14 — раньше был фикс 1200, тексты выходили слишком длинными).
+        # Иначе — абсолютный rewrite_max_length или (Новости) длина оригинала.
+        max_length=(
+            int(len(post.text) * rewrite_length_factor)
+            if rewrite_length_factor
+            else (rewrite_max_length if rewrite_max_length else len(post.text))
+        ),
         include_hashtags=rewrite_config.include_hashtags,
         prompt_name=rewrite_prompt,
     )

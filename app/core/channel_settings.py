@@ -50,8 +50,12 @@ class ChannelSettings:
     кино-стиль). None → новостной "rewrite"."""
 
     rewrite_max_length: int | None = None
-    """Потолок длины рерайта канала. None → длина оригинала (как у Новостей). Кино —
-    больше (подробнее, не сокращая смысл)."""
+    """Абсолютный потолок длины рерайта (знаков). None → длина оригинала (как у Новостей)."""
+
+    rewrite_length_factor: float | None = None
+    """Длина рерайта = длина оригинала × factor (напр. 1.3 = «чуть больше оригинала»
+    для Кино). None → берётся rewrite_max_length или длина оригинала. Приоритетнее
+    rewrite_max_length."""
 
     split_collage: bool = False
     """Расклеивать склеенные кадры (кино: 2 кадра в одном фото → 2 отдельных). None/False
@@ -76,6 +80,7 @@ class ChannelSettings:
             photo_design=data.get("photo_design"),
             rewrite_prompt=data.get("rewrite_prompt"),
             rewrite_max_length=data.get("rewrite_max_length"),
+            rewrite_length_factor=data.get("rewrite_length_factor"),
             split_collage=data.get("split_collage", False),
             uniquify_images=data.get("uniquify_images", False),
         )
@@ -100,6 +105,8 @@ class ChannelSettings:
             payload["rewrite_prompt"] = self.rewrite_prompt
         if self.rewrite_max_length is not None:
             payload["rewrite_max_length"] = self.rewrite_max_length
+        if self.rewrite_length_factor is not None:
+            payload["rewrite_length_factor"] = self.rewrite_length_factor
         if self.split_collage:
             payload["split_collage"] = True
         if self.uniquify_images:

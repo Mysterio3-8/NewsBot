@@ -121,3 +121,10 @@ def test_to_json_omits_generic_mode_for_compact_output():
     """generic — дефолт, не нужно засорять JSON лишним полем для News-канала."""
     payload = ChannelSettings().to_json()
     assert "image_query_mode" not in payload
+
+
+def test_rewrite_length_factor_roundtrip():
+    original = ChannelSettings(filters_enabled=False, rewrite_length_factor=1.2)
+    restored = ChannelSettings.from_json(original.to_json())
+    assert restored.rewrite_length_factor == 1.2
+    assert restored == original
