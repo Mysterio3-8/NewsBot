@@ -31,6 +31,7 @@ from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
+from app.core.images.promo_banner import has_promo_banner
 from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
@@ -423,6 +424,14 @@ def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> 
     for item in media_urls:
         if item.startswith("http://") or item.startswith("https://"):
             kept.append(item)
+            continue
+
+        # Ярко-жёлтая промо-плашка ("ищи в комментариях") — детектим по цвету
+        # детерминированно (без vision) и НЕ берём фото: блюром её незаметно не убрать,
+        # обрезкой из центра тоже (запрос пользователя 2026-07-14). Дёшево + не тратит
+        # vision-лимит на заведомо негодные кадры.
+        if has_promo_banner(item):
+            logger.info("Фото %s: чужая промо-плашка (жёлтая), не беру", item)
             continue
 
         regions = locate_foreign_watermark(llm_client, Path(item))
