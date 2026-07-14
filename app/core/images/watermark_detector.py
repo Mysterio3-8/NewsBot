@@ -38,18 +38,25 @@ _EDGE_REGIONS = frozenset({"top", "bottom"})
 def locate_foreign_watermark(client: LLMClient, image_path: Path) -> set[str] | None:
     """Возвращает множество краёв, которые нужно обрезать, чтобы убрать чужой
     знак: {"top"}, {"bottom"}, {"top", "bottom"} или пустое множество (знака нет).
-    None — знак есть, но обрезкой сверху/снизу его не убрать (см. модуль) — такое
-    фото использовать нельзя вообще. При недоступности vision — fail-open (пустое
-    множество: считаем, что знака нет, чтобы временный сбой проверки не блокировал
-    публикацию фото)."""
+    None — фото использовать нельзя (знак неубираемой обрезкой ИЛИ проверку не
+    удалось выполнить).
+
+    FAIL-CLOSED (явное требование пользователя 2026-07-11: "нельзя брать фото если
+    на них есть чужие вотермарки"): если vision недоступен/упал (напр. Groq 429),
+    мы НЕ знаем, есть ли на фото чужой знак — поэтому фото НЕ используем (None →
+    пайплайн уходит на сток), а не пропускаем непроверенным. Лучше нейтральный
+    сток, чем чужой вотермарк в публикации."""
     try:
         response = client.generate_vision(WATERMARK_LOCATE_PROMPT, image_path)
     except LLMUnavailableError:
-        logger.warning("Проверка водяного знака недоступна для %s — фото используется как есть", image_path)
-        return set()
+        logger.warning(
+            "Проверка водяного знака недоступна для %s — фото НЕ используется (fail-closed), уходим на сток",
+            image_path,
+        )
+        return None
     except Exception:
-        logger.exception("Проверка водяного знака упала для %s", image_path)
-        return set()
+        logger.exception("Проверка водяного знака упала для %s — фото НЕ используется (fail-closed)", image_path)
+        return None
 
     normalized = response.strip().lower()
     if normalized.startswith("нет"):

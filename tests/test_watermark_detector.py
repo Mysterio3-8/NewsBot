@@ -52,19 +52,19 @@ def test_locate_foreign_watermark_treats_unexpected_response_as_not_removable(tm
     assert locate_foreign_watermark(client, image_path) is None
 
 
-def test_locate_foreign_watermark_fails_open_when_vision_unavailable(tmp_path):
-    """Vision не настроен/сбой сети — не блокируем публикацию фото из-за этого,
-    считаем, что водяного знака нет (fail-open)."""
+def test_locate_foreign_watermark_fails_closed_when_vision_unavailable(tmp_path):
+    """FAIL-CLOSED (требование пользователя 2026-07-11): vision недоступен → не знаем,
+    есть ли чужой знак → фото НЕ используем (None → сток), а не пропускаем непроверенным."""
     client = Mock(spec=LLMClient)
     client.generate_vision.side_effect = LLMUnavailableError("vision недоступна")
     image_path = tmp_path / "photo.jpg"
 
-    assert locate_foreign_watermark(client, image_path) == set()
+    assert locate_foreign_watermark(client, image_path) is None
 
 
-def test_locate_foreign_watermark_fails_open_on_unexpected_error(tmp_path):
+def test_locate_foreign_watermark_fails_closed_on_unexpected_error(tmp_path):
     client = Mock(spec=LLMClient)
     client.generate_vision.side_effect = RuntimeError("что-то пошло не так")
     image_path = tmp_path / "photo.jpg"
 
-    assert locate_foreign_watermark(client, image_path) == set()
+    assert locate_foreign_watermark(client, image_path) is None
