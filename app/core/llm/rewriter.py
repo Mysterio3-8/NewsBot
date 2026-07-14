@@ -22,9 +22,12 @@ def rewrite_post(
     style: str,
     max_length: int,
     include_hashtags: bool = False,
+    prompt_name: str = "rewrite",
 ) -> str:
     system_prompt = client.load_prompt("system")
-    template = client.load_prompt("rewrite")
+    # prompt_name — свой промпт рерайта у канала (напр. "rewrite_kino" — красивый
+    # подробный кино-стиль вместо терсе-новостного). Дефолт — новостной "rewrite".
+    template = client.load_prompt(prompt_name)
     style_modifier = _load_style_modifier(client, style)
     hashtags_instruction = HASHTAGS_INSTRUCTION_ON if include_hashtags else HASHTAGS_INSTRUCTION_OFF
 

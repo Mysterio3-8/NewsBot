@@ -45,6 +45,10 @@ class ChannelSettings:
     None → наследовать глобальный тумблер. False → выключить (напр. Кино — свой стиль,
     без новостного шаблона). True → включить принудительно."""
 
+    rewrite_prompt: str | None = None
+    """Имя своего промпта рерайта канала (напр. "rewrite_kino" — красивый подробный
+    кино-стиль). None → новостной "rewrite"."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -59,6 +63,7 @@ class ChannelSettings:
             image_providers_order=data.get("image_providers_order"),
             logo_path=data.get("logo_path"),
             photo_design=data.get("photo_design"),
+            rewrite_prompt=data.get("rewrite_prompt"),
         )
 
     def to_json(self) -> str:
@@ -77,4 +82,6 @@ class ChannelSettings:
             payload["logo_path"] = self.logo_path
         if self.photo_design is not None:
             payload["photo_design"] = self.photo_design
+        if self.rewrite_prompt is not None:
+            payload["rewrite_prompt"] = self.rewrite_prompt
         return json.dumps(payload, ensure_ascii=False)

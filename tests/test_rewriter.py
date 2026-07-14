@@ -33,6 +33,27 @@ def test_rewrite_post_uses_style_modifier_file():
     assert render_kwargs["STYLE"] == "<style_viral>"
 
 
+def test_rewrite_post_uses_custom_prompt_name_for_channel():
+    """Канал может задать свой промпт рерайта (Кино → rewrite_kino)."""
+    loaded: list[str] = []
+    client = Mock(spec=LLMClient)
+
+    def load_prompt(name: str) -> str:
+        loaded.append(name)
+        return f"<{name}>"
+
+    client.load_prompt.side_effect = load_prompt
+    client.render.side_effect = lambda template, **kwargs: template
+    client.generate.return_value = "готово"
+
+    rewrite_post(
+        client, text="x", source="tg", style="viral", max_length=400, prompt_name="rewrite_kino"
+    )
+
+    assert "rewrite_kino" in loaded  # загружен кино-промпт, а не новостной "rewrite"
+    assert "rewrite" not in loaded
+
+
 def test_rewrite_post_falls_back_to_raw_style_when_file_missing():
     client = Mock(spec=LLMClient)
 

@@ -73,6 +73,7 @@ def process_fetched_post(
     image_providers: dict[str, ImageProvider] | None = None,
     image_query_mode: str = "generic",
     image_search_providers: list[str] | None = None,
+    rewrite_prompt: str = "rewrite",
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -162,6 +163,7 @@ def process_fetched_post(
         # был max(900, len) — LLM растягивал короткие посты до 900). Промпт держит длину.
         max_length=len(post.text),
         include_hashtags=rewrite_config.include_hashtags,
+        prompt_name=rewrite_prompt,
     )
     logger.info(
         "[пост %s] рерайт готов (%d → %d символов)",
