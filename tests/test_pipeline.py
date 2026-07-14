@@ -523,7 +523,7 @@ def test_process_fetched_post_rejects_blacklisted_word(tmp_path, caplog):
         outcome = process_fetched_post(
             repo,
             source,
-            make_post(text="Успей купить со скидка!"),
+            make_post(text="В магазине объявили скидка на технику"),
             llm_client=client,
             filters=make_filters(),
             scoring_weights=WEIGHTS,

@@ -21,6 +21,7 @@ from app.config.loader import (
 )
 from app.core.filtering.deduplication import compute_simhash, find_similar_hash
 from app.core.filtering.rules import (
+    find_ad_marker,
     find_blacklisted_word,
     find_whitelisted_keywords,
     is_structural_non_news,
@@ -526,6 +527,10 @@ def _check_local_filters(
     if structural_reason is not None:
         return structural_reason
 
+    ad_marker = find_ad_marker(post.text)
+    if ad_marker is not None:
+        return f"реклама: {ad_marker}"
+
     blacklisted_word = find_blacklisted_word(post.text, filters.stop_words)
     if blacklisted_word is not None:
         return f"стоп-слово: {blacklisted_word}"
@@ -548,10 +553,15 @@ def _check_duplicate_only(
 ) -> str | None:
     """Режим «лить всё» (filters_enabled=False): пропускаем стоп-слова и LLM-гейт, но
     дедуп по SimHash и структурную проверку оставляем — чтобы один и тот же пост не
-    ушёл в канал дважды и не проскочил не-текстовый мусор."""
+    ушёл в канал дважды и не проскочил не-текстовый мусор. Рекламу режем всегда (запрос
+    пользователя 2026-07-14: рекламные посты не брать даже в режиме «лить всё»)."""
     structural_reason = is_structural_non_news(post.post_type)
     if structural_reason is not None:
         return structural_reason
+
+    ad_marker = find_ad_marker(post.text)
+    if ad_marker is not None:
+        return f"реклама: {ad_marker}"
 
     if content_hash is not None:
         duplicate_hash = find_similar_hash(
