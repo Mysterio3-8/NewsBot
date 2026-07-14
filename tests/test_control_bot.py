@@ -110,8 +110,9 @@ def test_build_dispatcher_registers_media_handler():
     # 38 было до управления каналами; +2 message (reply-кнопка «Каналы» + FSM ввода
     # настройки канала) = 40
     assert len(dp.message.handlers) == 40
-    # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29
-    assert len(dp.callback_query.handlers) == 29
+    # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
+    # +1 тумблер оформления фото (set:photodesign) = 30
+    assert len(dp.callback_query.handlers) == 30
 
 
 def test_build_nature_controller_none_without_env_path():
@@ -299,6 +300,31 @@ def test_toggle_source_rejects_non_numeric(tmp_path):
 def test_toggle_source_reports_missing(tmp_path):
     repo = _repo(tmp_path)
     assert "не найден" in bot.toggle_source(repo, "999", enabled=True)
+
+
+def _config_with_design(enabled: bool):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(headline_card=SimpleNamespace(enabled=enabled))
+
+
+def test_photo_design_defaults_to_config_when_no_setting(tmp_path):
+    repo = _repo(tmp_path)
+    assert bot.is_photo_design_on(repo, _config_with_design(True)) is True
+    assert bot.is_photo_design_on(repo, _config_with_design(False)) is False
+
+
+def test_toggle_photo_design_flips_and_persists(tmp_path):
+    repo = _repo(tmp_path)
+    config = _config_with_design(True)  # дефолт вкл
+
+    msg = bot.toggle_photo_design(repo, config)  # вкл -> выкл
+    assert "выкл" in msg
+    assert bot.is_photo_design_on(repo, config) is False
+
+    msg = bot.toggle_photo_design(repo, config)  # выкл -> вкл
+    assert "вкл" in msg
+    assert bot.is_photo_design_on(repo, config) is True
 
 
 def test_add_source_creates_disabled(tmp_path):

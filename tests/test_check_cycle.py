@@ -41,6 +41,32 @@ def make_repo(tmp_path) -> Repository:
     return Repository(engine)
 
 
+def test_effective_headline_card_uses_config_default_without_setting(tmp_path):
+    from types import SimpleNamespace
+    from app.core.check_cycle import _effective_headline_card
+
+    repo = make_repo(tmp_path)
+    config = SimpleNamespace(headline_card=SimpleNamespace(enabled=True))
+
+    # Нет настройки в БД → берём дефолт конфига (enabled=True)
+    assert _effective_headline_card(repo, config).enabled is True
+
+
+def test_effective_headline_card_bot_toggle_overrides_config(tmp_path):
+    from types import SimpleNamespace
+    from app.config.loader import HeadlineCardConfig
+    from app.core.check_cycle import _effective_headline_card, PHOTO_DESIGN_SETTING
+
+    repo = make_repo(tmp_path)
+    config = SimpleNamespace(headline_card=HeadlineCardConfig(enabled=True))
+
+    repo.set_setting(PHOTO_DESIGN_SETTING, "0")  # тумблер бота: выкл
+    assert _effective_headline_card(repo, config).enabled is False
+
+    repo.set_setting(PHOTO_DESIGN_SETTING, "1")  # тумблер бота: вкл
+    assert _effective_headline_card(repo, config).enabled is True
+
+
 def make_post(external_id: str) -> FetchedPost:
     return FetchedPost(
         external_id=external_id,

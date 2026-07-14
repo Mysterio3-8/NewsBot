@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 from app.config.loader import AppConfig
@@ -127,6 +128,19 @@ def _advance_tg_cursor(repo: Repository, source: Source, posts: list[FetchedPost
     repo.set_setting(key, str(new_id))
 
 
+PHOTO_DESIGN_SETTING = "photo_design_enabled"
+
+
+def _effective_headline_card(repo: Repository, config: AppConfig):
+    """Оформление фото (fade+заголовок) можно включать/выключать из бота — настройка
+    photo_design_enabled в БД перекрывает дефолт config.headline_card.enabled. Нет
+    настройки → берём дефолт из config.yaml (запрос пользователя 2026-07-11)."""
+    raw = repo.get_setting(PHOTO_DESIGN_SETTING)
+    if raw is None:
+        return config.headline_card
+    return dataclasses.replace(config.headline_card, enabled=(raw == "1"))
+
+
 def _process_posts(
     repo: Repository,
     source: Source,
@@ -136,6 +150,7 @@ def _process_posts(
     image_providers: dict[str, ImageProvider] | None,
     settings: ChannelSettings,
 ) -> None:
+    headline_card = _effective_headline_card(repo, config)
     for post in posts:
         try:
             process_fetched_post(
@@ -150,7 +165,7 @@ def _process_posts(
                 filters_enabled=settings.filters_enabled,
                 images_config=config.images,
                 watermark_config=config.watermark,
-                headline_card_config=config.headline_card,
+                headline_card_config=headline_card,
                 image_providers=image_providers,
                 image_query_mode=settings.image_query_mode,
                 image_search_providers=settings.image_providers_order,

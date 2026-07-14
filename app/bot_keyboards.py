@@ -109,13 +109,17 @@ def autoposting_menu(*, running: bool) -> InlineKeyboardMarkup:
     )
 
 
-def settings_menu(*, interval: int, freshness: int, maxposts: int, provider: str) -> InlineKeyboardMarkup:
+def settings_menu(
+    *, interval: int, freshness: int, maxposts: int, provider: str, photo_design: bool
+) -> InlineKeyboardMarkup:
     """Значения прямо на кнопках (стиль GRABBER «Автоподпись: нет»)."""
+    design_state = "вкл 🟢" if photo_design else "выкл ⚪"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"⏱ Интервал проверки: {interval} мин", callback_data="set:interval")],
             [InlineKeyboardButton(text=f"🕐 Окно свежести: {freshness} ч", callback_data="set:freshness")],
             [InlineKeyboardButton(text=f"📈 Лимит постов/день: {maxposts}", callback_data="set:maxposts")],
+            [InlineKeyboardButton(text=f"🎨 Оформление фото: {design_state}", callback_data="set:photodesign")],
             [InlineKeyboardButton(text=f"🧠 LLM-провайдер: {provider}", callback_data="set:provider")],
             _close_row(),
         ]

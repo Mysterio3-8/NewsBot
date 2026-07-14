@@ -91,6 +91,10 @@ class ImagesConfig:
     # знаков и без подмены на сток. True → pipeline._prepare_images просто отдаёт
     # скачанные файлы. False → прежняя цепочка обработки (монтаж/вотермарк).
     keep_original: bool = False
+    # "blur" — фото на размытой подложке (не режет, но с размытыми полями);
+    # "crop" — центр-кроп в target_aspect_ratio (фото заполняет кадр без полей).
+    # Запрос пользователя 2026-07-11: NEWS_MAIN — 1:1 без блюра.
+    aspect_mode: str = "blur"
 
 
 @dataclass(frozen=True)

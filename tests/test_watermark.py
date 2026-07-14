@@ -112,6 +112,29 @@ def test_watermarker_applies_logo_and_saves_output(tmp_path, monkeypatch):
     assert output_path.parent == tmp_path / "output" / "images" / "42"
 
 
+def test_watermarker_crop_mode_crops_instead_of_blur_padding(tmp_path, monkeypatch):
+    """aspect_mode='crop' (запрос 2026-07-11 «1:1 без блюра»): широкое фото режется
+    к соотношению, а не вписывается на размытую подложку. Ключевой признак: высота
+    исходника СОХРАНЯЕТСЯ (blur-fill бы её увеличил, добавив поля)."""
+    import app.core.images.watermark as watermark_module
+
+    monkeypatch.setattr(watermark_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(watermark_module, "OUTPUT_DIR", tmp_path / "output")
+
+    (tmp_path / "assets").mkdir()
+    Image.new("RGBA", (200, 100), color=(255, 0, 0, 255)).save(tmp_path / "assets" / "logo.png")
+
+    source_image_path = tmp_path / "source.jpg"
+    Image.new("RGB", (800, 600), color="blue").save(source_image_path)
+
+    watermarker = Watermarker(make_config(logo_path="assets/logo.png"), aspect_mode="crop")
+    output_path = watermarker.apply(source_image_path, target_aspect_ratio="1:1", post_id=7)
+
+    result = Image.open(output_path)
+    assert result.height == 600  # высота не выросла — значит НЕ blur-подложка
+    assert result.width < 800    # ширина урезана к квадрату (в пределах cap)
+
+
 def test_watermarker_output_has_no_exif_metadata(tmp_path, monkeypatch):
     import app.core.images.watermark as watermark_module
 

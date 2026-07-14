@@ -341,6 +341,24 @@ def render_channel_card(repo: Repository, channel_id: int) -> str:
     )
 
 
+def is_photo_design_on(repo: Repository, config: AppConfig) -> bool:
+    """Текущее состояние оформления фото: настройка из бота (photo_design_enabled)
+    перекрывает дефолт config.headline_card.enabled. Ключ совпадает с
+    check_cycle.PHOTO_DESIGN_SETTING."""
+    raw = repo.get_setting("photo_design_enabled")
+    if raw is None:
+        return config.headline_card.enabled
+    return raw == "1"
+
+
+def toggle_photo_design(repo: Repository, config: AppConfig) -> str:
+    """Тумблер оформления фото (зелёный fade + лого + заголовок) — запрос пользователя
+    2026-07-11 «сделать чтобы можно было включать/выключать в боте»."""
+    new_state = not is_photo_design_on(repo, config)
+    repo.set_setting("photo_design_enabled", "1" if new_state else "0")
+    return f"Оформление фото (fade+лого+заголовок): {'вкл 🟢' if new_state else 'выкл ⚪'}"
+
+
 def toggle_channel(repo: Repository, channel_id: int) -> str:
     """Включить/выключить канал. Выключенный не публикует (cycle_job его пропускает)."""
     channel = repo.get_channel(channel_id)
@@ -718,6 +736,7 @@ def build_dispatcher(
             freshness=config.publishing.schedule.publish_freshness_hours,
             maxposts=config.publishing.schedule.max_posts_per_day,
             provider=config.llm.provider,
+            photo_design=is_photo_design_on(repo, config),
         )
 
     def _autoposting_text() -> str:
@@ -1097,6 +1116,14 @@ def build_dispatcher(
         current = load_config(config_path).llm.provider
         await _edit_current(cb, "🧠 Выбери LLM-провайдера:", kb.provider_menu(sorted(LLM_PROVIDERS), current))
         await cb.answer()
+
+    @dp.callback_query(F.data == "set:photodesign")
+    async def on_set_photodesign(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        result = toggle_photo_design(repo, load_config(config_path))
+        await _edit_current(cb, "⚙️ Настройки темпа и LLM:\n\n" + result, _load_settings_menu())
+        await cb.answer("Переключено")
 
     @dp.callback_query(F.data.startswith("prov:"))
     async def on_provider_pick(cb: CallbackQuery) -> None:

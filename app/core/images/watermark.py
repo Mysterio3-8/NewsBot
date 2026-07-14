@@ -55,10 +55,16 @@ class Watermarker:
         config: WatermarkConfig,
         uniquify_config: UniquifyConfig | None = None,
         headline_card_config: HeadlineCardConfig | None = None,
+        aspect_mode: str = "blur",
     ) -> None:
         self._config = config
         self._uniquify_config = uniquify_config or UniquifyConfig()
         self._headline_card_config = headline_card_config or HeadlineCardConfig()
+        # aspect_mode: "blur" — вписать фото целиком на размытую подложку (не режет,
+        # но добавляет размытые поля); "crop" — центр-кроп в соотношение (фото
+        # заполняет кадр без полей, но края обрезаются). Запрос пользователя 2026-07-11:
+        # NEWS_MAIN — 1:1 без блюра (crop).
+        self._aspect_mode = aspect_mode
 
     def apply(
         self,
@@ -69,7 +75,10 @@ class Watermarker:
         headline: str | None = None,
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
-        image = fit_to_aspect_ratio(image, target_aspect_ratio)
+        if self._aspect_mode == "crop":
+            image = crop_to_aspect_ratio(image, target_aspect_ratio)
+        else:
+            image = fit_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
         if self._headline_card_config.enabled:
             # Зелёный фейд по углам — на КАЖДОМ фото (общий фирменный вид), заголовок

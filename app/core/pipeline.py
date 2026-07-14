@@ -289,7 +289,12 @@ def _prepare_images(
     count = min(len(own_photos), MAX_SOURCE_PHOTOS) if own_photos else images_config.count_per_post
 
     try:
-        watermarker = Watermarker(watermark_config, images_config.uniquify, headline_card_config)
+        watermarker = Watermarker(
+            watermark_config,
+            images_config.uniquify,
+            headline_card_config,
+            aspect_mode=images_config.aspect_mode,
+        )
         image_paths = prepare_images_for_post(
             providers_order=images_config.providers_order,
             providers=providers,
@@ -371,7 +376,12 @@ def _prepare_movie_images(
         return None
 
     try:
-        watermarker = Watermarker(watermark_config, images_config.uniquify, headline_card_config)
+        watermarker = Watermarker(
+            watermark_config,
+            images_config.uniquify,
+            headline_card_config,
+            aspect_mode=images_config.aspect_mode,
+        )
         image_paths = prepare_images_for_post(
             providers_order=search_names,
             providers=providers,

@@ -14,8 +14,9 @@ def test_load_config_returns_typed_config():
 def test_load_config_reads_headline_card_section():
     config = load_config()
 
-    # Монтаж выключен в лёгком режиме (2026-07-07), но секция всё равно читается.
-    assert config.headline_card.enabled is False
+    # Оформление включено по дефолту (2026-07-11, запрос вернуть fade+заголовок);
+    # в рантайме перекрывается тумблером бота (photo_design_enabled).
+    assert config.headline_card.enabled is True
     assert config.headline_card.corner_fade_corners == ["bottom-left", "top-right"]
 
 

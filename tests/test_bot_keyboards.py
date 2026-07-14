@@ -25,12 +25,23 @@ def test_autoposting_menu_shows_run_when_stopped():
 
 
 def test_settings_menu_puts_values_on_buttons():
-    markup = kb.settings_menu(interval=2, freshness=12, maxposts=999, provider="groq")
+    markup = kb.settings_menu(
+        interval=2, freshness=12, maxposts=999, provider="groq", photo_design=True
+    )
     labels = [b.text for row in markup.inline_keyboard for b in row]
     assert any("2 мин" in label for label in labels)
     assert any("12 ч" in label for label in labels)
     assert any("999" in label for label in labels)
     assert any("groq" in label for label in labels)
+    assert any("Оформление фото" in label and "вкл" in label for label in labels)
+
+
+def test_settings_menu_shows_photo_design_off():
+    markup = kb.settings_menu(
+        interval=2, freshness=12, maxposts=999, provider="groq", photo_design=False
+    )
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert any("Оформление фото" in label and "выкл" in label for label in labels)
 
 
 def test_sources_menu_toggle_callback_per_source():
