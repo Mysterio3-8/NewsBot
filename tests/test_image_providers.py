@@ -113,6 +113,23 @@ def test_google_provider_returns_empty_list_on_request_error():
     assert results == []
 
 
+def test_google_provider_does_not_log_api_key_on_error(caplog):
+    """Безопасность: при ошибке НЕ логировать URL/ключ (str(HTTPError) содержит
+    ?key=<секрет>). В логе только статус и запрос."""
+    import logging
+
+    provider = GoogleImageProvider(api_key="SECRET_KEY_12345", cx="cx")
+    err = requests.HTTPError("403 Forbidden for url: ...?key=SECRET_KEY_12345")
+
+    with patch(
+        "app.core.images.providers.google_provider.requests.get", side_effect=err
+    ):
+        with caplog.at_level(logging.WARNING, logger="monitoring"):
+            provider.search("query", count=1)
+
+    assert "SECRET_KEY_12345" not in caplog.text
+
+
 def test_google_provider_skips_items_without_link():
     provider = GoogleImageProvider(api_key="key", cx="cx")
     response = Mock()

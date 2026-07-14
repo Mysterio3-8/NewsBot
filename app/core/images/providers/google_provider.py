@@ -42,7 +42,12 @@ class GoogleImageProvider:
             )
             response.raise_for_status()
         except requests.RequestException as error:
-            logger.warning("Google Custom Search не удался для запроса %r: %s", query, error)
+            # НЕ логируем сам error/URL — в нём query-параметр key=<API-ключ> (утечка
+            # секрета в лог). Только статус и запрос.
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            logger.warning(
+                "Google Custom Search не удался для запроса %r (HTTP %s)", query, status
+            )
             return []
 
         items = response.json().get("items", [])
