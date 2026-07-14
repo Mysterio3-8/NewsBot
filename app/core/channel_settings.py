@@ -64,6 +64,10 @@ class ChannelSettings:
     uniquify_images: bool = False
     """Уникализация картинок (антиплагиат: микро-кроп + шум + чистка EXIF). Кино → True."""
 
+    weekly_repost: bool = False
+    """Раз в неделю перезаливать лучший пост канала (по просмотрам+лайкам VK за 7 дней).
+    Кино → True."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -83,6 +87,7 @@ class ChannelSettings:
             rewrite_length_factor=data.get("rewrite_length_factor"),
             split_collage=data.get("split_collage", False),
             uniquify_images=data.get("uniquify_images", False),
+            weekly_repost=data.get("weekly_repost", False),
         )
 
     def to_json(self) -> str:
@@ -111,4 +116,6 @@ class ChannelSettings:
             payload["split_collage"] = True
         if self.uniquify_images:
             payload["uniquify_images"] = True
+        if self.weekly_repost:
+            payload["weekly_repost"] = True
         return json.dumps(payload, ensure_ascii=False)

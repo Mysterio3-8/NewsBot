@@ -128,3 +128,10 @@ def test_rewrite_length_factor_roundtrip():
     restored = ChannelSettings.from_json(original.to_json())
     assert restored.rewrite_length_factor == 1.2
     assert restored == original
+
+
+def test_weekly_repost_roundtrip():
+    original = ChannelSettings(filters_enabled=False, weekly_repost=True)
+    restored = ChannelSettings.from_json(original.to_json())
+    assert restored.weekly_repost is True
+    assert restored == original

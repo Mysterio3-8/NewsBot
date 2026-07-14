@@ -62,7 +62,7 @@ def publish_queued_post_vk(
     result = publisher.publish(**publish_kwargs)
 
     if result.success:
-        repo.mark_published(post_id, "vk", datetime.datetime.utcnow())
+        repo.mark_published(post_id, "vk", datetime.datetime.utcnow(), vk_post_id=result.post_id)
         logger.info("Пост %d опубликован в VK (post_id=%s)", post_id, result.post_id)
     elif not _already_published(repo, post_id):
         # Не понижаем статус, если пост уже опубликован в другой сети (напр. TG прошёл,

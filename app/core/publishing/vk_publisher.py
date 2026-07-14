@@ -67,6 +67,25 @@ class VKPublisher:
         self._group_key = token_key(group_token)
         self._upload_key = token_key(upload_token) if upload_token else self._group_key
 
+    def fetch_engagement(self, group_id: int, vk_post_ids: list[int]) -> dict[int, int]:
+        """Просмотры+лайки для постов группы (для еженедельного репоста лучшего).
+        Возвращает {vk_post_id: просмотры + лайки}. Недоступные посты пропускаются."""
+        if not vk_post_ids:
+            return {}
+        owner = -abs(group_id)
+        refs = ",".join(f"{owner}_{pid}" for pid in vk_post_ids)
+        try:
+            items = self._api.wall.getById(posts=refs)
+        except Exception as error:
+            logger.warning("VK wall.getById не удался: %s", error)
+            return {}
+        scores: dict[int, int] = {}
+        for item in items or []:
+            views = (item.get("views") or {}).get("count", 0)
+            likes = (item.get("likes") or {}).get("count", 0)
+            scores[item["id"]] = int(views) + int(likes)
+        return scores
+
     def publish(
         self,
         *,

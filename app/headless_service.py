@@ -30,6 +30,7 @@ from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
+from app.core.publishing.weekly_repost import repost_best_post
 from app.core.scheduler import start_of_today_utc
 from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
@@ -256,6 +257,35 @@ def _sync_default_channel_targets(repo: Repository, config: AppConfig) -> None:
     )
 
 
+def build_weekly_repost_job(repo: Repository, config: AppConfig):
+    """Раз в неделю: для каждого канала с weekly_repost — перезалить лучший пост за
+    7 дней (по просмотрам+лайкам VK). Запрос пользователя 2026-07-14 (Кино)."""
+    footer_links = build_footer_links_from_config(config.footer)
+
+    async def weekly_job() -> None:
+        for channel in repo.list_channels(enabled_only=True):
+            settings = ChannelSettings.from_json(channel.settings_json)
+            if not settings.weekly_repost:
+                continue
+            channel_footer = (
+                FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
+                if settings.tg_footer_url
+                else footer_links
+            )
+            try:
+                await repost_best_post(
+                    repo,
+                    channel,
+                    tg_publisher=build_telegram_publisher_for_channel(channel),
+                    vk_publisher=build_vk_publisher_for_channel(channel),
+                    footer_links=channel_footer,
+                )
+            except Exception:
+                logger.exception("Еженедельный репост канала %s упал", channel.name)
+
+    return weekly_job
+
+
 async def run_forever(
     repo: Repository,
     config: AppConfig,
@@ -305,6 +335,12 @@ async def run_forever(
         # (rate_guard) всё равно проверяется внутри publish_queued_post*, так что
         # немедленный первый цикл не обходит никакие ограничения на публикацию.
         next_run_time=datetime.datetime.now(),
+    )
+    # Еженедельный репост лучшего поста (каналы с weekly_repost, напр. Кино). Первый
+    # запуск — через неделю (не сразу, чтобы накопилась статистика вовлечённости).
+    scheduler.add_job(
+        build_weekly_repost_job(repo, config),
+        IntervalTrigger(weeks=1),
     )
 
     scheduler.start()

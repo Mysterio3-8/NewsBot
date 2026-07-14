@@ -349,20 +349,47 @@ class Repository:
             return session.get(ProcessedPost, post_id)
 
     def mark_published(
-        self, post_id: int, network: str, published_at: datetime.datetime
+        self,
+        post_id: int,
+        network: str,
+        published_at: datetime.datetime,
+        *,
+        vk_post_id: int | None = None,
     ) -> None:
         """Помечает публикацию в КОНКРЕТНУЮ сеть (network="tg"/"vk") — раздельно от
         общего published_at/status, чтобы rate_guard мог отличить законный кросс-пост
-        (уже ушло в TG, теперь публикуем в VK) от повторной попытки в ТУ ЖЕ сеть."""
+        (уже ушло в TG, теперь публикуем в VK) от повторной попытки в ТУ ЖЕ сеть.
+        vk_post_id (для VK) сохраняется для еженедельного репоста лучшего поста."""
         column = f"published_{network}_at"
         with self._session_factory() as session:
             fields: dict = {column: published_at, "status": "published"}
+            if vk_post_id is not None:
+                fields["vk_post_id"] = vk_post_id
             existing = session.get(ProcessedPost, post_id)
             if existing is not None and existing.published_at is None:
                 fields["published_at"] = published_at
             session.query(ProcessedPost).filter(ProcessedPost.id == post_id).update(fields)
             session.commit()
         self.add_post_history(post_id=post_id, status="published")
+
+    def list_channel_posts_published_to_vk_since(
+        self, channel_id: int, since: datetime.datetime
+    ) -> list[ProcessedPost]:
+        """Посты канала, опубликованные в VK не раньше since и имеющие vk_post_id —
+        кандидаты на еженедельный репост лучшего (по вовлечённости)."""
+        with self._session_factory() as session:
+            return (
+                session.query(ProcessedPost)
+                .join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
+                .join(Source, RawPost.source_id == Source.id)
+                .filter(
+                    Source.channel_id == channel_id,
+                    ProcessedPost.vk_post_id.is_not(None),
+                    ProcessedPost.published_vk_at.is_not(None),
+                    ProcessedPost.published_vk_at >= since,
+                )
+                .all()
+            )
 
     def get_published_network_at(
         self, post_id: int, network: str

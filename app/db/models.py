@@ -114,6 +114,9 @@ class ProcessedPost(Base):
     # и пропускал ЛЮБУЮ повторную попытку без проверки конкретной сети).
     published_tg_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     published_vk_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    # ID поста на стене VK (из wall.post) — нужен для еженедельного репоста лучшего поста:
+    # по нему читаем просмотры+лайки через wall.getById (запрос пользователя 2026-07-14).
+    vk_post_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     raw_post: Mapped["RawPost"] = relationship(back_populates="processed")
     history: Mapped[list["PostHistory"]] = relationship(back_populates="post")

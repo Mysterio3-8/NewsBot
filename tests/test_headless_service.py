@@ -303,7 +303,9 @@ async def test_run_forever_schedules_immediate_first_cycle(tmp_path, monkeypatch
 
     class FakeScheduler:
         def add_job(self, func, trigger, next_run_time=None):
-            captured["next_run_time"] = next_run_time
+            # add_job вызывается несколько раз (цикл + недельный репост); нас интересует
+            # первый — цикловой джоб, у которого должен быть немедленный next_run_time.
+            captured.setdefault("next_run_time", next_run_time)
 
         def start(self):
             pass
