@@ -67,6 +67,21 @@ def test_effective_headline_card_bot_toggle_overrides_config(tmp_path):
     assert _effective_headline_card(repo, config).enabled is True
 
 
+def test_effective_headline_card_channel_override_wins(tmp_path):
+    from types import SimpleNamespace
+    from app.config.loader import HeadlineCardConfig
+    from app.core.channel_settings import ChannelSettings
+    from app.core.check_cycle import _effective_headline_card, PHOTO_DESIGN_SETTING
+
+    repo = make_repo(tmp_path)
+    config = SimpleNamespace(headline_card=HeadlineCardConfig(enabled=True))
+    repo.set_setting(PHOTO_DESIGN_SETTING, "1")  # глобально вкл
+
+    # Кино: пер-канальный photo_design=False перекрывает глобальный «вкл»
+    kino = ChannelSettings(filters_enabled=False, photo_design=False)
+    assert _effective_headline_card(repo, config, kino).enabled is False
+
+
 def make_post(external_id: str) -> FetchedPost:
     return FetchedPost(
         external_id=external_id,

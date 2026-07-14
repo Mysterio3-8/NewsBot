@@ -64,6 +64,27 @@ def test_to_json_roundtrip_with_movie_mode():
     assert ChannelSettings.from_json(original.to_json()) == original
 
 
+def test_from_json_reads_logo_and_photo_design():
+    s = ChannelSettings.from_json(
+        '{"filters_enabled": false, "logo_path": "assets/filmlogo.png", "photo_design": false}'
+    )
+    assert s.logo_path == "assets/filmlogo.png"
+    assert s.photo_design is False
+
+
+def test_to_json_roundtrip_with_logo_and_design():
+    original = ChannelSettings(
+        filters_enabled=False, logo_path="assets/filmlogo.png", photo_design=False
+    )
+    assert ChannelSettings.from_json(original.to_json()) == original
+
+
+def test_logo_and_design_default_none():
+    s = ChannelSettings.from_json(None)
+    assert s.logo_path is None
+    assert s.photo_design is None
+
+
 def test_to_json_omits_generic_mode_for_compact_output():
     """generic — дефолт, не нужно засорять JSON лишним полем для News-канала."""
     payload = ChannelSettings().to_json()

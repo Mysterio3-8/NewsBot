@@ -36,6 +36,15 @@ class ChannelSettings:
     глобальный порядок. Обязателен при image_query_mode="movie_title" (сток не найдёт
     кадры конкретного фильма)."""
 
+    logo_path: str | None = None
+    """Свой логотип-вотермарк канала (напр. "assets/filmlogo.png" для Кино). None →
+    глобальный logo из watermark-конфига (новостной)."""
+
+    photo_design: bool | None = None
+    """Новостное оформление (зелёный fade + заголовок, headline_card) для этого канала.
+    None → наследовать глобальный тумблер. False → выключить (напр. Кино — свой стиль,
+    без новостного шаблона). True → включить принудительно."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -48,6 +57,8 @@ class ChannelSettings:
             tg_footer_url=data.get("tg_footer_url"),
             image_query_mode=data.get("image_query_mode", "generic"),
             image_providers_order=data.get("image_providers_order"),
+            logo_path=data.get("logo_path"),
+            photo_design=data.get("photo_design"),
         )
 
     def to_json(self) -> str:
@@ -62,4 +73,8 @@ class ChannelSettings:
             payload["image_query_mode"] = self.image_query_mode
         if self.image_providers_order is not None:
             payload["image_providers_order"] = self.image_providers_order
+        if self.logo_path is not None:
+            payload["logo_path"] = self.logo_path
+        if self.photo_design is not None:
+            payload["photo_design"] = self.photo_design
         return json.dumps(payload, ensure_ascii=False)

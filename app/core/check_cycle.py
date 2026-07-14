@@ -131,10 +131,14 @@ def _advance_tg_cursor(repo: Repository, source: Source, posts: list[FetchedPost
 PHOTO_DESIGN_SETTING = "photo_design_enabled"
 
 
-def _effective_headline_card(repo: Repository, config: AppConfig):
-    """Оформление фото (fade+заголовок) можно включать/выключать из бота — настройка
-    photo_design_enabled в БД перекрывает дефолт config.headline_card.enabled. Нет
-    настройки → берём дефолт из config.yaml (запрос пользователя 2026-07-11)."""
+def _effective_headline_card(
+    repo: Repository, config: AppConfig, settings: ChannelSettings | None = None
+):
+    """Оформление фото (fade+заголовок). Приоритет: пер-канальная настройка
+    (ChannelSettings.photo_design, напр. Кино=False — свой стиль) → глобальный тумблер
+    бота (photo_design_enabled в БД) → дефолт config.yaml."""
+    if settings is not None and settings.photo_design is not None:
+        return dataclasses.replace(config.headline_card, enabled=settings.photo_design)
     raw = repo.get_setting(PHOTO_DESIGN_SETTING)
     if raw is None:
         return config.headline_card
@@ -150,7 +154,13 @@ def _process_posts(
     image_providers: dict[str, ImageProvider] | None,
     settings: ChannelSettings,
 ) -> None:
-    headline_card = _effective_headline_card(repo, config)
+    headline_card = _effective_headline_card(repo, config, settings)
+    # Пер-канальный логотип (Кино — filmlogo вместо новостного). None → глобальный.
+    watermark_config = (
+        dataclasses.replace(config.watermark, logo_path=settings.logo_path)
+        if settings.logo_path
+        else config.watermark
+    )
     for post in posts:
         try:
             process_fetched_post(
@@ -164,7 +174,7 @@ def _process_posts(
                 max_post_age_hours=config.monitoring.max_post_age_hours,
                 filters_enabled=settings.filters_enabled,
                 images_config=config.images,
-                watermark_config=config.watermark,
+                watermark_config=watermark_config,
                 headline_card_config=headline_card,
                 image_providers=image_providers,
                 image_query_mode=settings.image_query_mode,
