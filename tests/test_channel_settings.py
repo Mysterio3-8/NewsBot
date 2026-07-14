@@ -94,6 +94,23 @@ def test_to_json_roundtrip_with_rewrite_overrides():
     assert ChannelSettings.from_json(original.to_json()) == original
 
 
+def test_from_json_reads_split_collage_and_uniquify():
+    s = ChannelSettings.from_json('{"split_collage": true, "uniquify_images": true}')
+    assert s.split_collage is True
+    assert s.uniquify_images is True
+
+
+def test_split_and_uniquify_default_false():
+    s = ChannelSettings.from_json("{}")
+    assert s.split_collage is False
+    assert s.uniquify_images is False
+
+
+def test_to_json_roundtrip_with_split_and_uniquify():
+    original = ChannelSettings(filters_enabled=False, split_collage=True, uniquify_images=True)
+    assert ChannelSettings.from_json(original.to_json()) == original
+
+
 def test_logo_and_design_default_none():
     s = ChannelSettings.from_json(None)
     assert s.logo_path is None

@@ -53,6 +53,13 @@ class ChannelSettings:
     """Потолок длины рерайта канала. None → длина оригинала (как у Новостей). Кино —
     больше (подробнее, не сокращая смысл)."""
 
+    split_collage: bool = False
+    """Расклеивать склеенные кадры (кино: 2 кадра в одном фото → 2 отдельных). None/False
+    → не трогать (Новости — фото источника цельные)."""
+
+    uniquify_images: bool = False
+    """Уникализация картинок (антиплагиат: микро-кроп + шум + чистка EXIF). Кино → True."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -69,6 +76,8 @@ class ChannelSettings:
             photo_design=data.get("photo_design"),
             rewrite_prompt=data.get("rewrite_prompt"),
             rewrite_max_length=data.get("rewrite_max_length"),
+            split_collage=data.get("split_collage", False),
+            uniquify_images=data.get("uniquify_images", False),
         )
 
     def to_json(self) -> str:
@@ -91,4 +100,8 @@ class ChannelSettings:
             payload["rewrite_prompt"] = self.rewrite_prompt
         if self.rewrite_max_length is not None:
             payload["rewrite_max_length"] = self.rewrite_max_length
+        if self.split_collage:
+            payload["split_collage"] = True
+        if self.uniquify_images:
+            payload["uniquify_images"] = True
         return json.dumps(payload, ensure_ascii=False)

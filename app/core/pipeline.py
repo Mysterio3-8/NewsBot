@@ -31,6 +31,7 @@ from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
+from app.core.images.collage_splitter import split_vertical_collage
 from app.core.images.promo_banner import crop_to_clean_frame, has_promo_banner
 from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
@@ -76,6 +77,7 @@ def process_fetched_post(
     image_search_providers: list[str] | None = None,
     rewrite_prompt: str = "rewrite",
     rewrite_max_length: int | None = None,
+    split_collage: bool = False,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -181,10 +183,21 @@ def process_fetched_post(
     )
     headline = headlines[0] if headlines else None
 
+    # Расклейка склеенных кадров (кино): 2 кадра в одном фото → 2 отдельных, ДО
+    # фильтрации/вотермарка, чтобы плашка и лого обрабатывались покадрово.
+    media_urls = post.media_urls
+    if split_collage and media_urls:
+        media_urls = [frame for m in media_urls for frame in split_vertical_collage(m)]
+        if len(media_urls) != len(post.media_urls):
+            logger.info(
+                "[пост %s] коллажи расклеены: %d фото → %d кадров",
+                post.external_id, len(post.media_urls), len(media_urls),
+            )
+
     image_paths = _prepare_images(
         llm_client,
         raw_post_id=raw_post.id,
-        post_media_urls=post.media_urls,
+        post_media_urls=media_urls,
         rewritten_text=rewritten_text,
         headline=headline,
         images_config=images_config,

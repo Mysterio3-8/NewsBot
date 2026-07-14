@@ -161,6 +161,13 @@ def _process_posts(
         if settings.logo_path
         else config.watermark
     )
+    # Пер-канальная уникализация картинок (Кино — антиплагиат: микро-кроп+шум+EXIF).
+    images_config = config.images
+    if settings.uniquify_images and not config.images.uniquify.enabled:
+        images_config = dataclasses.replace(
+            config.images,
+            uniquify=dataclasses.replace(config.images.uniquify, enabled=True),
+        )
     for post in posts:
         try:
             process_fetched_post(
@@ -173,7 +180,7 @@ def _process_posts(
                 rewrite_config=config.rewrite,
                 max_post_age_hours=config.monitoring.max_post_age_hours,
                 filters_enabled=settings.filters_enabled,
-                images_config=config.images,
+                images_config=images_config,
                 watermark_config=watermark_config,
                 headline_card_config=headline_card,
                 image_providers=image_providers,
@@ -181,6 +188,7 @@ def _process_posts(
                 image_search_providers=settings.image_providers_order,
                 rewrite_prompt=settings.rewrite_prompt or "rewrite",
                 rewrite_max_length=settings.rewrite_max_length,
+                split_collage=settings.split_collage,
             )
         except Exception:
             logger.exception(
