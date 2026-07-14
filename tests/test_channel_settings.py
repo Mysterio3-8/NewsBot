@@ -79,6 +79,21 @@ def test_to_json_roundtrip_with_logo_and_design():
     assert ChannelSettings.from_json(original.to_json()) == original
 
 
+def test_from_json_reads_rewrite_prompt_and_max_length():
+    s = ChannelSettings.from_json(
+        '{"filters_enabled": false, "rewrite_prompt": "rewrite_kino", "rewrite_max_length": 1200}'
+    )
+    assert s.rewrite_prompt == "rewrite_kino"
+    assert s.rewrite_max_length == 1200
+
+
+def test_to_json_roundtrip_with_rewrite_overrides():
+    original = ChannelSettings(
+        filters_enabled=False, rewrite_prompt="rewrite_kino", rewrite_max_length=1200
+    )
+    assert ChannelSettings.from_json(original.to_json()) == original
+
+
 def test_logo_and_design_default_none():
     s = ChannelSettings.from_json(None)
     assert s.logo_path is None

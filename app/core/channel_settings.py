@@ -49,6 +49,10 @@ class ChannelSettings:
     """Имя своего промпта рерайта канала (напр. "rewrite_kino" — красивый подробный
     кино-стиль). None → новостной "rewrite"."""
 
+    rewrite_max_length: int | None = None
+    """Потолок длины рерайта канала. None → длина оригинала (как у Новостей). Кино —
+    больше (подробнее, не сокращая смысл)."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -64,6 +68,7 @@ class ChannelSettings:
             logo_path=data.get("logo_path"),
             photo_design=data.get("photo_design"),
             rewrite_prompt=data.get("rewrite_prompt"),
+            rewrite_max_length=data.get("rewrite_max_length"),
         )
 
     def to_json(self) -> str:
@@ -84,4 +89,6 @@ class ChannelSettings:
             payload["photo_design"] = self.photo_design
         if self.rewrite_prompt is not None:
             payload["rewrite_prompt"] = self.rewrite_prompt
+        if self.rewrite_max_length is not None:
+            payload["rewrite_max_length"] = self.rewrite_max_length
         return json.dumps(payload, ensure_ascii=False)

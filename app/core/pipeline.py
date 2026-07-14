@@ -31,7 +31,7 @@ from app.core.images.providers.base import ImageProvider
 from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
-from app.core.images.promo_banner import has_promo_banner
+from app.core.images.promo_banner import crop_to_clean_frame, has_promo_banner
 from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
@@ -75,6 +75,7 @@ def process_fetched_post(
     image_query_mode: str = "generic",
     image_search_providers: list[str] | None = None,
     rewrite_prompt: str = "rewrite",
+    rewrite_max_length: int | None = None,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -159,10 +160,10 @@ def process_fetched_post(
         source=source.name,
         style=rewrite_config.style,
         # Объём рерайта ≈ как у оригинала (запрос пользователя 2026-07-09: "по объёму
-        # примерно по оригиналу, не сокращая и не добавляя"). Потолок = длина исходника:
-        # не заставляет ужимать (смысл сохраняется) и не даёт раздувать вдвое (раньше
-        # был max(900, len) — LLM растягивал короткие посты до 900). Промпт держит длину.
-        max_length=len(post.text),
+        # Новости: потолок = длина исходника (не ужимать, не раздувать). Кино:
+        # rewrite_max_length из настроек канала (подробнее, не сокращая смысл —
+        # запрос пользователя 2026-07-14).
+        max_length=rewrite_max_length if rewrite_max_length else len(post.text),
         include_hashtags=rewrite_config.include_hashtags,
         prompt_name=rewrite_prompt,
     )
@@ -427,11 +428,16 @@ def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> 
             continue
 
         # Ярко-жёлтая промо-плашка ("ищи в комментариях") — детектим по цвету
-        # детерминированно (без vision) и НЕ берём фото: блюром её незаметно не убрать,
-        # обрезкой из центра тоже (запрос пользователя 2026-07-14). Дёшево + не тратит
-        # vision-лимит на заведомо негодные кадры.
+        # детерминированно (без vision). Запрос пользователя 2026-07-14: ЛУЧШЕ обрезать
+        # до одного чистого кадра (кино-фото — коллаж из 2 кадров, плашка на одном);
+        # если так не изолировать (плашка через середину) — фото НЕ берём.
         if has_promo_banner(item):
-            logger.info("Фото %s: чужая промо-плашка (жёлтая), не беру", item)
+            cropped = crop_to_clean_frame(item)
+            if cropped is not None:
+                logger.info("Фото %s: плашка обрезана до чистого кадра → %s", item, cropped)
+                kept.append(cropped)
+            else:
+                logger.info("Фото %s: плашку не изолировать кропом, не беру", item)
             continue
 
         regions = locate_foreign_watermark(llm_client, Path(item))

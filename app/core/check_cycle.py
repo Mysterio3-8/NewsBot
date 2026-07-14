@@ -180,6 +180,7 @@ def _process_posts(
                 image_query_mode=settings.image_query_mode,
                 image_search_providers=settings.image_providers_order,
                 rewrite_prompt=settings.rewrite_prompt or "rewrite",
+                rewrite_max_length=settings.rewrite_max_length,
             )
         except Exception:
             logger.exception(
