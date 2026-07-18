@@ -135,3 +135,27 @@ def test_weekly_repost_roundtrip():
     restored = ChannelSettings.from_json(original.to_json())
     assert restored.weekly_repost is True
     assert restored == original
+
+
+def test_daily_video_youtube_channels_default_empty():
+    s = ChannelSettings.from_json("{}")
+    assert s.daily_video_youtube_channels == []
+    assert s.daily_video_group is None
+
+
+def test_daily_video_youtube_channels_roundtrip():
+    original = ChannelSettings(
+        filters_enabled=False,
+        daily_video_youtube_channels=["https://www.youtube.com/@mmalive1830"],
+    )
+    restored = ChannelSettings.from_json(original.to_json())
+    assert restored.daily_video_youtube_channels == ["https://www.youtube.com/@mmalive1830"]
+    assert restored == original
+
+
+def test_daily_video_group_can_be_explicitly_cleared():
+    """merge_channel_settings в seed_channels пишет daily_video_group=None явным ключом
+    при переходе с VK-источника на YouTube — from_json должен читать это как None."""
+    s = ChannelSettings.from_json('{"daily_video_group": null, "daily_video_youtube_channels": ["x"]}')
+    assert s.daily_video_group is None
+    assert s.daily_video_youtube_channels == ["x"]

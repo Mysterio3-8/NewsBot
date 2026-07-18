@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -69,8 +69,16 @@ class ChannelSettings:
     Кино → True."""
 
     daily_video_group: int | None = None
-    """VK group_id источника для ежедневного видео-репоста (одно видео/день: публикация
-    в наш канал + нарезка на клипы). None → фича выключена для канала. Кино → 223779047."""
+    """VK group_id источника для ежедневного видео-репоста. Резервный путь — запрос
+    пользователя 2026-07-18: VK жёстко троттлит видео-CDN для датацентр-IP VPS (скорость
+    падает до единиц КБ/с при обычном канале VPS 200+ МБ/с), поэтому основной источник —
+    daily_video_youtube_channels. None → VK-путь не используется."""
+
+    daily_video_youtube_channels: list[str] = field(default_factory=list)
+    """Список YouTube-каналов (URL, напр. "https://www.youtube.com/@mmalive1830") —
+    основной источник ежедневного видео-репоста. Проверяются по порядку, берётся первое
+    ещё не публиковавшееся видео самого свежего из них. Пусто → YouTube-путь не
+    используется (тогда фолбэк на daily_video_group, если задан)."""
 
     daily_clip_count: int = 3
     """Сколько вертикальных клипов нарезать из ежедневного видео."""
@@ -102,6 +110,7 @@ class ChannelSettings:
             uniquify_images=data.get("uniquify_images", False),
             weekly_repost=data.get("weekly_repost", False),
             daily_video_group=data.get("daily_video_group"),
+            daily_video_youtube_channels=data.get("daily_video_youtube_channels", []),
             daily_clip_count=data.get("daily_clip_count", 3),
             daily_clip_seconds=data.get("daily_clip_seconds", 35),
             daily_clip_min_gap_seconds=data.get("daily_clip_min_gap_seconds", 120),
@@ -137,6 +146,8 @@ class ChannelSettings:
             payload["weekly_repost"] = True
         if self.daily_video_group is not None:
             payload["daily_video_group"] = self.daily_video_group
+        if self.daily_video_youtube_channels:
+            payload["daily_video_youtube_channels"] = self.daily_video_youtube_channels
         if self.daily_clip_count != 3:
             payload["daily_clip_count"] = self.daily_clip_count
         if self.daily_clip_seconds != 35:

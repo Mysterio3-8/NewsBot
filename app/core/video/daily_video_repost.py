@@ -1,12 +1,16 @@
-"""Ежедневный видео-репост: одно видео из VK-группы-источника → наш канал + клипы.
+"""Ежедневный видео-репост: одно видео с YouTube-канала (или VK-группы) → наш канал + клипы.
 
-Раз в день (для каналов с настройкой daily_video_group): берём самое свежее ещё не
-публиковавшееся видео источника, скачиваем (480/720p), AI переписывает название и
-описание (если они есть), публикуем в наш канал видеозаписью + постом с видео, режем
+Раз в день (для каналов с daily_video_youtube_channels и/или daily_video_group): берём
+самое свежее ещё не публиковавшееся видео источника, скачиваем, AI переписывает название
+и описание (если они есть), публикуем в наш канал видеозаписью + постом с видео, режем
 файл на N вертикальных клипов и планируем их публикацию в случайное время по остатку
 дня, после чего скачанный файл удаляется с диска. Публикация клипов — отдельным
 частым джобом по плану из БД (переживает рестарт сервиса).
-"""
+
+Источник по умолчанию — YouTube (запрос пользователя 2026-07-18): VK жёстко троттлит
+видео-CDN для датацентр-IP VPS (скорость падает до единиц КБ/с при обычном канале VPS
+200+ МБ/с) — полная докачка растягивалась бы на многие часы. VK-группа оставлена как
+резервный путь (код рабочий), проверяется только если YouTube-каналы не настроены."""
 from __future__ import annotations
 
 import datetime
@@ -22,7 +26,13 @@ from app.core.publishing.footer import FooterLinks
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
 from app.core.video.clip_cutter import cut_clips
-from app.core.video.video_source import download_video, pick_unreposted, source_video_from_item
+from app.core.video.video_source import (
+    SourceVideo,
+    download_video,
+    pick_unreposted,
+    pick_unreposted_youtube,
+    source_video_from_item,
+)
 from app.db.models import Channel
 from app.db.repository import Repository
 from app.paths import OUTPUT_DIR
@@ -67,11 +77,35 @@ def plan_clip_times(
     return times
 
 
+def _pick_video(
+    repo: Repository, channel: Channel, settings: ChannelSettings, vk_fetcher: VKFetcher | None
+) -> SourceVideo | None:
+    """YouTube-каналы проверяются по порядку первыми (основной источник); VK-группа —
+    только если ни один YouTube-канал не настроен (резервный путь)."""
+    reposted = repo.list_reposted_video_refs(channel.id)
+    for channel_url in settings.daily_video_youtube_channels:
+        try:
+            video = pick_unreposted_youtube(channel_url, reposted)
+        except Exception:
+            logger.exception("Видео-репост [%s]: YouTube-канал %s недоступен", channel.name, channel_url)
+            continue
+        if video is not None:
+            return video
+
+    if settings.daily_video_group is not None and vk_fetcher is not None:
+        videos = [
+            source_video_from_item(item)
+            for item in vk_fetcher.fetch_group_videos(settings.daily_video_group)
+        ]
+        return pick_unreposted(videos, reposted)
+    return None
+
+
 def run_daily_video_repost(
     repo: Repository,
     channel: Channel,
     *,
-    vk_fetcher: VKFetcher,
+    vk_fetcher: VKFetcher | None,
     vk_publisher: VKPublisher,
     llm_client: LLMClient,
     footer_links: FooterLinks | None,
@@ -80,14 +114,11 @@ def run_daily_video_repost(
     """Полный дневной цикл одного канала. Ошибки скачивания/нарезки не откатывают уже
     сделанную публикацию видео — репост важнее клипов."""
     settings = ChannelSettings.from_json(channel.settings_json)
-    if settings.daily_video_group is None or not channel.vk_destination:
+    has_source = settings.daily_video_youtube_channels or settings.daily_video_group is not None
+    if not has_source or not channel.vk_destination:
         return
 
-    videos = [
-        source_video_from_item(item)
-        for item in vk_fetcher.fetch_group_videos(settings.daily_video_group)
-    ]
-    video = pick_unreposted(videos, repo.list_reposted_video_refs(channel.id))
+    video = _pick_video(repo, channel, settings, vk_fetcher)
     if video is None:
         logger.info("Видео-репост [%s]: новых видео в источнике нет", channel.name)
         return

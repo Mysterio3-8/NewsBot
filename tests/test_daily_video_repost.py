@@ -12,6 +12,7 @@ from app.core.video.daily_video_repost import (
     publish_due_clips,
     run_daily_video_repost,
 )
+from app.core.video.video_source import SourceVideo
 from app.db.repository import Repository, init_db, make_engine
 
 
@@ -42,7 +43,17 @@ def _repo(tmp_path) -> Repository:
 
 
 def _kino_channel(repo, *, group=223779047):
+    """Канал на резервном VK-пути (без youtube-каналов) — фолбэк на daily_video_group."""
     settings = ChannelSettings(daily_video_group=group, daily_clip_count=2)
+    return repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+
+
+def _kino_channel_youtube(repo, *, channels=("https://www.youtube.com/@mmalive1830",), group=None):
+    settings = ChannelSettings(
+        daily_video_youtube_channels=list(channels), daily_video_group=group, daily_clip_count=2
+    )
     return repo.create_channel(
         name="Кино", vk_destination="240120678", settings_json=settings.to_json()
     )
@@ -86,7 +97,7 @@ def test_plan_clip_times_after_window_falls_back_to_spacing():
 
 # --- run_daily_video_repost ---
 
-def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None):
+def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None, youtube_video=None):
     downloaded = tmp_path / "film.mp4"
 
     def fake_download(video, dest_dir, **kwargs):
@@ -101,10 +112,19 @@ def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None):
             result.append(ClipCut(start_seconds=start, end_seconds=end, path=clip))
         return result
 
+    youtube_patch = (
+        patch("app.core.video.daily_video_repost.pick_unreposted_youtube", return_value=youtube_video)
+        if youtube_video is not None
+        else patch("app.core.video.daily_video_repost.pick_unreposted_youtube")
+    )
+
     with patch("app.core.video.daily_video_repost.download_video", side_effect=fake_download), \
          patch("app.core.video.daily_video_repost.cut_clips", side_effect=fake_cut_clips), \
          patch("app.core.video.daily_video_repost.rewrite_video_texts",
-               return_value=("Новое название", "Новое описание")):
+               return_value=("Новое название", "Новое описание")), \
+         youtube_patch as youtube_mock:
+        if youtube_video is None:
+            youtube_mock.return_value = None  # по умолчанию youtube пуст — идём в VK-фолбэк
         run_daily_video_repost(
             repo, channel,
             vk_fetcher=fetcher, vk_publisher=publisher,
@@ -153,6 +173,68 @@ def test_failed_publish_not_recorded_and_file_removed(tmp_path):
 
     assert repo.list_reposted_video_refs(channel.id) == set()  # завтра попробуем снова
     assert not downloaded.exists()
+
+
+def _youtube_video(video_id="abc123", title="КЗК 2026", description="Боевик про кадетов"):
+    return SourceVideo(
+        ref=f"youtube_{video_id}",
+        title=title,
+        description=description,
+        duration_seconds=5400,
+        direct_urls={},
+        page_url=f"https://www.youtube.com/watch?v={video_id}",
+    )
+
+
+def test_youtube_source_publishes_and_dedups_by_youtube_ref(tmp_path):
+    """Основной сценарий (запрос пользователя 2026-07-18): видео берётся с YouTube-канала,
+    не из VK — VK жёстко троттлит видео-CDN для датацентр-IP."""
+    repo = _repo(tmp_path)
+    channel = _kino_channel_youtube(repo)
+    publisher = FakePublisher()
+
+    downloaded = _run(
+        repo, channel, fetcher=None, publisher=publisher, tmp_path=tmp_path,
+        cuts=[(100.0, 135.0)], youtube_video=_youtube_video(),
+    )
+
+    assert publisher.calls[0]["video_title"] == "Новое название"
+    assert repo.list_reposted_video_refs(channel.id) == {"youtube_abc123"}
+    assert not downloaded.exists()
+
+
+def test_youtube_preferred_over_vk_when_both_configured(tmp_path):
+    """Если заданы и youtube-каналы, и daily_video_group — youtube в приоритете, VK
+    fetcher вообще не должен дёргаться."""
+    repo = _repo(tmp_path)
+    channel = _kino_channel_youtube(repo, group=223779047)
+
+    class ExplodingFetcher:
+        def fetch_group_videos(self, group_id, *, count=100):
+            raise AssertionError("VK не должен вызываться, когда youtube даёт видео")
+
+    publisher = FakePublisher()
+    _run(
+        repo, channel, fetcher=ExplodingFetcher(), publisher=publisher, tmp_path=tmp_path,
+        youtube_video=_youtube_video(),
+    )
+
+    assert repo.list_reposted_video_refs(channel.id) == {"youtube_abc123"}
+
+
+def test_falls_back_to_vk_when_youtube_has_no_new_video(tmp_path):
+    """Youtube настроен, но новых видео нет (всё уже опубликовано / канал недоступен) —
+    и задана VK-группа — используется VK-фолбэк."""
+    repo = _repo(tmp_path)
+    channel = _kino_channel_youtube(repo, group=223779047)
+    publisher = FakePublisher()
+
+    _run(
+        repo, channel, fetcher=FakeFetcher([_vk_item(10)]), publisher=publisher, tmp_path=tmp_path,
+        youtube_video=None,
+    )
+
+    assert repo.list_reposted_video_refs(channel.id) == {"-223779047_10"}
 
 
 def test_channel_without_daily_video_group_is_ignored(tmp_path):

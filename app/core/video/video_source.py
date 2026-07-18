@@ -1,4 +1,10 @@
-"""Выбор и скачивание видео из VK-группы-источника для ежедневного видео-репоста."""
+"""Выбор и скачивание видео для ежедневного видео-репоста.
+
+Источники: YouTube-канал (основной — запрос пользователя 2026-07-18: VK жёстко
+троттлит видео-CDN для датацентр-IP VPS — реальная скорость падает до единиц КБ/с,
+хотя обычный канал VPS отдаёт 200+ МБ/с; полная докачка фильма растягивалась бы на
+многие часы) и VK-группа (оставлена как резервный путь, код рабочий).
+"""
 from __future__ import annotations
 
 import logging
@@ -24,14 +30,14 @@ class VideoDownloadError(Exception):
 
 @dataclass(frozen=True)
 class SourceVideo:
-    ref: str  # "ownerid_videoid" — ключ дедупа в reposted_videos
-    owner_id: int
-    video_id: int
+    ref: str  # "ownerid_videoid" (VK) или "youtube_<id>" — ключ дедупа в reposted_videos
     title: str
     description: str
     duration_seconds: int
-    direct_urls: dict[int, str]  # высота (480/720...) → прямая mp4-ссылка из video.get
-    page_url: str  # страница видео — вход для yt-dlp, если прямых ссылок нет
+    direct_urls: dict[int, str]  # высота (480/720...) → прямая mp4-ссылка (только VK)
+    page_url: str  # страница видео — вход для yt-dlp
+    owner_id: int | None = None  # только VK
+    video_id: int | None = None  # только VK
 
 
 def source_video_from_item(item: dict[str, Any]) -> SourceVideo:
@@ -53,6 +59,72 @@ def source_video_from_item(item: dict[str, Any]) -> SourceVideo:
         direct_urls=direct_urls,
         page_url=f"https://vk.com/video{owner_id}_{video_id}",
     )
+
+
+def list_youtube_channel_videos(channel_url: str, *, count: int = 20) -> list[dict[str, str]]:
+    """Список видео канала (новые первыми, "плоское" извлечение — без скачивания и без
+    полных метаданных каждого видео, быстрый один запрос). Возвращает
+    [{"id", "title", "url"}, ...]."""
+    import yt_dlp
+
+    videos_url = channel_url.rstrip("/") + "/videos"
+    options = {
+        "extract_flat": "in_playlist",
+        "quiet": True,
+        "no_warnings": True,
+        "playlistend": count,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(videos_url, download=False)
+    entries = info.get("entries") or [] if info else []
+    return [
+        {
+            "id": entry["id"],
+            "title": entry.get("title") or "",
+            "url": entry.get("url") or f"https://www.youtube.com/watch?v={entry['id']}",
+        }
+        for entry in entries
+        if entry and entry.get("id")
+    ]
+
+
+def fetch_youtube_video_details(video_id: str) -> SourceVideo:
+    """Полные метаданные одного YouTube-видео (название/описание/длительность) без
+    скачивания самого файла — нужны для AI-рерайта и решения "публиковать ли без AI"."""
+    import yt_dlp
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    options = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return SourceVideo(
+        ref=f"youtube_{video_id}",
+        title=(info.get("title") or "").strip(),
+        description=(info.get("description") or "").strip(),
+        duration_seconds=int(info.get("duration") or 0),
+        direct_urls={},
+        page_url=url,
+    )
+
+
+def pick_unreposted_youtube(
+    channel_url: str, reposted_refs: set[str], *, count: int = 20
+) -> SourceVideo | None:
+    """Самое свежее видео канала, которое ещё не публиковалось. Полные метаданные
+    запрашиваются только для кандидата (не для всего списка — экономия запросов)."""
+    for entry in list_youtube_channel_videos(channel_url, count=count):
+        ref = f"youtube_{entry['id']}"
+        if ref in reposted_refs:
+            continue
+        try:
+            video = fetch_youtube_video_details(entry["id"])
+        except Exception as error:
+            logger.warning("YouTube-видео %s: не удалось получить метаданные: %s", ref, error)
+            continue
+        if video.duration_seconds <= 0:
+            continue
+        return video
+    return None
 
 
 def pick_unreposted(

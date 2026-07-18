@@ -51,7 +51,10 @@ def _ensure_source(repo: Repository, channel: Channel, *, type: str, name: str, 
     print(f"  добавлен источник {name} ({type} {url})")
 
 
-DAILY_VIDEO_SOURCE_GROUP = 223779047  # vkvideo.ru/@club223779047 — фильмы для репоста
+# Живой прогон 2026-07-18 показал: VK жёстко троттлит видео-CDN для датацентр-IP VPS
+# (скорость падает до единиц КБ/с при обычном канале VPS 200+ МБ/с) — докачка фильма
+# растягивалась бы на многие часы. Источник видео переключён на YouTube пользователя.
+DAILY_VIDEO_YOUTUBE_CHANNELS = ["https://www.youtube.com/@mmalive1830"]
 
 
 def seed_cinema(repo: Repository) -> None:
@@ -64,7 +67,7 @@ def seed_cinema(repo: Repository) -> None:
         max_posts_per_day=4,
         min_interval_minutes=300,  # 5ч между постами → 4/день, без пачки
         tg_footer_url="https://t.me/kinobestfilmss",
-        daily_video_group=DAILY_VIDEO_SOURCE_GROUP,
+        daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
     )
     channel = _ensure_channel(
         repo,
@@ -77,13 +80,14 @@ def seed_cinema(repo: Repository) -> None:
     )
     _ensure_source(repo, channel, type="vk", name="Кинопремьеры 2026", url="58170807")
     # ТЗ 2026-07-18: рерайт-постов 4/день (было 6) + ежедневный видео-репост с нарезкой
-    # на клипы из группы-источника фильмов.
+    # на клипы. daily_video_group снят (2026-07-18, замена на YouTube — см. выше).
     merge_channel_settings(
         repo,
         channel,
         max_posts_per_day=4,
         min_interval_minutes=300,
-        daily_video_group=DAILY_VIDEO_SOURCE_GROUP,
+        daily_video_group=None,
+        daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
     )
 
 

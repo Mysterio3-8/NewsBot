@@ -299,18 +299,18 @@ def build_daily_video_job(
     vk_token_bucket: TokenBucket | None = None,
     vk_cooldown_bucket: TokenBucket | None = None,
 ):
-    """Раз в день: для каналов с daily_video_group — репост одного видео из группы-
-    источника + нарезка клипов (ТЗ 2026-07-18, Кино). Скачивание/ffmpeg — блокирующие
-    и долгие, уводим в поток, чтобы не вешать цикл проверки/публикации."""
+    """Раз в день: для каналов с daily_video_youtube_channels (основной источник) и/или
+    daily_video_group (резервный, VK — троттлится для датацентр-IP, см. video_source.py)
+    — репост одного видео + нарезка клипов (ТЗ 2026-07-18, Кино). Скачивание/ffmpeg —
+    блокирующие и долгие, уводим в поток, чтобы не вешать цикл проверки/публикации.
+    vk_fetcher нужен только для VK-пути — YouTube читается напрямую через yt-dlp,
+    без VK_USER_TOKEN."""
     footer_links = build_footer_links_from_config(config.footer)
 
     async def daily_video_job() -> None:
-        if vk_fetcher is None:
-            logger.warning("Видео-репост пропущен: VK_USER_TOKEN не задан (нет фетчера)")
-            return
         for channel in repo.list_channels(enabled_only=True):
             settings = ChannelSettings.from_json(channel.settings_json)
-            if settings.daily_video_group is None:
+            if not settings.daily_video_youtube_channels and settings.daily_video_group is None:
                 continue
             publisher = build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
