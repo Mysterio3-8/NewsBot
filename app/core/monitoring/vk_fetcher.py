@@ -105,6 +105,17 @@ class VKFetcher:
             scores[item["id"]] = int(views) + int(likes)
         return scores
 
+    def fetch_group_videos(self, group_id: int, *, count: int = 100) -> list[dict[str, Any]]:
+        """Видеозаписи группы (video.get, новые первыми) — для ежедневного видео-репоста.
+        Личный VK_USER_TOKEN: групповым токеном чужая группа недоступна. Возвращает сырые
+        item'ы VK (id, owner_id, title, description, duration, files...)."""
+        if self._cooldown is not None:
+            self._cooldown.wait(self._bucket_key)
+        if self._bucket is not None:
+            self._bucket.wait(self._bucket_key)
+        response = self._api.video.get(owner_id=-abs(group_id), count=count)
+        return response.get("items", [])
+
     def fetch_recent_posts(
         self,
         group_id: int,

@@ -1,0 +1,234 @@
+"""Ежедневный видео-репост: оркестрация, план клипов по дню, публикатор due-клипов."""
+import datetime
+import random
+from pathlib import Path
+from unittest.mock import patch
+
+from app.core.channel_settings import ChannelSettings
+from app.core.publishing.vk_publisher import VKPublishResult
+from app.core.video.clip_cutter import ClipCut
+from app.core.video.daily_video_repost import (
+    plan_clip_times,
+    publish_due_clips,
+    run_daily_video_repost,
+)
+from app.db.repository import Repository, init_db, make_engine
+
+
+class FakeFetcher:
+    def __init__(self, items):
+        self._items = items
+
+    def fetch_group_videos(self, group_id, *, count=100):
+        return self._items
+
+
+class FakePublisher:
+    def __init__(self, success=True):
+        self.success = success
+        self.calls = []
+
+    def publish(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.success:
+            return VKPublishResult(success=False, post_id=None, error="boom")
+        return VKPublishResult(success=True, post_id=len(self.calls), error=None)
+
+
+def _repo(tmp_path) -> Repository:
+    engine = make_engine(tmp_path / "daily.db")
+    init_db(engine)
+    return Repository(engine)
+
+
+def _kino_channel(repo, *, group=223779047):
+    settings = ChannelSettings(daily_video_group=group, daily_clip_count=2)
+    return repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+
+
+def _vk_item(video_id, title="Интерстеллар"):
+    return {
+        "id": video_id,
+        "owner_id": -223779047,
+        "title": title,
+        "description": "Описание фильма",
+        "duration": 7200,
+        "files": {"mp4_480": "http://cdn/480.mp4"},
+    }
+
+
+# --- plan_clip_times ---
+
+def test_plan_clip_times_within_window_and_spaced():
+    now = datetime.datetime(2026, 7, 18, 9, 0)  # 09:00 UTC, окно до 20:00
+    times = plan_clip_times(now, 3, rng=random.Random(5))
+
+    assert len(times) == 3
+    assert times == sorted(times)
+    for moment in times:
+        assert moment >= now + datetime.timedelta(minutes=30)
+        assert moment <= datetime.datetime(2026, 7, 18, 20, 0)
+    for earlier, later in zip(times, times[1:]):
+        assert later - earlier >= datetime.timedelta(minutes=45)
+
+
+def test_plan_clip_times_after_window_falls_back_to_spacing():
+    now = datetime.datetime(2026, 7, 18, 21, 30)  # окно дня уже кончилось
+    times = plan_clip_times(now, 3, rng=random.Random(5))
+
+    assert len(times) == 3
+    assert times[0] == now + datetime.timedelta(minutes=30)
+    for earlier, later in zip(times, times[1:]):
+        assert later - earlier == datetime.timedelta(minutes=45)
+
+
+# --- run_daily_video_repost ---
+
+def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None):
+    downloaded = tmp_path / "film.mp4"
+
+    def fake_download(video, dest_dir, **kwargs):
+        downloaded.write_bytes(b"video")
+        return downloaded
+
+    def fake_cut_clips(video_path, **kwargs):
+        result = []
+        for index, (start, end) in enumerate(cuts or []):
+            clip = tmp_path / f"clip_{index}.mp4"
+            clip.write_bytes(b"clip")
+            result.append(ClipCut(start_seconds=start, end_seconds=end, path=clip))
+        return result
+
+    with patch("app.core.video.daily_video_repost.download_video", side_effect=fake_download), \
+         patch("app.core.video.daily_video_repost.cut_clips", side_effect=fake_cut_clips), \
+         patch("app.core.video.daily_video_repost.rewrite_video_texts",
+               return_value=("Новое название", "Новое описание")):
+        run_daily_video_repost(
+            repo, channel,
+            vk_fetcher=fetcher, vk_publisher=publisher,
+            llm_client=None, footer_links=None, rng=random.Random(1),
+        )
+    return downloaded
+
+
+def test_full_daily_cycle_publishes_records_and_cleans_up(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    publisher = FakePublisher()
+
+    downloaded = _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), publisher, tmp_path,
+        cuts=[(100.0, 135.0), (900.0, 935.0)],
+    )
+
+    # Видео опубликовано с AI-название/описанием и записано в дедуп.
+    assert publisher.calls[0]["video_title"] == "Новое название"
+    assert "Новое название" in publisher.calls[0]["text"]
+    assert repo.list_reposted_video_refs(channel.id) == {"-223779047_10"}
+    # Клипы запланированы с интервалами (защита от повторной нарезки тех же участков).
+    assert repo.list_clip_intervals("-223779047_10") == [(100.0, 135.0), (900.0, 935.0)]
+    # Скачанный фильм удалён с диска (ТЗ: не занимать место).
+    assert not downloaded.exists()
+
+
+def test_second_run_skips_already_reposted_video(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    fetcher = FakeFetcher([_vk_item(10)])
+
+    _run(repo, channel, fetcher, FakePublisher(), tmp_path)
+    publisher2 = FakePublisher()
+    _run(repo, channel, fetcher, publisher2, tmp_path)
+
+    assert publisher2.calls == []  # единственное видео уже публиковалось — пропуск
+
+
+def test_failed_publish_not_recorded_and_file_removed(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+
+    downloaded = _run(repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(success=False), tmp_path)
+
+    assert repo.list_reposted_video_refs(channel.id) == set()  # завтра попробуем снова
+    assert not downloaded.exists()
+
+
+def test_channel_without_daily_video_group_is_ignored(tmp_path):
+    repo = _repo(tmp_path)
+    channel = repo.create_channel(name="Новости", vk_destination="1", settings_json="{}")
+    publisher = FakePublisher()
+
+    run_daily_video_repost(
+        repo, channel,
+        vk_fetcher=FakeFetcher([_vk_item(10)]), vk_publisher=publisher,
+        llm_client=None, footer_links=None,
+    )
+
+    assert publisher.calls == []
+
+
+# --- publish_due_clips ---
+
+def _schedule_clip(repo, channel, tmp_path, *, minutes_ago, name="clip.mp4"):
+    clip_file = tmp_path / name
+    clip_file.write_bytes(b"clip")
+    return repo.create_clip_segment(
+        channel_id=channel.id,
+        video_ref="-223779047_10",
+        start_seconds=10.0,
+        end_seconds=45.0,
+        clip_path=str(clip_file),
+        text="Интерстеллар",
+        scheduled_at=datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes_ago),
+    ), clip_file
+
+
+def test_due_clip_published_marked_and_file_deleted(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    clip, clip_file = _schedule_clip(repo, channel, tmp_path, minutes_ago=5)
+    publisher = FakePublisher()
+
+    publish_due_clips(repo, vk_publisher_for=lambda ch: publisher)
+
+    assert len(publisher.calls) == 1
+    assert publisher.calls[0]["text"] == "Интерстеллар"
+    assert repo.list_due_clips(datetime.datetime.utcnow()) == []  # помечен опубликованным
+    assert not clip_file.exists()
+
+
+def test_future_clip_not_published_yet(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    _schedule_clip(repo, channel, tmp_path, minutes_ago=-60)  # через час
+    publisher = FakePublisher()
+
+    publish_due_clips(repo, vk_publisher_for=lambda ch: publisher)
+
+    assert publisher.calls == []
+
+
+def test_failed_clip_stays_in_plan_for_retry(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    _, clip_file = _schedule_clip(repo, channel, tmp_path, minutes_ago=5)
+
+    publish_due_clips(repo, vk_publisher_for=lambda ch: FakePublisher(success=False))
+
+    assert len(repo.list_due_clips(datetime.datetime.utcnow())) == 1  # ретрай следующим прогоном
+    assert clip_file.exists()
+
+
+def test_expired_clip_removed_from_plan(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    _, clip_file = _schedule_clip(repo, channel, tmp_path, minutes_ago=60 * 25)  # сутки+
+    publisher = FakePublisher()
+
+    publish_due_clips(repo, vk_publisher_for=lambda ch: publisher)
+
+    assert publisher.calls == []  # протухший клип не постим и не держим в плане
+    assert repo.list_due_clips(datetime.datetime.utcnow()) == []
+    assert not clip_file.exists()

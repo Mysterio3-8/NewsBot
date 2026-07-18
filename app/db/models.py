@@ -150,6 +150,43 @@ class RejectedPost(Base):
     raw_post: Mapped["RawPost"] = relationship(back_populates="rejections")
 
 
+class RepostedVideo(Base):
+    """Видео из группы-источника, уже опубликованное в наш канал ежедневным
+    видео-джобом (защита от повторной публикации). video_ref = "owner_id_video_id"."""
+
+    __tablename__ = "reposted_videos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    video_ref: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+
+
+class ClipSegment(Base):
+    """Клип, нарезанный из видео ежедневного репоста. Интервалы (start/end) хранятся,
+    чтобы повторная нарезка того же видео не пересекалась с уже созданными клипами.
+    scheduled_at/published_at — план публикации по дню: публикатор клипов (interval-джоб)
+    находит due-клипы по scheduled_at и постит их — план переживает рестарт сервиса."""
+
+    __tablename__ = "clip_segments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    video_ref: Mapped[str] = mapped_column(String(100))
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    clip_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scheduled_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

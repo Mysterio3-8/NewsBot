@@ -33,7 +33,7 @@ from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
 from app.core.images.collage_splitter import split_vertical_collage
-from app.core.images.promo_banner import crop_to_clean_frame, has_promo_banner
+from app.core.images.promo_banner import has_promo_banner
 from app.core.images.watermark_detector import locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
@@ -447,16 +447,12 @@ def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> 
             continue
 
         # Ярко-жёлтая промо-плашка ("ищи в комментариях") — детектим по цвету
-        # детерминированно (без vision). Запрос пользователя 2026-07-14: ЛУЧШЕ обрезать
-        # до одного чистого кадра (кино-фото — коллаж из 2 кадров, плашка на одном);
-        # если так не изолировать (плашка через середину) — фото НЕ берём.
+        # детерминированно (без vision). Запрос пользователя 2026-07-18: кадр с плашкой
+        # (целой или обрезанным куском после расклейки коллажа) НЕ брать вообще —
+        # раньше пытались спасти обрезкой до «чистой половины», и кусок плашки иногда
+        # оставался в итоговой картинке.
         if has_promo_banner(item):
-            cropped = crop_to_clean_frame(item)
-            if cropped is not None:
-                logger.info("Фото %s: плашка обрезана до чистого кадра → %s", item, cropped)
-                kept.append(cropped)
-            else:
-                logger.info("Фото %s: плашку не изолировать кропом, не беру", item)
+            logger.info("Фото %s: промо-плашка — кадр не берём", item)
             continue
 
         regions = locate_foreign_watermark(llm_client, Path(item))

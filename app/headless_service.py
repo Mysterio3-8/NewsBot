@@ -14,6 +14,7 @@ import logging
 import random
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config.loader import AppConfig
@@ -31,6 +32,7 @@ from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.publishing.weekly_repost import repost_best_post
+from app.core.video.daily_video_repost import publish_due_clips, run_daily_video_repost
 from app.core.scheduler import start_of_today_utc
 from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
@@ -288,6 +290,75 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKF
     return weekly_job
 
 
+def build_daily_video_job(
+    repo: Repository,
+    config: AppConfig,
+    llm_client: LLMClient,
+    vk_fetcher: VKFetcher | None,
+    *,
+    vk_token_bucket: TokenBucket | None = None,
+    vk_cooldown_bucket: TokenBucket | None = None,
+):
+    """Раз в день: для каналов с daily_video_group — репост одного видео из группы-
+    источника + нарезка клипов (ТЗ 2026-07-18, Кино). Скачивание/ffmpeg — блокирующие
+    и долгие, уводим в поток, чтобы не вешать цикл проверки/публикации."""
+    footer_links = build_footer_links_from_config(config.footer)
+
+    async def daily_video_job() -> None:
+        if vk_fetcher is None:
+            logger.warning("Видео-репост пропущен: VK_USER_TOKEN не задан (нет фетчера)")
+            return
+        for channel in repo.list_channels(enabled_only=True):
+            settings = ChannelSettings.from_json(channel.settings_json)
+            if settings.daily_video_group is None:
+                continue
+            publisher = build_vk_publisher_for_channel(
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
+            )
+            if publisher is None:
+                logger.warning("Видео-репост [%s]: VK publisher недоступен", channel.name)
+                continue
+            channel_footer = (
+                FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
+                if settings.tg_footer_url
+                else footer_links
+            )
+            try:
+                await asyncio.to_thread(
+                    run_daily_video_repost,
+                    repo,
+                    channel,
+                    vk_fetcher=vk_fetcher,
+                    vk_publisher=publisher,
+                    llm_client=llm_client,
+                    footer_links=channel_footer,
+                )
+            except Exception:
+                logger.exception("Видео-репост канала %s упал", channel.name)
+
+    return daily_video_job
+
+
+def build_clip_publish_job(
+    repo: Repository,
+    *,
+    vk_token_bucket: TokenBucket | None = None,
+    vk_cooldown_bucket: TokenBucket | None = None,
+):
+    """Каждые 10 минут: опубликовать клипы, чьё запланированное время пришло. План — в
+    БД (clip_segments), поэтому рестарт сервиса не теряет расписание клипов."""
+
+    async def clip_publish_job() -> None:
+        def publisher_for(channel: Channel):
+            return build_vk_publisher_for_channel(
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
+            )
+
+        await asyncio.to_thread(publish_due_clips, repo, vk_publisher_for=publisher_for)
+
+    return clip_publish_job
+
+
 async def run_forever(
     repo: Repository,
     config: AppConfig,
@@ -343,6 +414,22 @@ async def run_forever(
     scheduler.add_job(
         build_weekly_repost_job(repo, config, vk_fetcher),
         IntervalTrigger(weeks=1),
+    )
+    # Ежедневный видео-репост (каналы с daily_video_group, напр. Кино): cron 08:00 UTC
+    # (11:00 МСК) + джиттер до 2ч — время публикации случайное в окне 11:00-13:00 МСК.
+    scheduler.add_job(
+        build_daily_video_job(
+            repo, config, llm_client, vk_fetcher,
+            vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket,
+        ),
+        CronTrigger(hour=8, minute=0, jitter=2 * 3600),
+    )
+    # Публикатор клипов: каждые 10 мин постит клипы, чьё запланированное время пришло.
+    scheduler.add_job(
+        build_clip_publish_job(
+            repo, vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket
+        ),
+        IntervalTrigger(minutes=10),
     )
 
     scheduler.start()

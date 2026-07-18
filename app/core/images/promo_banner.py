@@ -1,13 +1,13 @@
-"""Детекция и удаление чужой промо-плашки на фото по ЦВЕТУ (без vision-LLM).
+"""Детекция чужой промо-плашки на фото по ЦВЕТУ (без vision-LLM).
 
 Источники вроде «Кинопремьеры» лепят на кадры яркую жёлтую плашку с текстом
 "СЕРИАЛ ИЩИ В КОММЕНТАРИЯХ" — чужое оформление, публиковать нельзя. Vision-детектор
 (Groq) на это ненадёжен (лимит 429). Плашка — плотный ярко-жёлтый прямоугольник,
 детектится по цвету детерминированно.
 
-Кино-фото часто = вертикальный коллаж из 2 кадров, плашка на одном из них. Запрос
-пользователя 2026-07-14: лучше ОБРЕЗАТЬ до одного чистого кадра, а не выбрасывать всё
-фото; если плашку так не изолировать (по центру/через оба кадра) — фото не брать.
+Запрос пользователя 2026-07-18: кадр с плашкой (в т.ч. её обрезанным куском после
+расклейки коллажа) НЕ используется вообще — раньше пытались спасти обрезкой до
+«чистой половины», и кусок плашки иногда оставался в итоговой картинке.
 """
 from __future__ import annotations
 
@@ -45,36 +45,3 @@ def has_promo_banner(image_path: Path | str) -> bool:
     except Exception:
         return False
     return _banner_bbox(np.asarray(image).astype(np.int16)) is not None
-
-
-def crop_to_clean_frame(image_path: Path | str) -> str | None:
-    """Обрезать вертикальный 2-кадровый коллаж до ЧИСТОГО кадра (той половины, где нет
-    плашки). Возвращает путь к обрезанному файлу. None — если плашки нет, ИЛИ она через
-    середину/оба кадра (кропом не изолировать → фото не брать).
-
-    Проверка после кропа: если в оставшейся половине плашка всё ещё есть — None."""
-    try:
-        image = Image.open(image_path).convert("RGB")
-    except Exception:
-        return None
-
-    bbox = _banner_bbox(np.asarray(image).astype(np.int16))
-    if bbox is None:
-        return None
-
-    _, y0, _, y1 = bbox
-    mid = image.height / 2
-    if y0 >= mid:  # плашка целиком в нижнем кадре → оставляем верхний
-        cropped = image.crop((0, 0, image.width, int(mid)))
-    elif y1 <= mid:  # плашка целиком в верхнем кадре → оставляем нижний
-        cropped = image.crop((0, int(mid), image.width, image.height))
-    else:  # через середину — одним кадром не изолировать
-        return None
-
-    if _banner_bbox(np.asarray(cropped).astype(np.int16)) is not None:
-        return None  # плашка залезает и в оставшуюся половину — не спасти кропом
-
-    path = Path(image_path)
-    out = path.with_name(f"{path.stem}_frame{path.suffix}")
-    cropped.save(out)
-    return str(out)

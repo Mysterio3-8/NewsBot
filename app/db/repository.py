@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.models import (
     Base,
     Channel,
+    ClipSegment,
     ProcessedPost,
     PostHistory,
     RawPost,
     RejectedPost,
+    RepostedVideo,
     Setting,
     Source,
 )
@@ -200,6 +202,80 @@ class Repository:
     def delete_source(self, source_id: int) -> None:
         with self._session_factory() as session:
             session.query(Source).filter(Source.id == source_id).delete()
+            session.commit()
+
+    # --- Ежедневный видео-репост + клипы ---
+
+    def add_reposted_video(self, *, channel_id: int, video_ref: str, title: str | None) -> None:
+        with self._session_factory() as session:
+            session.add(RepostedVideo(channel_id=channel_id, video_ref=video_ref, title=title))
+            session.commit()
+
+    def list_reposted_video_refs(self, channel_id: int) -> set[str]:
+        with self._session_factory() as session:
+            rows = (
+                session.query(RepostedVideo.video_ref)
+                .filter(RepostedVideo.channel_id == channel_id)
+                .all()
+            )
+            return {row[0] for row in rows}
+
+    def list_clip_intervals(self, video_ref: str) -> list[tuple[float, float]]:
+        """Интервалы уже нарезанных клипов этого видео — новые клипы не должны с ними
+        пересекаться (защита от повторной нарезки тех же участков)."""
+        with self._session_factory() as session:
+            rows = (
+                session.query(ClipSegment.start_seconds, ClipSegment.end_seconds)
+                .filter(ClipSegment.video_ref == video_ref)
+                .all()
+            )
+            return [(row[0], row[1]) for row in rows]
+
+    def create_clip_segment(
+        self,
+        *,
+        channel_id: int,
+        video_ref: str,
+        start_seconds: float,
+        end_seconds: float,
+        clip_path: str,
+        text: str | None,
+        scheduled_at: datetime.datetime,
+    ) -> ClipSegment:
+        with self._session_factory() as session:
+            clip = ClipSegment(
+                channel_id=channel_id,
+                video_ref=video_ref,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                clip_path=clip_path,
+                text=text,
+                scheduled_at=scheduled_at,
+            )
+            session.add(clip)
+            session.commit()
+            session.refresh(clip)
+            return clip
+
+    def list_due_clips(self, now: datetime.datetime) -> list[ClipSegment]:
+        """Клипы, чьё запланированное время публикации наступило, но ещё не опубликованы."""
+        with self._session_factory() as session:
+            return (
+                session.query(ClipSegment)
+                .filter(
+                    ClipSegment.published_at.is_(None),
+                    ClipSegment.scheduled_at.isnot(None),
+                    ClipSegment.scheduled_at <= now,
+                )
+                .order_by(ClipSegment.scheduled_at)
+                .all()
+            )
+
+    def mark_clip_published(self, clip_id: int) -> None:
+        with self._session_factory() as session:
+            session.query(ClipSegment).filter(ClipSegment.id == clip_id).update(
+                {ClipSegment.published_at: datetime.datetime.utcnow()}
+            )
             session.commit()
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:

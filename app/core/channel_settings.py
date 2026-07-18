@@ -68,6 +68,19 @@ class ChannelSettings:
     """Раз в неделю перезаливать лучший пост канала (по просмотрам+лайкам VK за 7 дней).
     Кино → True."""
 
+    daily_video_group: int | None = None
+    """VK group_id источника для ежедневного видео-репоста (одно видео/день: публикация
+    в наш канал + нарезка на клипы). None → фича выключена для канала. Кино → 223779047."""
+
+    daily_clip_count: int = 3
+    """Сколько вертикальных клипов нарезать из ежедневного видео."""
+
+    daily_clip_seconds: int = 35
+    """Длительность одного клипа, секунд."""
+
+    daily_clip_min_gap_seconds: int = 120
+    """Минимальный зазор между клипами внутри фильма (и от ранее нарезанных участков)."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -88,6 +101,10 @@ class ChannelSettings:
             split_collage=data.get("split_collage", False),
             uniquify_images=data.get("uniquify_images", False),
             weekly_repost=data.get("weekly_repost", False),
+            daily_video_group=data.get("daily_video_group"),
+            daily_clip_count=data.get("daily_clip_count", 3),
+            daily_clip_seconds=data.get("daily_clip_seconds", 35),
+            daily_clip_min_gap_seconds=data.get("daily_clip_min_gap_seconds", 120),
         )
 
     def to_json(self) -> str:
@@ -118,4 +135,12 @@ class ChannelSettings:
             payload["uniquify_images"] = True
         if self.weekly_repost:
             payload["weekly_repost"] = True
+        if self.daily_video_group is not None:
+            payload["daily_video_group"] = self.daily_video_group
+        if self.daily_clip_count != 3:
+            payload["daily_clip_count"] = self.daily_clip_count
+        if self.daily_clip_seconds != 35:
+            payload["daily_clip_seconds"] = self.daily_clip_seconds
+        if self.daily_clip_min_gap_seconds != 120:
+            payload["daily_clip_min_gap_seconds"] = self.daily_clip_min_gap_seconds
         return json.dumps(payload, ensure_ascii=False)

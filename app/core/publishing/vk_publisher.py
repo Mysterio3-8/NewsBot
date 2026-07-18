@@ -74,12 +74,17 @@ class VKPublisher:
         text: str,
         image_paths: list[Path] | None = None,
         video_path: Path | None = None,
+        video_title: str | None = None,
+        video_description: str | None = None,
     ) -> VKPublishResult:
         image_paths = image_paths or []
         # Загрузка медиа — best-effort: если фото/видео не залилось (напр. групповой
         # токен не имеет доступа к photos.getWallUploadServer — ошибка 27), публикуем
         # текст без него, а не роняем весь пост. Цель — пост всё равно уходит в VK.
-        attachments = self._build_attachments(group_id, image_paths, video_path)
+        attachments = self._build_attachments(
+            group_id, image_paths, video_path,
+            video_title=video_title, video_description=video_description,
+        )
         # КРИТИЧНО (найдено 2026-07-05): photos.saveWallPhoto через личный upload_token
         # сохраняет фото за ЛИЧНЫМ owner_id (не за группой) — групповой _api не имеет
         # доступа к этому объекту (подтверждено вживую: photos.getById той же фотки той
@@ -126,7 +131,13 @@ class VKPublisher:
         )
 
     def _build_attachments(
-        self, group_id: int, image_paths: list[Path], video_path: Path | None
+        self,
+        group_id: int,
+        image_paths: list[Path],
+        video_path: Path | None,
+        *,
+        video_title: str | None = None,
+        video_description: str | None = None,
     ) -> list[str]:
         if not image_paths and video_path is None:
             return []  # нет медиа — личный токен вообще не трогаем, ждать нечего
@@ -144,7 +155,11 @@ class VKPublisher:
         # а TG только видео).
         if video_path is not None:
             try:
-                return [self._upload_video(group_id, video_path)]
+                return [
+                    self._upload_video(
+                        group_id, video_path, title=video_title, description=video_description
+                    )
+                ]
             except Exception as error:
                 logger.warning("VK: не удалось загрузить видео %s, публикую без него: %s", video_path, error)
                 return []
@@ -184,18 +199,32 @@ class VKPublisher:
         response.raise_for_status()
         return response.json()
 
-    def _upload_video(self, group_id: int, video_path: Path) -> str:
+    def _upload_video(
+        self,
+        group_id: int,
+        video_path: Path,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> str:
         """video.save отдаёт upload_url + готовые video_id/owner_id сразу (в отличие от
         фото, где saveWallPhoto — отдельный шаг ПОСЛЕ загрузки файла) — сама загрузка
-        файла на upload_url лишь финализирует уже созданную запись."""
+        файла на upload_url лишь финализирует уже созданную запись. title/description —
+        название и описание видеозаписи в разделе «Видео» группы (ежедневный видео-репост
+        публикует видео с человеческим названием, не именем файла)."""
         # wallpost=0, НЕ Python bool False: vk_api сериализует False в строку "False",
         # которую VK не может распарсить как флаг и отвечает generic [10] Internal
         # server error (подтверждено вживую 2026-07-04) — выглядело как архитектурный
         # запрет видео через групповой upload-токен, а на деле баг сериализации параметра.
         self._wait_upload()
-        save_result = self._upload_api.video.save(
-            name=video_path.stem, group_id=abs(group_id), wallpost=0
-        )
+        save_params: dict = {
+            "name": title or video_path.stem,
+            "group_id": abs(group_id),
+            "wallpost": 0,
+        }
+        if description:
+            save_params["description"] = description
+        save_result = self._upload_api.video.save(**save_params)
         with open(video_path, "rb") as file:
             response = requests.post(
                 save_result["upload_url"], files={"video_file": file}, timeout=300
