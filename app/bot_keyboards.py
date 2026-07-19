@@ -20,6 +20,7 @@ BTN_CHANNELS = "📺 Каналы"
 BTN_SOURCES = "📰 Источники"
 BTN_SETTINGS = "⚙️ Настройки"
 BTN_TOOLS = "🧰 Инструменты"
+BTN_SOFTWARE = "🖥 Софты"
 BTN_STATUS = "📊 Статус"
 
 MAIN_MENU_BUTTONS = (
@@ -29,6 +30,7 @@ MAIN_MENU_BUTTONS = (
     BTN_SOURCES,
     BTN_SETTINGS,
     BTN_TOOLS,
+    BTN_SOFTWARE,
     BTN_STATUS,
 )
 
@@ -40,11 +42,28 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_NEW_POST), KeyboardButton(text=BTN_AUTOPOSTING)],
             [KeyboardButton(text=BTN_CHANNELS), KeyboardButton(text=BTN_SOURCES)],
             [KeyboardButton(text=BTN_SETTINGS), KeyboardButton(text=BTN_TOOLS)],
-            [KeyboardButton(text=BTN_STATUS)],
+            [KeyboardButton(text=BTN_SOFTWARE), KeyboardButton(text=BTN_STATUS)],
         ],
         resize_keyboard=True,
         is_persistent=True,
     )
+
+
+def software_menu(rows) -> InlineKeyboardMarkup:
+    """Единый пульт софтов: у каждого одна кнопка-переключатель (тап = вкл/выкл).
+    rows — объекты с .key/.label/.running/.configured (view-модели из control_bot)."""
+    buttons = []
+    for r in rows:
+        if not r.configured:
+            text = f"⛔ {r.label} — не настроен"
+        elif r.running:
+            text = f"🟢 {r.label} — Выключить"
+        else:
+            text = f"⚪ {r.label} — Включить"
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"sw:toggle:{r.key}")])
+    buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="sw:refresh")])
+    buttons.append(_close_row())
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def channels_menu(channels) -> InlineKeyboardMarkup:

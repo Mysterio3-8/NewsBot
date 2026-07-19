@@ -66,3 +66,31 @@ def test_process_menu_uses_prefix():
     assert "nature:run" in datas
     assert "nature:stop" in datas
     assert "nature:status" in datas
+
+
+def test_main_menu_includes_software_button():
+    texts = [b.text for row in kb.main_menu().keyboard for b in row]
+    assert kb.BTN_SOFTWARE in texts
+
+
+def test_software_menu_toggle_callback_per_software():
+    rows = [
+        SimpleNamespace(key="news", label="Новости", running=True, configured=True),
+        SimpleNamespace(key="nature", label="Nature", running=False, configured=True),
+    ]
+    datas = _callback_datas(kb.software_menu(rows))
+    assert "sw:toggle:news" in datas
+    assert "sw:toggle:nature" in datas
+    assert "sw:refresh" in datas
+
+
+def test_software_menu_labels_reflect_state():
+    rows = [
+        SimpleNamespace(key="news", label="Новости", running=True, configured=True),
+        SimpleNamespace(key="nature", label="Nature", running=False, configured=True),
+        SimpleNamespace(key="shorts", label="Shorts", running=False, configured=False),
+    ]
+    labels = [b.text for row in kb.software_menu(rows).inline_keyboard for b in row]
+    assert any("Новости" in x and "Выключить" in x for x in labels)
+    assert any("Nature" in x and "Включить" in x for x in labels)
+    assert any("Shorts" in x and "не настроен" in x for x in labels)

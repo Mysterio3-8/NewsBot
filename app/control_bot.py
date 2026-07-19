@@ -165,6 +165,81 @@ def render_shorts_status(controller: ProcessController | None) -> str:
     return "\n".join(lines)
 
 
+# --- Единый пульт софтов -----------------------------------------------------
+# Один экран для запуска/остановки любого управляемого софта. Наш новостной
+# сервис (ServiceController, asyncio-задача в этом процессе) и внешние боты
+# (ProcessController, чужой репозиторий/venv) имеют один интерфейс
+# is_running/start/stop — поэтому в пульте они выглядят одинаково.
+
+
+@dataclasses.dataclass(frozen=True)
+class SoftwareControl:
+    """Управляемый софт: стабильный key (в callback_data), подпись и контроллер.
+    controller=None → софт не настроен (внешний путь не задан в .env)."""
+
+    key: str
+    label: str
+    controller: object | None
+
+
+def build_software_registry(
+    news_controller,
+    nature_controller,
+    shorts_controller,
+) -> list[SoftwareControl]:
+    """Список всех софтов для единого пульта. Порядок = порядок кнопок."""
+    return [
+        SoftwareControl("news", "📰 Автопостинг новостей", news_controller),
+        SoftwareControl("nature", "🌿 VK Nature", nature_controller),
+        SoftwareControl("shorts", "🎬 Shorts", shorts_controller),
+    ]
+
+
+def _find_software(softwares: list[SoftwareControl], key: str) -> SoftwareControl | None:
+    return next((s for s in softwares if s.key == key), None)
+
+
+def render_software_panel(softwares: list[SoftwareControl]) -> str:
+    lines = ["🖥 Софты — включай/выключай кнопками ниже:\n"]
+    for sw in softwares:
+        if sw.controller is None:
+            lines.append(f"⛔ {sw.label} — не настроен")
+        elif sw.controller.is_running():
+            lines.append(f"🟢 {sw.label} — запущен")
+        else:
+            lines.append(f"🔴 {sw.label} — остановлен")
+    return "\n".join(lines)
+
+
+def toggle_software(softwares: list[SoftwareControl], key: str) -> str:
+    """Тап по софту: запущен → остановить, остановлен → запустить."""
+    sw = _find_software(softwares, key)
+    if sw is None:
+        return "Неизвестный софт."
+    if sw.controller is None:
+        return f"{sw.label}: не настроен."
+    if sw.controller.is_running():
+        sw.controller.stop()
+        return f"{sw.label}: остановлен 🔴"
+    sw.controller.start()
+    return f"{sw.label}: запущен 🟢"
+
+
+def software_rows(softwares: list[SoftwareControl]) -> list:
+    """View-модели для клавиатуры — без утечки контроллеров в слой UI."""
+    from types import SimpleNamespace
+
+    return [
+        SimpleNamespace(
+            key=sw.key,
+            label=sw.label,
+            running=(sw.controller is not None and sw.controller.is_running()),
+            configured=sw.controller is not None,
+        )
+        for sw in softwares
+    ]
+
+
 async def generate_short_for_post(repo: Repository, post_id: int, base_url: str) -> Path | str:
     """Генерирует короткое видео из рерайта поста через Shorts API. Возвращает путь
     к скачанному видео либо строку с описанием ошибки (для ответа пользователю)."""
@@ -711,6 +786,8 @@ def build_dispatcher(
 
     from app import bot_keyboards as kb
 
+    softwares = build_software_registry(controller, nature_controller, shorts_controller)
+
     class PostCreation(StatesGroup):
         waiting_content = State()
         configuring = State()
@@ -872,6 +949,15 @@ def build_dispatcher(
             return
         await state.clear()
         await _show_section(message, "🧰 Инструменты:", kb.tools_menu())
+
+    @dp.message(F.text == kb.BTN_SOFTWARE)
+    async def on_menu_software(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        await state.clear()
+        await _show_section(
+            message, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
+        )
 
     @dp.message(F.text == kb.BTN_STATUS)
     async def on_menu_status(message: Message, state: FSMContext) -> None:
@@ -1269,6 +1355,26 @@ def build_dispatcher(
             shorts_controller.stop()
         await _edit_current(cb, render_shorts_status(shorts_controller), kb.process_menu("shorts"))
         await cb.answer()
+
+    @dp.callback_query(F.data == "sw:refresh")
+    async def on_software_refresh(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await _edit_current(
+            cb, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("sw:toggle:"))
+    async def on_software_toggle(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        key = cb.data.split(":", 2)[2]
+        result = toggle_software(softwares, key)
+        await _edit_current(
+            cb, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
+        )
+        await cb.answer(result)
 
     @dp.message(F.video | F.photo | F.document)
     async def on_media(message: Message) -> None:
