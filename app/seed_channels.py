@@ -54,7 +54,12 @@ def _ensure_source(repo: Repository, channel: Channel, *, type: str, name: str, 
 # Живой прогон 2026-07-18 показал: VK жёстко троттлит видео-CDN для датацентр-IP VPS
 # (скорость падает до единиц КБ/с при обычном канале VPS 200+ МБ/с) — докачка фильма
 # растягивалась бы на многие часы. Источник видео переключён на YouTube пользователя.
-DAILY_VIDEO_YOUTUBE_CHANNELS = ["https://www.youtube.com/@mmalive1830"]
+# Проверяются по порядку — первое ещё не публиковавшееся видео самого свежего канала.
+DAILY_VIDEO_YOUTUBE_CHANNELS = [
+    "https://www.youtube.com/@mmalive1830",
+    "https://www.youtube.com/@KINOTEKA-2030",
+    "https://www.youtube.com/@%D0%9A%D0%B8%D0%BD%D0%BE%D0%BA%D0%BE%D1%82-%D1%818%D0%BF",
+]
 
 
 def seed_cinema(repo: Repository) -> None:
