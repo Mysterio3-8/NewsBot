@@ -165,78 +165,60 @@ def render_shorts_status(controller: ProcessController | None) -> str:
     return "\n".join(lines)
 
 
-# --- Единый пульт софтов -----------------------------------------------------
-# Один экран для запуска/остановки любого управляемого софта. Наш новостной
-# сервис (ServiceController, asyncio-задача в этом процессе) и внешние боты
-# (ProcessController, чужой репозиторий/venv) имеют один интерфейс
-# is_running/start/stop — поэтому в пульте они выглядят одинаково.
+# --- Единый пульт «📦 Софты» -------------------------------------------------
+# ТЗ 2026-07-19: центр управления всеми софтами из одного бота. «Софт» —
+# гетерогенная сущность: движок новостей (ServiceController, asyncio-задача в этом
+# процессе), каждый новостной КАНАЛ (строка в БД, полное управление уже есть в
+# ch:*-обработчиках) и каждый ВНЕШНИЙ процесс (ProcessController, чужой репо/venv).
+# Реестр строится автоматически: добавил канал в БД или внешний путь в .env — софт
+# появился в списке без правок кода.
+
+SOFT_ENGINE_ID = "engine"
+SOFT_KIND_ENGINE = "engine"
+SOFT_KIND_CHANNEL = "channel"
+SOFT_KIND_PROCESS = "process"
 
 
 @dataclasses.dataclass(frozen=True)
-class SoftwareControl:
-    """Управляемый софт: стабильный key (в callback_data), подпись и контроллер.
-    controller=None → софт не настроен (внешний путь не задан в .env)."""
+class Soft:
+    """Идентичность софта для навигации. Действия (вкл/выкл/статус) резолвятся в
+    build_dispatcher по kind + soft_id, чтобы не тащить контроллеры в чистый слой."""
 
-    key: str
-    label: str
-    controller: object | None
-
-
-def build_software_registry(
-    news_controller,
-    nature_controller,
-    shorts_controller,
-) -> list[SoftwareControl]:
-    """Список всех софтов для единого пульта. Порядок = порядок кнопок."""
-    return [
-        SoftwareControl("news", "📰 Автопостинг новостей", news_controller),
-        SoftwareControl("nature", "🌿 VK Nature", nature_controller),
-        SoftwareControl("shorts", "🎬 Shorts", shorts_controller),
-    ]
+    soft_id: str
+    title: str
+    kind: str
+    channel_id: int | None = None
 
 
-def _find_software(softwares: list[SoftwareControl], key: str) -> SoftwareControl | None:
-    return next((s for s in softwares if s.key == key), None)
+def build_soft_list(channels, process_entries: list[tuple[str, str]]) -> list[Soft]:
+    """channels — список каналов из repo.list_channels(); process_entries — пары
+    (key, title) настроенных внешних софтов. Движок всегда первый."""
+    softs = [Soft(SOFT_ENGINE_ID, "📰 Движок новостей", SOFT_KIND_ENGINE)]
+    for ch in sorted(channels, key=lambda c: c.id):
+        softs.append(Soft(f"ch_{ch.id}", f"📺 {ch.name}", SOFT_KIND_CHANNEL, ch.id))
+    for key, title in process_entries:
+        softs.append(Soft(f"p_{key}", title, SOFT_KIND_PROCESS))
+    return softs
 
 
-def render_software_panel(softwares: list[SoftwareControl]) -> str:
-    lines = ["🖥 Софты — включай/выключай кнопками ниже:\n"]
-    for sw in softwares:
-        if sw.controller is None:
-            lines.append(f"⛔ {sw.label} — не настроен")
-        elif sw.controller.is_running():
-            lines.append(f"🟢 {sw.label} — запущен")
-        else:
-            lines.append(f"🔴 {sw.label} — остановлен")
+def find_soft(softs: list[Soft], soft_id: str) -> Soft | None:
+    return next((s for s in softs if s.soft_id == soft_id), None)
+
+
+def render_soft_list(softs: list[Soft], statuses: dict[str, str]) -> str:
+    lines = ["📦 Софты — выбери софт кнопкой ниже:\n"]
+    for s in softs:
+        lines.append(f"{statuses.get(s.soft_id, '❔')} {s.title}")
     return "\n".join(lines)
 
 
-def toggle_software(softwares: list[SoftwareControl], key: str) -> str:
-    """Тап по софту: запущен → остановить, остановлен → запустить."""
-    sw = _find_software(softwares, key)
-    if sw is None:
-        return "Неизвестный софт."
-    if sw.controller is None:
-        return f"{sw.label}: не настроен."
-    if sw.controller.is_running():
-        sw.controller.stop()
-        return f"{sw.label}: остановлен 🔴"
-    sw.controller.start()
-    return f"{sw.label}: запущен 🟢"
-
-
-def software_rows(softwares: list[SoftwareControl]) -> list:
-    """View-модели для клавиатуры — без утечки контроллеров в слой UI."""
+def soft_list_rows(softs: list[Soft], statuses: dict[str, str]) -> list:
+    """View-модели для клавиатуры списка софтов."""
     from types import SimpleNamespace
 
     return [
-        SimpleNamespace(
-            key=sw.key,
-            label=sw.label,
-            running=(sw.controller is not None and sw.controller.is_running()),
-            configured=sw.controller is not None,
-        )
-        for sw in softwares
+        SimpleNamespace(soft_id=s.soft_id, title=s.title, dot=statuses.get(s.soft_id, "❔"))
+        for s in softs
     ]
 
 
@@ -786,7 +768,57 @@ def build_dispatcher(
 
     from app import bot_keyboards as kb
 
-    softwares = build_software_registry(controller, nature_controller, shorts_controller)
+    # Реестр внешних софтов: key -> (title, controller). Только настроенные (путь в
+    # .env задан) — незаданные ProcessController = None и в список не попадают.
+    # Добавить новый внешний софт = одна строка здесь (см. CLAUDE.md).
+    process_registry: dict[str, tuple[str, object]] = {}
+    if nature_controller is not None:
+        process_registry["nature"] = ("🌿 VK Nature", nature_controller)
+    if shorts_controller is not None:
+        process_registry["shorts"] = ("🎬 Shorts", shorts_controller)
+
+    def _softs() -> list[Soft]:
+        entries = [(key, title) for key, (title, _ctrl) in process_registry.items()]
+        return build_soft_list(repo.list_channels(), entries)
+
+    def _soft_statuses() -> dict[str, str]:
+        statuses = {SOFT_ENGINE_ID: "🟢" if controller.is_running() else "🔴"}
+        for ch in repo.list_channels():
+            statuses[f"ch_{ch.id}"] = "🟢" if ch.enabled else "⚪"
+        for key, (_title, ctrl) in process_registry.items():
+            statuses[f"p_{key}"] = "🟢" if ctrl.is_running() else "🔴"
+        return statuses
+
+    def _soft_running(soft: Soft) -> bool:
+        if soft.kind == SOFT_KIND_ENGINE:
+            return controller.is_running()
+        if soft.kind == SOFT_KIND_CHANNEL:
+            ch = repo.get_channel(soft.channel_id)
+            return bool(ch and ch.enabled)
+        entry = process_registry.get(soft.soft_id[2:])  # "p_<key>" → key
+        return bool(entry and entry[1].is_running())
+
+    def _set_soft_running(soft: Soft, on: bool) -> None:
+        if soft.kind == SOFT_KIND_ENGINE:
+            controller.start() if on else controller.stop()
+        elif soft.kind == SOFT_KIND_CHANNEL:
+            repo.update_channel(soft.channel_id, enabled=on)
+        else:
+            entry = process_registry.get(soft.soft_id[2:])
+            if entry:
+                entry[1].start() if on else entry[1].stop()
+
+    def _soft_status_text(soft: Soft) -> str:
+        if soft.kind == SOFT_KIND_ENGINE:
+            return render_status(controller, repo)
+        if soft.kind == SOFT_KIND_CHANNEL:
+            return render_channel_card(repo, soft.channel_id)
+        key = soft.soft_id[2:]
+        if key == "nature":
+            return render_nature_status(nature_controller)
+        if key == "shorts":
+            return render_shorts_status(shorts_controller)
+        return "—"
 
     class PostCreation(StatesGroup):
         waiting_content = State()
@@ -950,13 +982,14 @@ def build_dispatcher(
         await state.clear()
         await _show_section(message, "🧰 Инструменты:", kb.tools_menu())
 
-    @dp.message(F.text == kb.BTN_SOFTWARE)
-    async def on_menu_software(message: Message, state: FSMContext) -> None:
+    @dp.message(F.text == kb.BTN_SOFTS)
+    async def on_menu_softs(message: Message, state: FSMContext) -> None:
         if not await guard(message):
             return
         await state.clear()
+        softs, statuses = _softs(), _soft_statuses()
         await _show_section(
-            message, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
+            message, render_soft_list(softs, statuses), kb.softs_list_menu(soft_list_rows(softs, statuses))
         )
 
     @dp.message(F.text == kb.BTN_STATUS)
@@ -1356,25 +1389,98 @@ def build_dispatcher(
         await _edit_current(cb, render_shorts_status(shorts_controller), kb.process_menu("shorts"))
         await cb.answer()
 
-    @dp.callback_query(F.data == "sw:refresh")
-    async def on_software_refresh(cb: CallbackQuery) -> None:
+    async def _show_soft_list(cb: CallbackQuery) -> None:
+        softs, statuses = _softs(), _soft_statuses()
+        await _edit_current(
+            cb, render_soft_list(softs, statuses), kb.softs_list_menu(soft_list_rows(softs, statuses))
+        )
+
+    async def _show_soft(cb: CallbackQuery, soft: Soft, header: str | None = None) -> None:
+        running = _soft_running(soft)
+        text = header if header is not None else f"{'🟢' if running else '⚪'} {soft.title}"
+        await _edit_current(
+            cb, text, kb.soft_menu(soft.soft_id, kind=soft.kind, running=running, channel_id=soft.channel_id)
+        )
+
+    @dp.callback_query(F.data == "soft:list")
+    async def on_soft_list(cb: CallbackQuery) -> None:
         if not await _callback_guard(cb):
             return
-        await _edit_current(
-            cb, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
-        )
+        await _show_soft_list(cb)
         await cb.answer()
 
-    @dp.callback_query(F.data.startswith("sw:toggle:"))
-    async def on_software_toggle(cb: CallbackQuery) -> None:
+    @dp.callback_query(F.data.startswith("soft:open:"))
+    async def on_soft_open(cb: CallbackQuery) -> None:
         if not await _callback_guard(cb):
             return
-        key = cb.data.split(":", 2)[2]
-        result = toggle_software(softwares, key)
-        await _edit_current(
-            cb, render_software_panel(softwares), kb.software_menu(software_rows(softwares))
+        soft = find_soft(_softs(), cb.data.split(":", 2)[2])
+        if soft is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        await _show_soft(cb, soft)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:on:"))
+    async def on_soft_on(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft = find_soft(_softs(), cb.data.split(":", 2)[2])
+        if soft is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        _set_soft_running(soft, True)
+        await _show_soft(cb, soft)
+        await cb.answer("🟢 Включён")
+
+    @dp.callback_query(F.data.startswith("soft:off:"))
+    async def on_soft_off(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft = find_soft(_softs(), cb.data.split(":", 2)[2])
+        if soft is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        _set_soft_running(soft, False)
+        await _show_soft(cb, soft)
+        await cb.answer("🔴 Выключен")
+
+    @dp.callback_query(F.data.startswith("soft:status:"))
+    async def on_soft_status(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft = find_soft(_softs(), cb.data.split(":", 2)[2])
+        if soft is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        await _show_soft(cb, soft, header=_soft_status_text(soft))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:dests:"))
+    async def on_soft_dests(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        channel_id = int(cb.data.split(":", 2)[2])
+        channel = repo.get_channel(channel_id)
+        if channel is None:
+            await cb.answer("Канал не найден", show_alert=True)
+            return
+        text = (
+            f"📢 Каналы публикации «{channel.name}»:\n"
+            f"TG: {channel.tg_destination or '—'}\n"
+            f"VK: {channel.vk_destination or '—'}"
         )
-        await cb.answer(result)
+        soft = find_soft(_softs(), f"ch_{channel_id}")
+        await _show_soft(cb, soft, header=text)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:na:"))
+    async def on_soft_na(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        await cb.answer(
+            "Пока настраивается внутри самого софта. Полное управление извне — следующий срез.",
+            show_alert=True,
+        )
 
     @dp.message(F.video | F.photo | F.document)
     async def on_media(message: Message) -> None:

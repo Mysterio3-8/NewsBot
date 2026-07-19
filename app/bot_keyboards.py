@@ -14,56 +14,80 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+# Старые разделы (Создать пост/Автопостинг/Каналы/Источники/Настройки/Инструменты/
+# Статус) убраны из главного меню по ТЗ 2026-07-19 — теперь всё под единым пультом
+# «📦 Софты». Константы и их обработчики оставлены (доступ по /-командам + graceful
+# для закешированной у пользователя клавиатуры), но кнопок в меню больше нет.
 BTN_NEW_POST = "📝 Создать пост"
 BTN_AUTOPOSTING = "🤖 Автопостинг"
 BTN_CHANNELS = "📺 Каналы"
 BTN_SOURCES = "📰 Источники"
 BTN_SETTINGS = "⚙️ Настройки"
 BTN_TOOLS = "🧰 Инструменты"
-BTN_SOFTWARE = "🖥 Софты"
 BTN_STATUS = "📊 Статус"
+BTN_SOFTS = "📦 Софты"
 
-MAIN_MENU_BUTTONS = (
-    BTN_NEW_POST,
-    BTN_AUTOPOSTING,
-    BTN_CHANNELS,
-    BTN_SOURCES,
-    BTN_SETTINGS,
-    BTN_TOOLS,
-    BTN_SOFTWARE,
-    BTN_STATUS,
-)
+MAIN_MENU_BUTTONS = (BTN_SOFTS,)
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    """Постоянное меню снизу — две колонки, как в GRABBER."""
+    """Главное меню — единственная кнопка «📦 Софты» (ТЗ: центр управления всеми софтами)."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_NEW_POST), KeyboardButton(text=BTN_AUTOPOSTING)],
-            [KeyboardButton(text=BTN_CHANNELS), KeyboardButton(text=BTN_SOURCES)],
-            [KeyboardButton(text=BTN_SETTINGS), KeyboardButton(text=BTN_TOOLS)],
-            [KeyboardButton(text=BTN_SOFTWARE), KeyboardButton(text=BTN_STATUS)],
-        ],
+        keyboard=[[KeyboardButton(text=BTN_SOFTS)]],
         resize_keyboard=True,
         is_persistent=True,
     )
 
 
-def software_menu(rows) -> InlineKeyboardMarkup:
-    """Единый пульт софтов: у каждого одна кнопка-переключатель (тап = вкл/выкл).
-    rows — объекты с .key/.label/.running/.configured (view-модели из control_bot)."""
-    buttons = []
-    for r in rows:
-        if not r.configured:
-            text = f"⛔ {r.label} — не настроен"
-        elif r.running:
-            text = f"🟢 {r.label} — Выключить"
-        else:
-            text = f"⚪ {r.label} — Включить"
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"sw:toggle:{r.key}")])
-    buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="sw:refresh")])
+def softs_list_menu(rows) -> InlineKeyboardMarkup:
+    """Список всех софтов — каждая кнопка открывает меню софта.
+    rows — объекты с .soft_id/.title/.dot (view-модели из control_bot)."""
+    buttons = [
+        [InlineKeyboardButton(text=f"{r.dot} {r.title}", callback_data=f"soft:open:{r.soft_id}")]
+        for r in rows
+    ]
     buttons.append(_close_row())
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def soft_menu(
+    soft_id: str, *, kind: str, running: bool, channel_id: int | None = None
+) -> InlineKeyboardMarkup:
+    """Меню одного софта (набор кнопок из ТЗ). Для канала (kind='channel') кнопки
+    Лимит/Интервал/Источники/Доп делегируют в готовые обработчики ch:*; для движка и
+    внешних процессов эти настройки пока за контрактом → soft:na (заглушка)."""
+    power = (
+        InlineKeyboardButton(text="⏹ Выключить", callback_data=f"soft:off:{soft_id}")
+        if running
+        else InlineKeyboardButton(text="▶️ Включить", callback_data=f"soft:on:{soft_id}")
+    )
+    rows = [[power, InlineKeyboardButton(text="📊 Статус", callback_data=f"soft:status:{soft_id}")]]
+    if kind == "channel" and channel_id is not None:
+        rows += [
+            [
+                InlineKeyboardButton(text="📅 Лимит в день", callback_data=f"ch:set:{channel_id}:maxposts"),
+                InlineKeyboardButton(text="⏱ Интервал", callback_data=f"ch:set:{channel_id}:interval"),
+            ],
+            [
+                InlineKeyboardButton(text="📚 Источники", callback_data=f"ch:sources:{channel_id}"),
+                InlineKeyboardButton(text="📢 Каналы", callback_data=f"soft:dests:{channel_id}"),
+            ],
+            [InlineKeyboardButton(text="⚙️ Дополнительные настройки", callback_data=f"ch:open:{channel_id}")],
+        ]
+    else:
+        rows += [
+            [
+                InlineKeyboardButton(text="📅 Лимит в день", callback_data=f"soft:na:{soft_id}"),
+                InlineKeyboardButton(text="⏱ Интервал", callback_data=f"soft:na:{soft_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="📚 Источники", callback_data=f"soft:na:{soft_id}"),
+                InlineKeyboardButton(text="📢 Каналы", callback_data=f"soft:na:{soft_id}"),
+            ],
+            [InlineKeyboardButton(text="⚙️ Дополнительные настройки", callback_data=f"soft:na:{soft_id}")],
+        ]
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="soft:list")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def channels_menu(channels) -> InlineKeyboardMarkup:

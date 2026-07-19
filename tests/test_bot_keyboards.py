@@ -68,29 +68,34 @@ def test_process_menu_uses_prefix():
     assert "nature:status" in datas
 
 
-def test_main_menu_includes_software_button():
+def test_main_menu_is_only_softs():
     texts = [b.text for row in kb.main_menu().keyboard for b in row]
-    assert kb.BTN_SOFTWARE in texts
+    assert texts == [kb.BTN_SOFTS]
 
 
-def test_software_menu_toggle_callback_per_software():
+def test_softs_list_menu_opens_each_soft():
     rows = [
-        SimpleNamespace(key="news", label="Новости", running=True, configured=True),
-        SimpleNamespace(key="nature", label="Nature", running=False, configured=True),
+        SimpleNamespace(soft_id="engine", title="Движок", dot="🟢"),
+        SimpleNamespace(soft_id="ch_3", title="Кино", dot="⚪"),
     ]
-    datas = _callback_datas(kb.software_menu(rows))
-    assert "sw:toggle:news" in datas
-    assert "sw:toggle:nature" in datas
-    assert "sw:refresh" in datas
+    datas = _callback_datas(kb.softs_list_menu(rows))
+    assert "soft:open:engine" in datas
+    assert "soft:open:ch_3" in datas
 
 
-def test_software_menu_labels_reflect_state():
-    rows = [
-        SimpleNamespace(key="news", label="Новости", running=True, configured=True),
-        SimpleNamespace(key="nature", label="Nature", running=False, configured=True),
-        SimpleNamespace(key="shorts", label="Shorts", running=False, configured=False),
-    ]
-    labels = [b.text for row in kb.software_menu(rows).inline_keyboard for b in row]
-    assert any("Новости" in x and "Выключить" in x for x in labels)
-    assert any("Nature" in x and "Включить" in x for x in labels)
-    assert any("Shorts" in x and "не настроен" in x for x in labels)
+def test_soft_menu_channel_delegates_to_ch_handlers():
+    datas = _callback_datas(kb.soft_menu("ch_3", kind="channel", running=True, channel_id=3))
+    assert "soft:off:ch_3" in datas  # включён → кнопка выключения
+    assert "ch:set:3:maxposts" in datas  # лимит → готовый обработчик канала
+    assert "ch:set:3:interval" in datas
+    assert "ch:sources:3" in datas
+    assert "ch:open:3" in datas  # доп. настройки → карточка канала
+    assert "soft:list" in datas
+
+
+def test_soft_menu_process_uses_na_placeholder():
+    datas = _callback_datas(kb.soft_menu("p_nature", kind="process", running=False))
+    assert "soft:on:p_nature" in datas  # остановлен → кнопка включения
+    assert "soft:status:p_nature" in datas
+    assert "soft:na:p_nature" in datas  # тонкие настройки за контрактом
+    assert "ch:set:" not in " ".join(datas)

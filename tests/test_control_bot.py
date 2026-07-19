@@ -111,9 +111,9 @@ def test_build_dispatcher_registers_media_handler():
     # настройки канала) = 40; +1 message (reply-кнопка «Софты») = 41
     assert len(dp.message.handlers) == 41
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
-    # +1 тумблер оформления фото (set:photodesign) = 30; +2 пульт софтов
-    # (sw:refresh + sw:toggle) = 32
-    assert len(dp.callback_query.handlers) == 32
+    # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
+    # (soft:list/open/on/off/status/dests/na) = 37
+    assert len(dp.callback_query.handlers) == 37
 
 
 def test_build_nature_controller_none_without_env_path():
