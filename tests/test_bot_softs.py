@@ -14,7 +14,7 @@ def _channels():
 
 
 def test_build_soft_list_engine_first_then_channels_then_processes():
-    softs = bot.build_soft_list(_channels(), [("nature", "🌿 VK Nature")])
+    softs = bot.build_soft_list(_channels(), [("p_nature", "🌿 VK Nature")])
     assert [s.soft_id for s in softs] == ["engine", "ch_1", "ch_5", "p_nature"]
     assert softs[0].kind == bot.SOFT_KIND_ENGINE
     assert softs[1].kind == bot.SOFT_KIND_CHANNEL and softs[1].channel_id == 1
@@ -35,7 +35,7 @@ def test_find_soft():
 
 
 def test_render_soft_list_uses_status_dots():
-    softs = bot.build_soft_list(_channels(), [("shorts", "🎬 Shorts")])
+    softs = bot.build_soft_list(_channels(), [("p_shorts", "🎬 Shorts")])
     statuses = {"engine": "🟢", "ch_1": "🟢", "ch_5": "⚪", "p_shorts": "🔴"}
     text = bot.render_soft_list(softs, statuses)
     assert "🟢 📰 Движок новостей" in text

@@ -192,12 +192,12 @@ class Soft:
 
 def build_soft_list(channels, process_entries: list[tuple[str, str]]) -> list[Soft]:
     """channels — список каналов из repo.list_channels(); process_entries — пары
-    (key, title) настроенных внешних софтов. Движок всегда первый."""
+    (soft_id, title) внешних софтов из реестра менеджера. Движок всегда первый."""
     softs = [Soft(SOFT_ENGINE_ID, "📰 Движок новостей", SOFT_KIND_ENGINE)]
     for ch in sorted(channels, key=lambda c: c.id):
         softs.append(Soft(f"ch_{ch.id}", f"📺 {ch.name}", SOFT_KIND_CHANNEL, ch.id))
-    for key, title in process_entries:
-        softs.append(Soft(f"p_{key}", title, SOFT_KIND_PROCESS))
+    for soft_id, title in process_entries:
+        softs.append(Soft(soft_id, title, SOFT_KIND_PROCESS))
     return softs
 
 
@@ -540,6 +540,7 @@ def build_dispatcher(
     nature_controller=None,
     shorts_controller=None,
     shorts_base_url: str = SHORTS_DEFAULT_BASE_URL,
+    manager_repo=None,
 ):
     """aiogram-обвязка. Импорт aiogram здесь, чтобы чистые функции выше тестировались
     без установленного aiogram-раннера."""
@@ -768,25 +769,31 @@ def build_dispatcher(
 
     from app import bot_keyboards as kb
 
-    # Реестр внешних софтов: key -> (title, controller). Только настроенные (путь в
-    # .env задан) — незаданные ProcessController = None и в список не попадают.
-    # Добавить новый внешний софт = одна строка здесь (см. CLAUDE.md).
-    process_registry: dict[str, tuple[str, object]] = {}
+    # Внешние софты берутся из БД-реестра менеджера (manager_repo). Готовые
+    # контроллеры процессов (Природа/Shorts из .env) переиспользуются по soft_id —
+    # чтобы один и тот же проект не запускался дважды. Остальные софты реестра пока
+    # без управления (нужен путь/systemd-юнит на VPS — следующий срез).
+    _proc_controllers: dict[str, object] = {}
     if nature_controller is not None:
-        process_registry["nature"] = ("🌿 VK Nature", nature_controller)
+        _proc_controllers["p_nature"] = nature_controller
     if shorts_controller is not None:
-        process_registry["shorts"] = ("🎬 Shorts", shorts_controller)
+        _proc_controllers["p_shorts"] = shorts_controller
+
+    def _process_softs() -> list[tuple[str, str]]:
+        if manager_repo is None:
+            return []
+        return [(r.soft_id, r.title) for r in manager_repo.list_softs() if r.kind == "process"]
 
     def _softs() -> list[Soft]:
-        entries = [(key, title) for key, (title, _ctrl) in process_registry.items()]
-        return build_soft_list(repo.list_channels(), entries)
+        return build_soft_list(repo.list_channels(), _process_softs())
 
     def _soft_statuses() -> dict[str, str]:
         statuses = {SOFT_ENGINE_ID: "🟢" if controller.is_running() else "🔴"}
         for ch in repo.list_channels():
             statuses[f"ch_{ch.id}"] = "🟢" if ch.enabled else "⚪"
-        for key, (_title, ctrl) in process_registry.items():
-            statuses[f"p_{key}"] = "🟢" if ctrl.is_running() else "🔴"
+        for soft_id, _title in _process_softs():
+            ctrl = _proc_controllers.get(soft_id)
+            statuses[soft_id] = ("🟢" if ctrl.is_running() else "🔴") if ctrl is not None else "▫️"
         return statuses
 
     def _soft_running(soft: Soft) -> bool:
@@ -795,30 +802,38 @@ def build_dispatcher(
         if soft.kind == SOFT_KIND_CHANNEL:
             ch = repo.get_channel(soft.channel_id)
             return bool(ch and ch.enabled)
-        entry = process_registry.get(soft.soft_id[2:])  # "p_<key>" → key
-        return bool(entry and entry[1].is_running())
+        ctrl = _proc_controllers.get(soft.soft_id)
+        return bool(ctrl and ctrl.is_running())
 
-    def _set_soft_running(soft: Soft, on: bool) -> None:
+    def _set_soft_running(soft: Soft, on: bool) -> bool:
+        """True — управление есть и применено; False — для софта оно ещё не настроено."""
         if soft.kind == SOFT_KIND_ENGINE:
             controller.start() if on else controller.stop()
-        elif soft.kind == SOFT_KIND_CHANNEL:
+            return True
+        if soft.kind == SOFT_KIND_CHANNEL:
             repo.update_channel(soft.channel_id, enabled=on)
-        else:
-            entry = process_registry.get(soft.soft_id[2:])
-            if entry:
-                entry[1].start() if on else entry[1].stop()
+            return True
+        ctrl = _proc_controllers.get(soft.soft_id)
+        if ctrl is None:
+            return False
+        ctrl.start() if on else ctrl.stop()
+        return True
 
     def _soft_status_text(soft: Soft) -> str:
         if soft.kind == SOFT_KIND_ENGINE:
             return render_status(controller, repo)
         if soft.kind == SOFT_KIND_CHANNEL:
             return render_channel_card(repo, soft.channel_id)
-        key = soft.soft_id[2:]
-        if key == "nature":
+        if soft.soft_id == "p_nature":
             return render_nature_status(nature_controller)
-        if key == "shorts":
+        if soft.soft_id == "p_shorts":
             return render_shorts_status(shorts_controller)
-        return "—"
+        record = manager_repo.get_soft(soft.soft_id) if manager_repo else None
+        host = record.host if record else "?"
+        return (
+            f"{soft.title}\n\nВ реестре менеджера (хост: {host}). Управление процессом — "
+            f"следующий срез (нужен путь/systemd-юнит на VPS)."
+        )
 
     class PostCreation(StatesGroup):
         waiting_content = State()
@@ -1428,9 +1443,9 @@ def build_dispatcher(
         if soft is None:
             await cb.answer("Софт не найден", show_alert=True)
             return
-        _set_soft_running(soft, True)
+        ok = _set_soft_running(soft, True)
         await _show_soft(cb, soft)
-        await cb.answer("🟢 Включён")
+        await cb.answer("🟢 Включён" if ok else "Управление этим софтом ещё не настроено (следующий срез)")
 
     @dp.callback_query(F.data.startswith("soft:off:"))
     async def on_soft_off(cb: CallbackQuery) -> None:
@@ -1440,9 +1455,9 @@ def build_dispatcher(
         if soft is None:
             await cb.answer("Софт не найден", show_alert=True)
             return
-        _set_soft_running(soft, False)
+        ok = _set_soft_running(soft, False)
         await _show_soft(cb, soft)
-        await cb.answer("🔴 Выключен")
+        await cb.answer("🔴 Выключен" if ok else "Управление этим софтом ещё не настроено (следующий срез)")
 
     @dp.callback_query(F.data.startswith("soft:status:"))
     async def on_soft_status(cb: CallbackQuery) -> None:
@@ -1587,6 +1602,7 @@ async def run_bot() -> None:
 
     from app.core.publishing.telegram_publisher import detect_proxy_url
     from app.db.repository import Repository as Repo, init_db, make_engine
+    from app.manager.repository import ManagerRepository, init_manager_db, make_manager_engine, seed_default_softs
     from app.service_controller import ServiceController
 
     token = os.environ.get(CONTROL_BOT_TOKEN_ENV)
@@ -1596,6 +1612,14 @@ async def run_bot() -> None:
     engine = make_engine()
     init_db(engine)
     repo = Repo(engine)
+
+    # Отдельная БД-реестр менеджера (data/manager.db) — не пересекается со схемой
+    # Новостей. Идемпотентный сид известных внешних софтов при каждом старте.
+    manager_engine = make_manager_engine()
+    init_manager_db(manager_engine)
+    manager_repo = ManagerRepository(manager_engine)
+    seed_default_softs(manager_repo)
+
     controller = ServiceController()
 
     # На сервере пайплайн должен работать 24/7 и быть управляемым — AUTOSTART_SERVICE=1
@@ -1613,6 +1637,7 @@ async def run_bot() -> None:
         nature_controller=build_nature_controller(),
         shorts_controller=build_shorts_controller(),
         shorts_base_url=os.environ.get(SHORTS_BASE_URL_ENV, SHORTS_DEFAULT_BASE_URL),
+        manager_repo=manager_repo,
     )
 
     logger.info("Control-бот запущен (long polling)")
