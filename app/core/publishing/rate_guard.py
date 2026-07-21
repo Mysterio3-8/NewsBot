@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import datetime
+import random
 
 from app.db.repository import Repository
 
@@ -26,6 +27,7 @@ def check_publish_allowed(
     network: str,
     max_posts_per_day: int,
     min_interval_minutes: int,
+    max_interval_minutes: int | None = None,
     channel_id: int | None = None,
     now: datetime.datetime | None = None,
 ) -> str | None:
@@ -63,10 +65,28 @@ def check_publish_allowed(
         if last_published_at.tzinfo is not None and now.tzinfo is None:
             now = now.replace(tzinfo=last_published_at.tzinfo)
         elapsed_minutes = (now - last_published_at).total_seconds() / 60
-        if elapsed_minutes < min_interval_minutes:
+        required = required_interval_minutes(
+            min_interval_minutes, max_interval_minutes, last_published_at
+        )
+        if elapsed_minutes < required:
             return (
                 f"слишком рано после прошлой публикации "
-                f"({elapsed_minutes:.0f} мин < минимум {min_interval_minutes} мин)"
+                f"({elapsed_minutes:.0f} мин < минимум {required:.0f} мин)"
             )
 
     return None
+
+
+def required_interval_minutes(
+    min_interval_minutes: int,
+    max_interval_minutes: int | None,
+    last_published_at: datetime.datetime,
+) -> float:
+    """Случайная пауза до следующей публикации в [min, max] (ТЗ 2026-07-21: 1.5-4 часа
+    на рандом). Значение детерминировано временем ПРОШЛОЙ публикации — иначе оно бы
+    выпадало заново на каждой проверке очереди, и пост уходил бы при первом же удачном
+    броске, что превращает диапазон в его нижнюю границу."""
+    if max_interval_minutes is None or max_interval_minutes <= min_interval_minutes:
+        return float(min_interval_minutes)
+    seed = int(last_published_at.timestamp())
+    return random.Random(seed).uniform(min_interval_minutes, max_interval_minutes)

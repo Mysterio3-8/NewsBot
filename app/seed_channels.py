@@ -56,6 +56,9 @@ def _ensure_source(repo: Repository, channel: Channel, *, type: str, name: str, 
 # растягивалась бы на многие часы. Источник видео переключён на YouTube пользователя.
 # Проверяются по порядку — первое ещё не публиковавшееся видео самого свежего канала.
 DAILY_VIDEO_YOUTUBE_CHANNELS = [
+    # ТЗ 2026-07-21: «Сериальный Календарь» — приоритетный источник, оба дневных фильма
+    # берутся с него, пока на нём есть неопубликованные видео.
+    "https://www.youtube.com/channel/UCck_kyGeLhKGJb225ERbzag",
     "https://www.youtube.com/@mmalive1830",
     "https://www.youtube.com/@KINOTEKA-2030",
     "https://www.youtube.com/@%D0%9A%D0%B8%D0%BD%D0%BE%D0%BA%D0%BE%D1%82-%D1%818%D0%BF",
@@ -65,6 +68,20 @@ DAILY_VIDEO_YOUTUBE_CHANNELS = [
 # что и на фото-постах канала.
 CLIP_LOGO_PATH = "assets/filmlogo.png"
 
+# ТЗ 2026-07-21: 10 публикаций в сутки — 2 фильма + 4 клипа (по 2 на фильм) + 4 рерайта,
+# пауза между рерайт-постами случайная 1.5-4 часа, круглосуточно.
+DAILY_PLAN = {
+    "daily_video_count": 2,
+    "daily_video_min_gap_hours": 5,
+    "daily_clip_count": 2,
+    "max_posts_per_day": 4,
+    "min_interval_minutes": 90,
+    "max_interval_minutes": 240,
+    # Логотип на самом фильме. ВНИМАНИЕ: включает полный ре-энкод (~50 мин CPU на
+    # трёхчасовой фильм на 1-ядерном VPS). Снять — убрать этот ключ.
+    "film_logo_path": "assets/filmlogo.png",
+}
+
 
 def seed_cinema(repo: Repository) -> None:
     """Канал 2 — КиноЛайф. Публикация в VK (240120678) + TG (@kinobestfilmss). Фильтр off
@@ -73,11 +90,10 @@ def seed_cinema(repo: Repository) -> None:
     целиком (прод-настройки правились сверх сида) — только merge нужных ключей ниже."""
     settings = ChannelSettings(
         filters_enabled=False,
-        max_posts_per_day=4,
-        min_interval_minutes=300,  # 5ч между постами → 4/день, без пачки
         tg_footer_url="https://t.me/kinobestfilmss",
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
         clip_logo_path=CLIP_LOGO_PATH,
+        **DAILY_PLAN,
     )
     channel = _ensure_channel(
         repo,
@@ -94,11 +110,10 @@ def seed_cinema(repo: Repository) -> None:
     merge_channel_settings(
         repo,
         channel,
-        max_posts_per_day=4,
-        min_interval_minutes=300,
         daily_video_group=None,
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
         clip_logo_path=CLIP_LOGO_PATH,
+        **DAILY_PLAN,
     )
 
 

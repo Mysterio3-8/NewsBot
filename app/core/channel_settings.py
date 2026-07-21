@@ -93,6 +93,30 @@ class ChannelSettings:
     """Логотип-вотермарк в правом верхнем углу клипа (напр. "assets/filmlogo.png").
     None → клипы режутся без оформления (логотипа и хука)."""
 
+    daily_video_count: int = 1
+    """Сколько видео публиковать за сутки (ТЗ 2026-07-21: Кино → 2)."""
+
+    daily_video_min_gap_hours: int = 5
+    """Минимум часов между двумя видео одних суток — чтобы фильмы не шли подряд."""
+
+    film_logo_path: str | None = None
+    """Логотип в правом верхнем углу САМОГО ФИЛЬМА (не клипа). None → фильм публикуется
+    как скачан, без перекодирования. ВНИМАНИЕ: наложение требует полного ре-энкода —
+    на 1-ядерном VPS это ~50 минут CPU на трёхчасовой фильм."""
+
+    film_blur_region: list[float] | None = None
+    """Область чужого водяного знака в долях кадра [x, y, ширина, высота] (напр.
+    [0.82, 0.04, 0.15, 0.10] — правый верхний угол). Замыливается перед публикацией
+    тем же проходом, что и наложение логотипа. None → ничего не блюрим."""
+
+    film_blur_strength: int = 20
+    """Сила размытия области водяного знака (радиус boxblur). Больше — сильнее."""
+
+    max_interval_minutes: int | None = None
+    """Верхняя граница случайного интервала между публикациями. Задан вместе с
+    min_interval_minutes → пауза выбирается случайно в [min, max] (ТЗ 2026-07-21:
+    1.5-4 часа на рандом). None → интервал ровно min_interval_minutes."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -119,6 +143,12 @@ class ChannelSettings:
             daily_clip_seconds=data.get("daily_clip_seconds", 35),
             daily_clip_min_gap_seconds=data.get("daily_clip_min_gap_seconds", 120),
             clip_logo_path=data.get("clip_logo_path"),
+            daily_video_count=data.get("daily_video_count", 1),
+            daily_video_min_gap_hours=data.get("daily_video_min_gap_hours", 5),
+            film_logo_path=data.get("film_logo_path"),
+            film_blur_region=data.get("film_blur_region"),
+            film_blur_strength=data.get("film_blur_strength", 20),
+            max_interval_minutes=data.get("max_interval_minutes"),
         )
 
     def to_json(self) -> str:
@@ -161,4 +191,16 @@ class ChannelSettings:
             payload["daily_clip_min_gap_seconds"] = self.daily_clip_min_gap_seconds
         if self.clip_logo_path is not None:
             payload["clip_logo_path"] = self.clip_logo_path
+        if self.daily_video_count != 1:
+            payload["daily_video_count"] = self.daily_video_count
+        if self.daily_video_min_gap_hours != 5:
+            payload["daily_video_min_gap_hours"] = self.daily_video_min_gap_hours
+        if self.film_logo_path is not None:
+            payload["film_logo_path"] = self.film_logo_path
+        if self.film_blur_region is not None:
+            payload["film_blur_region"] = self.film_blur_region
+        if self.film_blur_strength != 20:
+            payload["film_blur_strength"] = self.film_blur_strength
+        if self.max_interval_minutes is not None:
+            payload["max_interval_minutes"] = self.max_interval_minutes
         return json.dumps(payload, ensure_ascii=False)

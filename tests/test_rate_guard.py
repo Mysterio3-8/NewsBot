@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from app.core.publishing.rate_guard import check_publish_allowed
+from app.core.publishing.rate_guard import check_publish_allowed, required_interval_minutes
 from app.db.repository import Repository, init_db, make_engine
 
 
@@ -159,3 +159,28 @@ def test_per_channel_limit_isolates_channels(tmp_path):
         min_interval_minutes=0, channel_id=ch_a.id, now=now,
     )
     assert reason is not None and "дневной лимит" in reason
+
+
+def test_required_interval_is_min_without_upper_bound():
+    last = datetime.datetime(2026, 7, 21, 10, 0)
+
+    assert required_interval_minutes(90, None, last) == 90
+
+
+def test_required_interval_is_random_within_range():
+    """ТЗ 2026-07-21: пауза 1.5-4 часа на рандом."""
+    values = {
+        required_interval_minutes(90, 240, datetime.datetime(2026, 7, 21, 10, minute))
+        for minute in range(0, 60)
+    }
+
+    assert all(90 <= value <= 240 for value in values)
+    assert len(values) > 1  # интервал реально меняется от публикации к публикации
+
+
+def test_required_interval_is_stable_for_the_same_gap():
+    """Иначе интервал пере-бросался бы на каждой проверке очереди, и пост уходил бы
+    по первому удачному броску — то есть всегда по нижней границе."""
+    last = datetime.datetime(2026, 7, 21, 10, 0)
+
+    assert required_interval_minutes(90, 240, last) == required_interval_minutes(90, 240, last)

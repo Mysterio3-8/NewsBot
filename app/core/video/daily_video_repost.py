@@ -28,6 +28,8 @@ from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
 from app.core.video.clip_cutter import cut_clips
+from app.core.video.film_prep import prepare_film
+from app.core.video.watermark import probe_dimensions
 from app.core.video.video_source import (
     SourceVideo,
     download_video,
@@ -43,9 +45,10 @@ logger = logging.getLogger("publishing")
 
 DAILY_VIDEO_DIR = OUTPUT_DIR / "daily_video"
 CLIPS_DIR = OUTPUT_DIR / "clips"
-# Окно публикации клипов — до 20:00 UTC (23:00 МСК): позже аудитория спит.
-CLIP_WINDOW_END_HOUR_UTC = 20
-CLIP_MIN_SPACING_MINUTES = 45
+# ТЗ 2026-07-21: постим круглосуточно, пауза между клипами случайная 1.5-4 часа
+# (раньше клипы жались в окно до 23:00 МСК с фиксированными 45 минутами).
+CLIP_MIN_SPACING_MINUTES = 90
+CLIP_MAX_SPACING_MINUTES = 240
 # Клип, который не удалось опубликовать сутки, считаем протухшим — не долбим VK вечно.
 CLIP_EXPIRE_HOURS = 24
 
@@ -54,28 +57,18 @@ def plan_clip_times(
     now: datetime.datetime,
     count: int,
     *,
-    end_hour_utc: int = CLIP_WINDOW_END_HOUR_UTC,
     min_spacing_minutes: int = CLIP_MIN_SPACING_MINUTES,
+    max_spacing_minutes: int = CLIP_MAX_SPACING_MINUTES,
     rng: random.Random | None = None,
 ) -> list[datetime.datetime]:
-    """Случайные моменты публикации клипов в остатке дня (от now+30мин до end_hour_utc),
-    не ближе min_spacing друг к другу. Если окно дня уже кончилось — просто раскладываем
-    с шагом min_spacing от текущего момента (клипы уйдут вечером, а не потеряются)."""
+    """Моменты публикации клипов: первый через 30-90 минут, дальше каждый через
+    случайную паузу min..max. Окна суток нет — постим круглосуточно (ТЗ 2026-07-21)."""
     rng = rng or random.Random()
-    spacing = datetime.timedelta(minutes=min_spacing_minutes)
-    start = now + datetime.timedelta(minutes=30)
-    end = now.replace(hour=end_hour_utc, minute=0, second=0, microsecond=0)
-
-    if end <= start + spacing * count:
-        return [start + spacing * i for i in range(count)]
-
-    offsets = sorted(rng.uniform(0, (end - start).total_seconds()) for _ in range(count))
     times: list[datetime.datetime] = []
-    for offset in offsets:
-        moment = start + datetime.timedelta(seconds=offset)
-        if times and moment - times[-1] < spacing:
-            moment = times[-1] + spacing
+    moment = now + datetime.timedelta(minutes=rng.uniform(30, 90))
+    for _ in range(count):
         times.append(moment)
+        moment += datetime.timedelta(minutes=rng.uniform(min_spacing_minutes, max_spacing_minutes))
     return times
 
 
@@ -129,7 +122,7 @@ def run_daily_video_repost(
     title, description = rewrite_video_texts(
         llm_client, title=video.title, description=video.description
     )
-    local_file = download_video(video, DAILY_VIDEO_DIR)
+    local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
     try:
         body = "\n\n".join(part for part in (title, description) if part.strip())
         text = _build_vk_publish_text(None, body, footer_links, False)
@@ -161,6 +154,25 @@ def run_daily_video_repost(
         )
     finally:
         local_file.unlink(missing_ok=True)  # диск VPS маленький — файл не храним
+
+
+def _prepare_local_file(local_file: Path, settings: ChannelSettings) -> Path:
+    """Единое оформление фильма (свой логотип + блюр чужого знака) до публикации и
+    нарезки — клипы наследуют его автоматически. Сбой оформления не отменяет день:
+    публикуем как скачали."""
+    if settings.film_logo_path is None and not settings.film_blur_region:
+        return local_file
+    try:
+        return prepare_film(
+            local_file,
+            logo_path=PROJECT_ROOT / settings.film_logo_path if settings.film_logo_path else None,
+            blur_region=settings.film_blur_region,
+            blur_strength=settings.film_blur_strength,
+            video_width=probe_dimensions(local_file)[0],
+        )
+    except Exception:
+        logger.exception("Оформление фильма не удалось, публикую исходник")
+        return local_file
 
 
 def _cut_and_schedule_clips(

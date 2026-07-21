@@ -61,7 +61,7 @@ class VideoWatermarker:
             if shutil.which(binary) is None:
                 raise VideoWatermarkError(f"{binary} не найден в PATH")
 
-        video_width, video_height = _probe_dimensions(video_path)
+        video_width, video_height = probe_dimensions(video_path)
         logo_width_px = int(video_width * self._config.size_ratio)
         # Уникализация встроена в тот же ffmpeg-проход (не отдельный ре-энкод) — быстрее
         # и не теряет качество дважды. Тот же смысл, что images.uniquify для фото:
@@ -108,7 +108,7 @@ class VideoWatermarker:
         return output_dir / video_path.name
 
 
-def _probe_dimensions(video_path: Path) -> tuple[int, int]:
+def probe_dimensions(video_path: Path) -> tuple[int, int]:
     command = [
         "ffprobe", "-v", "error",
         "-select_streams", "v:0",

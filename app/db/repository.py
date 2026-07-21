@@ -230,6 +230,21 @@ class Repository:
                 .scalar()
             )
 
+    def count_reposted_videos_since(
+        self, channel_id: int, since: datetime.datetime
+    ) -> int:
+        """Сколько видео канал опубликовал с момента `since` — дневной лимит видео."""
+        with self._session_factory() as session:
+            return (
+                session.query(func.count(RepostedVideo.id))
+                .filter(
+                    RepostedVideo.channel_id == channel_id,
+                    RepostedVideo.created_at >= since,
+                )
+                .scalar()
+                or 0
+            )
+
     def list_clip_intervals(self, video_ref: str) -> list[tuple[float, float]]:
         """Интервалы уже нарезанных клипов этого видео — новые клипы не должны с ними
         пересекаться (защита от повторной нарезки тех же участков)."""

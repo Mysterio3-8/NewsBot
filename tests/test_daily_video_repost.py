@@ -72,27 +72,26 @@ def _vk_item(video_id, title="Интерстеллар"):
 
 # --- plan_clip_times ---
 
-def test_plan_clip_times_within_window_and_spaced():
-    now = datetime.datetime(2026, 7, 18, 9, 0)  # 09:00 UTC, окно до 20:00
+def test_plan_clip_times_spaced_by_random_interval():
+    now = datetime.datetime(2026, 7, 18, 9, 0)
     times = plan_clip_times(now, 3, rng=random.Random(5))
 
     assert len(times) == 3
     assert times == sorted(times)
-    for moment in times:
-        assert moment >= now + datetime.timedelta(minutes=30)
-        assert moment <= datetime.datetime(2026, 7, 18, 20, 0)
+    assert now + datetime.timedelta(minutes=30) <= times[0] <= now + datetime.timedelta(minutes=90)
     for earlier, later in zip(times, times[1:]):
-        assert later - earlier >= datetime.timedelta(minutes=45)
+        gap = later - earlier
+        assert datetime.timedelta(minutes=90) <= gap <= datetime.timedelta(minutes=240)
 
 
-def test_plan_clip_times_after_window_falls_back_to_spacing():
-    now = datetime.datetime(2026, 7, 18, 21, 30)  # окно дня уже кончилось
+def test_plan_clip_times_keeps_going_past_midnight():
+    """Круглосуточная публикация (ТЗ 2026-07-21): поздний вечер больше не сжимает план."""
+    now = datetime.datetime(2026, 7, 18, 21, 30)
     times = plan_clip_times(now, 3, rng=random.Random(5))
 
-    assert len(times) == 3
-    assert times[0] == now + datetime.timedelta(minutes=30)
+    assert times[-1].day == 19
     for earlier, later in zip(times, times[1:]):
-        assert later - earlier == datetime.timedelta(minutes=45)
+        assert later - earlier >= datetime.timedelta(minutes=90)
 
 
 # --- run_daily_video_repost ---

@@ -168,6 +168,9 @@ async def _publish_channel_post(
         if settings.min_interval_minutes is not None
         else schedule.min_interval_minutes
     )
+    # Верхняя граница задана → пауза между постами канала случайная в [min, max]
+    # (ТЗ 2026-07-21: 1.5-4 часа на рандом, чтобы лента не выглядела роботом).
+    max_interval = settings.max_interval_minutes
     # Свой футер канала (ссылка в конце, напр. на TG-канал кино) переопределяет глобальный.
     # telegram_signature — брендовая подпись для TG-рендера; VK/IG получат призыв
     # подписаться + этот же tg_footer_url (см. footer.build_vk_footer).
@@ -186,6 +189,7 @@ async def _publish_channel_post(
                 footer_links=channel_footer,
                 max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval,
+                max_interval_minutes=max_interval,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
@@ -216,6 +220,7 @@ async def _publish_channel_post(
                 footer_links=channel_footer,
                 max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval,
+                max_interval_minutes=max_interval,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
@@ -297,16 +302,24 @@ DAILY_VIDEO_WINDOW_MINUTES = 120
 def should_run_daily_video(
     now: datetime.datetime,
     last_repost_at: datetime.datetime | None,
+    reposted_today: int = 0,
     *,
+    per_day: int = 1,
+    min_gap_hours: int = 5,
     start_hour_utc: int = DAILY_VIDEO_START_HOUR_UTC,
     window_minutes: int = DAILY_VIDEO_WINDOW_MINUTES,
 ) -> bool:
-    """Пора ли делать дневное видео. Ровно один раз в календарные сутки (UTC), начиная
-    со случайного момента в окне start_hour..start_hour+window. Момент детерминирован
-    датой, а не текущим временем, — рестарт сервиса не сдвигает его и не запускает
-    репост повторно."""
-    if last_repost_at is not None and last_repost_at.date() >= now.date():
+    """Пора ли делать очередное видео дня. Не больше per_day за календарные сутки (UTC),
+    между видео — минимум min_gap_hours. Первое видео стартует со случайного момента в
+    окне start_hour..start_hour+window; момент детерминирован ДАТОЙ, а не текущим
+    временем, — рестарт сервиса не сдвигает его и не запускает репост повторно."""
+    if reposted_today >= per_day:
         return False
+    if last_repost_at is not None:
+        if now - last_repost_at < datetime.timedelta(hours=min_gap_hours):
+            return False
+    if reposted_today > 0:
+        return True  # зазор уже выдержан, окно старта касается только первого видео
     offset = random.Random(now.date().toordinal()).randrange(window_minutes)
     earliest = now.replace(
         hour=start_hour_utc, minute=0, second=0, microsecond=0
@@ -342,8 +355,13 @@ def build_daily_video_job(
             settings = ChannelSettings.from_json(channel.settings_json)
             if not settings.daily_video_youtube_channels and settings.daily_video_group is None:
                 continue
+            now = datetime.datetime.utcnow()
             if not should_run_daily_video(
-                datetime.datetime.utcnow(), repo.last_reposted_video_at(channel.id)
+                now,
+                repo.last_reposted_video_at(channel.id),
+                repo.count_reposted_videos_since(channel.id, start_of_today_utc()),
+                per_day=settings.daily_video_count,
+                min_gap_hours=settings.daily_video_min_gap_hours,
             ):
                 continue
             publisher = build_vk_publisher_for_channel(
