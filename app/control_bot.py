@@ -32,6 +32,7 @@ from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.scheduler import pick_next_post_to_publish
 from app.core.testpost import test_post_now
 from app.db.repository import Repository
+from app.manager import systemd
 from app.moscow_time import format_moscow_time
 from app.factories import build_telegram_publisher, build_vk_publisher
 from app.paths import OUTPUT_DIR
@@ -787,11 +788,20 @@ def build_dispatcher(
     def _softs() -> list[Soft]:
         return build_soft_list(repo.list_channels(), _process_softs())
 
+    def _soft_units(soft_id: str) -> list[str]:
+        """systemd-юниты софта из реестра (софт = набор юнитов, см. manager/systemd.py)."""
+        record = manager_repo.get_soft(soft_id) if manager_repo else None
+        return systemd.parse_units(record.systemd_units_json) if record else []
+
     def _soft_statuses() -> dict[str, str]:
         statuses = {SOFT_ENGINE_ID: "🟢" if controller.is_running() else "🔴"}
         for ch in repo.list_channels():
             statuses[f"ch_{ch.id}"] = "🟢" if ch.enabled else "⚪"
         for soft_id, _title in _process_softs():
+            units = _soft_units(soft_id)
+            if units:
+                statuses[soft_id] = "🟢" if systemd.is_active(units) else "🔴"
+                continue
             ctrl = _proc_controllers.get(soft_id)
             statuses[soft_id] = ("🟢" if ctrl.is_running() else "🔴") if ctrl is not None else "▫️"
         return statuses
@@ -802,6 +812,9 @@ def build_dispatcher(
         if soft.kind == SOFT_KIND_CHANNEL:
             ch = repo.get_channel(soft.channel_id)
             return bool(ch and ch.enabled)
+        units = _soft_units(soft.soft_id)
+        if units:
+            return systemd.is_active(units)
         ctrl = _proc_controllers.get(soft.soft_id)
         return bool(ctrl and ctrl.is_running())
 
@@ -813,6 +826,9 @@ def build_dispatcher(
         if soft.kind == SOFT_KIND_CHANNEL:
             repo.update_channel(soft.channel_id, enabled=on)
             return True
+        units = _soft_units(soft.soft_id)
+        if units:
+            return systemd.start(units) if on else systemd.stop(units)
         ctrl = _proc_controllers.get(soft.soft_id)
         if ctrl is None:
             return False
@@ -824,6 +840,9 @@ def build_dispatcher(
             return render_status(controller, repo)
         if soft.kind == SOFT_KIND_CHANNEL:
             return render_channel_card(repo, soft.channel_id)
+        units = _soft_units(soft.soft_id)
+        if units:
+            return f"{soft.title}\n\n{systemd.status_text(units)}"
         if soft.soft_id == "p_nature":
             return render_nature_status(nature_controller)
         if soft.soft_id == "p_shorts":
@@ -831,8 +850,8 @@ def build_dispatcher(
         record = manager_repo.get_soft(soft.soft_id) if manager_repo else None
         host = record.host if record else "?"
         return (
-            f"{soft.title}\n\nВ реестре менеджера (хост: {host}). Управление процессом — "
-            f"следующий срез (нужен путь/systemd-юнит на VPS)."
+            f"{soft.title}\n\nВ реестре менеджера (хост: {host}). systemd-юниты не заданы — "
+            f"управление отсюда недоступно."
         )
 
     class PostCreation(StatesGroup):

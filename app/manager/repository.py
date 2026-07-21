@@ -89,11 +89,31 @@ class ManagerRepository:
 # Стартовый набор внешних софтов (все на VPS по словам владельца 2026-07-19). Пути к
 # проектам и способ управления (systemd-юнит/команда) на сервере пока неизвестны —
 # заполняются позже, тогда же включится реальный старт/стоп. Сейчас реестр даёт список.
+# Юниты выяснены разведкой VPS 2026-07-21 (`systemctl list-units`), не угаданы:
+# Минусы — не демон, а ежедневный ТАЙМЕР (сам .service `static`, живёт секунды),
+# поэтому включаем/выключаем .timer. Музыка — 9 юнитов (7 сервисов + 2 таймера).
+# Природа и Shorts на VPS НЕ развёрнуты (нет ни каталога, ни юнитов) → host=local.
+MUSIC_UNITS = json.dumps([
+    "tg-music-bot.service",
+    "tg-music-api.service",
+    "tg-music-worker.service",
+    "tg-music-youtube.service",
+    "tg-music-youtube-user.service",
+    "tg-music-soundcloud.service",
+    "tg-music-telegram-channel.service",
+    "tg-music-youtube-scan.timer",
+    "tg-music-telegram-channel-scan.timer",
+])
+
 DEFAULT_SOFTS: tuple[dict, ...] = (
-    {"soft_id": "p_nature", "title": "🌿 Природа (VK)", "path_env": "NATURE_BOT_PATH", "sort_order": 10},
-    {"soft_id": "p_shorts", "title": "🎬 Shorts", "path_env": "SHORTS_PATH", "sort_order": 20},
-    {"soft_id": "p_minus", "title": "➖ Минусы (YT→VK)", "path_env": "MINUS_BOT_PATH", "sort_order": 30},
-    {"soft_id": "p_music", "title": "🎵 Музыка (TG)", "path_env": "MUSIC_BOT_PATH", "sort_order": 40},
+    {"soft_id": "p_minus", "title": "➖ Минусы (YT→VK)", "host": "vps", "sort_order": 10,
+     "systemd_units_json": json.dumps(["yt-vk-publisher.timer"])},
+    {"soft_id": "p_music", "title": "🎵 Музыка (TG)", "host": "vps", "sort_order": 20,
+     "systemd_units_json": MUSIC_UNITS},
+    {"soft_id": "p_nature", "title": "🌿 Природа (VK)", "host": "local", "sort_order": 30,
+     "path_env": "NATURE_BOT_PATH"},
+    {"soft_id": "p_shorts", "title": "🎬 Shorts", "host": "local", "sort_order": 40,
+     "path_env": "SHORTS_PATH"},
 )
 
 
@@ -103,8 +123,7 @@ def seed_default_softs(repo: ManagerRepository) -> None:
     for spec in DEFAULT_SOFTS:
         soft_id = spec["soft_id"]
         fields = {k: v for k, v in spec.items() if k != "soft_id"}
-        existing = repo.get_soft(soft_id)
-        if existing is None:
-            repo.upsert_soft(soft_id, kind="process", host="vps", **fields)
+        if repo.get_soft(soft_id) is None:
+            repo.upsert_soft(soft_id, kind="process", **fields)
         else:
             repo.upsert_soft(soft_id, **fields)  # обновляем только метаданные списка

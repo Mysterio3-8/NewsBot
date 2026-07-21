@@ -58,9 +58,20 @@ def test_delete_soft(tmp_path):
     assert repo.get_soft("p_x") is None
 
 
-def test_default_softs_are_process_on_vps(tmp_path):
+def test_default_softs_carry_real_vps_units(tmp_path):
+    """Юниты выяснены разведкой VPS: Минусы — таймер (батч), Музыка — набор из 9 юнитов.
+    Природа/Shorts на VPS не развёрнуты → host=local, юнитов нет."""
     repo = make_repo(tmp_path)
     seed_default_softs(repo)
-    for soft in repo.list_softs():
-        assert soft.kind == "process"
-        assert soft.host == "vps"
+    softs = {s.soft_id: s for s in repo.list_softs()}
+    assert all(s.kind == "process" for s in softs.values())
+
+    assert softs["p_minus"].host == "vps"
+    assert json.loads(softs["p_minus"].systemd_units_json) == ["yt-vk-publisher.timer"]
+
+    music_units = json.loads(softs["p_music"].systemd_units_json)
+    assert softs["p_music"].host == "vps"
+    assert "tg-music-bot.service" in music_units and len(music_units) == 9
+
+    assert softs["p_nature"].host == "local"
+    assert softs["p_nature"].systemd_units_json is None

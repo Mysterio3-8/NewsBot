@@ -34,7 +34,9 @@ class SoftRecord(ManagerBase):
     host: Mapped[str] = mapped_column(String, default="vps")  # где живёт софт
     path_env: Mapped[str | None] = mapped_column(String, nullable=True)  # имя env с путём проекта
     command_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # argv как JSON-список
-    systemd_unit: Mapped[str | None] = mapped_column(String, nullable=True)  # для VPS-управления
+    # Список systemd-юнитов софта (JSON-массив). Софт = НАБОР юнитов: Музыка — 9 штук,
+    # Минусы — один .timer (батч, не демон). Пусто → софт не под systemd-управлением.
+    systemd_units_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # желаемое автосостояние
     sort_order: Mapped[int] = mapped_column(Integer, default=100)
     config_json: Mapped[str] = mapped_column(Text, default="{}")  # произвольные настройки софта
