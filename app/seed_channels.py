@@ -61,6 +61,10 @@ DAILY_VIDEO_YOUTUBE_CHANNELS = [
     "https://www.youtube.com/@%D0%9A%D0%B8%D0%BD%D0%BE%D0%BA%D0%BE%D1%82-%D1%818%D0%BF",
 ]
 
+# Логотип в правом верхнем углу вертикальных клипов (ТЗ 2026-07-21) — тот же кино-логотип,
+# что и на фото-постах канала.
+CLIP_LOGO_PATH = "assets/filmlogo.png"
+
 
 def seed_cinema(repo: Repository) -> None:
     """Канал 2 — КиноЛайф. Публикация в VK (240120678) + TG (@kinobestfilmss). Фильтр off
@@ -73,6 +77,7 @@ def seed_cinema(repo: Repository) -> None:
         min_interval_minutes=300,  # 5ч между постами → 4/день, без пачки
         tg_footer_url="https://t.me/kinobestfilmss",
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
+        clip_logo_path=CLIP_LOGO_PATH,
     )
     channel = _ensure_channel(
         repo,
@@ -93,6 +98,7 @@ def seed_cinema(repo: Repository) -> None:
         min_interval_minutes=300,
         daily_video_group=None,
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
+        clip_logo_path=CLIP_LOGO_PATH,
     )
 
 

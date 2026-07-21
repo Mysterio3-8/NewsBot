@@ -13,6 +13,7 @@ from app.core.images.providers.unsplash_provider import UnsplashProvider
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.telegram_publisher import TelegramPublisher
+from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_publisher import VKPublisher
 
@@ -82,6 +83,19 @@ def build_telegram_fetcher() -> TelegramFetcher | None:
         return None
     session_name = os.environ.get("TG_SESSION_NAME", "news_rewriter_session")
     return TelegramFetcher(api_id=int(api_id), api_hash=api_hash, session_name=session_name)
+
+
+def build_telethon_video_publisher() -> TelethonVideoPublisher | None:
+    """Заливка фильма в TG идёт пользовательской сессией (Bot API не берёт >50 МБ) —
+    те же TG_API_ID/TG_API_HASH, что и у читалки, но своя копия файла сессии."""
+    api_id = os.environ.get("TG_API_ID")
+    api_hash = os.environ.get("TG_API_HASH")
+    if not api_id or not api_hash:
+        return None
+    session_name = os.environ.get("TG_SESSION_NAME", "news_rewriter_session")
+    return TelethonVideoPublisher(
+        api_id=int(api_id), api_hash=api_hash, session_name=session_name
+    )
 
 
 def build_vk_fetcher(

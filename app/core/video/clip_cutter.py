@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core.images.promo_banner import has_promo_banner
+from app.core.video.clip_overlay import render_clip_overlay
 
 logger = logging.getLogger("monitoring")
 
@@ -143,17 +144,36 @@ def build_clip_filename(title: str, moment: datetime.datetime) -> str:
     return f"{clean}_{moment.strftime('%Y%m%d_%H%M%S')}.mp4"
 
 
-def cut_clip(video_path: Path, *, start: float, clip_seconds: float, out_path: Path) -> Path:
+def build_overlay_filter() -> str:
+    """Тот же вертикальный кадр, но поверх — готовый прозрачный PNG (логотип + хук),
+    отмасштабированный ровно под клип."""
+    return (
+        build_vertical_filter().replace("[out]", "[vert]")
+        + f";[1:v]scale={CLIP_WIDTH}:{CLIP_HEIGHT}[ovl];[vert][ovl]overlay=0:0[out]"
+    )
+
+
+def cut_clip(
+    video_path: Path,
+    *,
+    start: float,
+    clip_seconds: float,
+    out_path: Path,
+    overlay_path: Path | None = None,
+) -> Path:
     """Вырезать фрагмент и сконвертировать в вертикаль одним проходом ffmpeg.
     Перекодирование неизбежно (масштаб+blur-фон), поэтому preset veryfast — на слабом
     CPU VPS 35-секундный клип режется за минуты, не часы."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    overlay_args = ["-i", str(overlay_path)] if overlay_path is not None else []
+    filter_complex = build_overlay_filter() if overlay_path is not None else build_vertical_filter()
     command = [
         "ffmpeg", "-y", "-v", "error",
         "-ss", f"{start:.2f}",
         "-t", f"{clip_seconds:.2f}",
         "-i", str(video_path),
-        "-filter_complex", build_vertical_filter(),
+        *overlay_args,
+        "-filter_complex", filter_complex,
         "-map", "[out]",
         "-map", "0:a?",
         "-c:v", "libx264",
@@ -171,6 +191,26 @@ def cut_clip(video_path: Path, *, start: float, clip_seconds: float, out_path: P
     return out_path
 
 
+def _build_overlay(
+    out_dir: Path, stem: str, *, headline: list[str], logo_path: Path | None
+) -> Path | None:
+    """PNG-оформление клипа. Без логотипа оформление не рисуем вовсе; ошибка рендера
+    не должна ронять нарезку — клип без надписи лучше, чем отсутствие клипа."""
+    if logo_path is None:
+        return None
+    try:
+        return render_clip_overlay(
+            headline=headline[0] if headline else "",
+            logo_path=logo_path,
+            out_path=out_dir / f"{stem}_overlay.png",
+            width=CLIP_WIDTH,
+            height=CLIP_HEIGHT,
+        )
+    except Exception:
+        logger.exception("Оформление клипа %s не построено, режу без него", stem)
+        return None
+
+
 def cut_clips(
     video_path: Path,
     *,
@@ -180,10 +220,13 @@ def cut_clips(
     count: int,
     existing_intervals: list[tuple[float, float]],
     min_gap_seconds: float,
+    headlines: list[str] | None = None,
+    logo_path: Path | None = None,
     rng: random.Random | None = None,
 ) -> list[ClipCut]:
     """Полный цикл: длительность → выбор чистых сегментов → нарезка. Может вернуть
-    меньше count клипов (фильм короткий/плашка повсюду) — это не ошибка, логируется."""
+    меньше count клипов (фильм короткий/плашка повсюду) — это не ошибка, логируется.
+    headlines[i] — хук поверх i-го клипа; вместе с logo_path включает оформление."""
     duration = probe_duration_seconds(video_path)
     segments = pick_segments(
         duration,
@@ -204,7 +247,18 @@ def cut_clips(
         # +index секунд — чтобы имена клипов одного запуска не совпадали
         moment = base_moment + datetime.timedelta(seconds=index)
         out_path = out_dir / build_clip_filename(title, moment)
-        cut_clip(video_path, start=start, clip_seconds=clip_seconds, out_path=out_path)
+        overlay_path = _build_overlay(
+            out_dir, out_path.stem, headline=(headlines or [])[index:index + 1], logo_path=logo_path
+        )
+        cut_clip(
+            video_path,
+            start=start,
+            clip_seconds=clip_seconds,
+            out_path=out_path,
+            overlay_path=overlay_path,
+        )
+        if overlay_path is not None:
+            overlay_path.unlink(missing_ok=True)
         cuts.append(ClipCut(start_seconds=start, end_seconds=end, path=out_path))
         logger.info("Клип готов: %s (%.0f-%.0fс)", out_path.name, start, end)
     return cuts

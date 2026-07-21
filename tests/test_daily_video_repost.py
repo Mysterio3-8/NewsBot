@@ -97,7 +97,20 @@ def test_plan_clip_times_after_window_falls_back_to_spacing():
 
 # --- run_daily_video_repost ---
 
-def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None, youtube_video=None):
+class FakeTelethonPublisher:
+    def __init__(self, success=True):
+        self.success = success
+        self.calls = []
+
+    def publish_video(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.success
+
+
+def _run(
+    repo, channel, fetcher, publisher, tmp_path,
+    *, cuts=None, youtube_video=None, tg_video_publisher=None,
+):
     downloaded = tmp_path / "film.mp4"
 
     def fake_download(video, dest_dir, **kwargs):
@@ -129,8 +142,91 @@ def _run(repo, channel, fetcher, publisher, tmp_path, *, cuts=None, youtube_vide
             repo, channel,
             vk_fetcher=fetcher, vk_publisher=publisher,
             llm_client=None, footer_links=None, rng=random.Random(1),
+            tg_video_publisher=tg_video_publisher,
         )
     return downloaded
+
+
+def test_clips_are_cut_with_channel_logo_and_ai_hooks(tmp_path):
+    repo = _repo(tmp_path)
+    settings = ChannelSettings(
+        daily_video_group=223779047, daily_clip_count=2, clip_logo_path="assets/filmlogo.png"
+    )
+    channel = repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+    captured = {}
+
+    def fake_cut_clips(video_path, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch("app.core.video.daily_video_repost.download_video",
+               side_effect=lambda video, dest_dir, **kw: _written(tmp_path / "film.mp4")), \
+         patch("app.core.video.daily_video_repost.cut_clips", side_effect=fake_cut_clips), \
+         patch("app.core.video.daily_video_repost.rewrite_video_texts",
+               return_value=("Астрал", "Хоррор")), \
+         patch("app.core.video.daily_video_repost.generate_clip_hooks",
+               return_value=["Хук раз", "Хук два"]), \
+         patch("app.core.video.daily_video_repost.pick_unreposted_youtube", return_value=None):
+        run_daily_video_repost(
+            repo, channel,
+            vk_fetcher=FakeFetcher([_vk_item(10)]), vk_publisher=FakePublisher(),
+            llm_client=None, footer_links=None, rng=random.Random(1),
+        )
+
+    assert captured["headlines"] == ["Хук раз", "Хук два"]
+    assert captured["logo_path"].name == "filmlogo.png"
+
+
+def _written(path: Path) -> Path:
+    path.write_bytes(b"video")
+    return path
+
+
+def test_film_is_uploaded_to_telegram_when_channel_has_tg_destination(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    repo.update_channel(channel.id, tg_destination="@kinobestfilmss")
+    channel = repo.get_channel(channel.id)
+    tg_publisher = FakeTelethonPublisher()
+
+    _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(), tmp_path,
+        tg_video_publisher=tg_publisher,
+    )
+
+    assert len(tg_publisher.calls) == 1
+    assert tg_publisher.calls[0]["destination"] == "@kinobestfilmss"
+    assert "Новое название" in tg_publisher.calls[0]["caption"]
+
+
+def test_film_is_not_uploaded_to_telegram_without_destination(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    tg_publisher = FakeTelethonPublisher()
+
+    _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(), tmp_path,
+        tg_video_publisher=tg_publisher,
+    )
+
+    assert tg_publisher.calls == []
+
+
+def test_failed_vk_publish_skips_telegram_upload(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    repo.update_channel(channel.id, tg_destination="@kinobestfilmss")
+    channel = repo.get_channel(channel.id)
+    tg_publisher = FakeTelethonPublisher()
+
+    _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(success=False), tmp_path,
+        tg_video_publisher=tg_publisher,
+    )
+
+    assert tg_publisher.calls == []
 
 
 def test_full_daily_cycle_publishes_records_and_cleans_up(tmp_path):

@@ -5,7 +5,7 @@ import datetime
 import json
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, func, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
@@ -219,6 +219,16 @@ class Repository:
                 .all()
             )
             return {row[0] for row in rows}
+
+    def last_reposted_video_at(self, channel_id: int) -> datetime.datetime | None:
+        """Когда канал последний раз публиковал ежедневное видео. Нужно догоняющему
+        джобу: рестарт сервиса больше не съедает день (баг 19.07.2026)."""
+        with self._session_factory() as session:
+            return (
+                session.query(func.max(RepostedVideo.created_at))
+                .filter(RepostedVideo.channel_id == channel_id)
+                .scalar()
+            )
 
     def list_clip_intervals(self, video_ref: str) -> list[tuple[float, float]]:
         """Интервалы уже нарезанных клипов этого видео — новые клипы не должны с ними

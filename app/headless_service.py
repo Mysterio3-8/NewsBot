@@ -14,7 +14,6 @@ import logging
 import random
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config.loader import AppConfig
@@ -40,6 +39,7 @@ from app.factories import (
     build_image_providers,
     build_telegram_fetcher,
     build_telegram_publisher_for_channel,
+    build_telethon_video_publisher,
     build_vk_fetcher,
     build_vk_publisher_for_channel,
 )
@@ -290,6 +290,30 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKF
     return weekly_job
 
 
+DAILY_VIDEO_START_HOUR_UTC = 8
+DAILY_VIDEO_WINDOW_MINUTES = 120
+
+
+def should_run_daily_video(
+    now: datetime.datetime,
+    last_repost_at: datetime.datetime | None,
+    *,
+    start_hour_utc: int = DAILY_VIDEO_START_HOUR_UTC,
+    window_minutes: int = DAILY_VIDEO_WINDOW_MINUTES,
+) -> bool:
+    """Пора ли делать дневное видео. Ровно один раз в календарные сутки (UTC), начиная
+    со случайного момента в окне start_hour..start_hour+window. Момент детерминирован
+    датой, а не текущим временем, — рестарт сервиса не сдвигает его и не запускает
+    репост повторно."""
+    if last_repost_at is not None and last_repost_at.date() >= now.date():
+        return False
+    offset = random.Random(now.date().toordinal()).randrange(window_minutes)
+    earliest = now.replace(
+        hour=start_hour_utc, minute=0, second=0, microsecond=0
+    ) + datetime.timedelta(minutes=offset)
+    return now >= earliest
+
+
 def build_daily_video_job(
     repo: Repository,
     config: AppConfig,
@@ -304,13 +328,23 @@ def build_daily_video_job(
     — репост одного видео + нарезка клипов (ТЗ 2026-07-18, Кино). Скачивание/ffmpeg —
     блокирующие и долгие, уводим в поток, чтобы не вешать цикл проверки/публикации.
     vk_fetcher нужен только для VK-пути — YouTube читается напрямую через yt-dlp,
-    без VK_USER_TOKEN."""
+    без VK_USER_TOKEN.
+
+    Джоб вызывается часто (см. run_forever) и сам решает, пора ли: раньше это был
+    cron+jitter, и каждый рестарт сервиса пересоздавал задачу с новым временем — 19.07.2026
+    пять деплоев подряд съели дневное видео целиком. Теперь ориентир — дата последнего
+    репоста в БД, поэтому пропущенный день догоняется сразу после старта."""
     footer_links = build_footer_links_from_config(config.footer)
+    tg_video_publisher = build_telethon_video_publisher()
 
     async def daily_video_job() -> None:
         for channel in repo.list_channels(enabled_only=True):
             settings = ChannelSettings.from_json(channel.settings_json)
             if not settings.daily_video_youtube_channels and settings.daily_video_group is None:
+                continue
+            if not should_run_daily_video(
+                datetime.datetime.utcnow(), repo.last_reposted_video_at(channel.id)
+            ):
                 continue
             publisher = build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
@@ -332,6 +366,7 @@ def build_daily_video_job(
                     vk_publisher=publisher,
                     llm_client=llm_client,
                     footer_links=channel_footer,
+                    tg_video_publisher=tg_video_publisher,
                 )
             except Exception:
                 logger.exception("Видео-репост канала %s упал", channel.name)
@@ -415,14 +450,16 @@ async def run_forever(
         build_weekly_repost_job(repo, config, vk_fetcher),
         IntervalTrigger(weeks=1),
     )
-    # Ежедневный видео-репост (каналы с daily_video_group, напр. Кино): cron 08:00 UTC
-    # (11:00 МСК) + джиттер до 2ч — время публикации случайное в окне 11:00-13:00 МСК.
+    # Ежедневный видео-репост (Кино): проверка каждые 15 мин, сам джоб решает, пора ли
+    # (should_run_daily_video — случайный момент в окне 11:00-13:00 МСК, один раз в сутки).
+    # Cron+jitter здесь был нельзя: рестарт сервиса пересоздавал задачу и терял день.
     scheduler.add_job(
         build_daily_video_job(
             repo, config, llm_client, vk_fetcher,
             vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket,
         ),
-        CronTrigger(hour=8, minute=0, jitter=2 * 3600),
+        IntervalTrigger(minutes=15),
+        next_run_time=datetime.datetime.now(),
     )
     # Публикатор клипов: каждые 10 мин постит клипы, чьё запланированное время пришло.
     scheduler.add_job(

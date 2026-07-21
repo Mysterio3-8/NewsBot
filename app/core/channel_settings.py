@@ -89,6 +89,10 @@ class ChannelSettings:
     daily_clip_min_gap_seconds: int = 120
     """Минимальный зазор между клипами внутри фильма (и от ранее нарезанных участков)."""
 
+    clip_logo_path: str | None = None
+    """Логотип-вотермарк в правом верхнем углу клипа (напр. "assets/filmlogo.png").
+    None → клипы режутся без оформления (логотипа и хука)."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -114,6 +118,7 @@ class ChannelSettings:
             daily_clip_count=data.get("daily_clip_count", 3),
             daily_clip_seconds=data.get("daily_clip_seconds", 35),
             daily_clip_min_gap_seconds=data.get("daily_clip_min_gap_seconds", 120),
+            clip_logo_path=data.get("clip_logo_path"),
         )
 
     def to_json(self) -> str:
@@ -154,4 +159,6 @@ class ChannelSettings:
             payload["daily_clip_seconds"] = self.daily_clip_seconds
         if self.daily_clip_min_gap_seconds != 120:
             payload["daily_clip_min_gap_seconds"] = self.daily_clip_min_gap_seconds
+        if self.clip_logo_path is not None:
+            payload["clip_logo_path"] = self.clip_logo_path
         return json.dumps(payload, ensure_ascii=False)

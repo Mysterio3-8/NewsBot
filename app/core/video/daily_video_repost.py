@@ -19,10 +19,12 @@ import random
 from pathlib import Path
 
 from app.core.channel_settings import ChannelSettings
+from app.core.llm.clip_hook import generate_clip_hooks
 from app.core.llm.client import LLMClient
 from app.core.llm.video_rewriter import rewrite_video_texts
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.footer import FooterLinks
+from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
 from app.core.video.clip_cutter import cut_clips
@@ -35,7 +37,7 @@ from app.core.video.video_source import (
 )
 from app.db.models import Channel
 from app.db.repository import Repository
-from app.paths import OUTPUT_DIR
+from app.paths import OUTPUT_DIR, PROJECT_ROOT
 
 logger = logging.getLogger("publishing")
 
@@ -109,6 +111,7 @@ def run_daily_video_repost(
     vk_publisher: VKPublisher,
     llm_client: LLMClient,
     footer_links: FooterLinks | None,
+    tg_video_publisher: TelethonVideoPublisher | None = None,
     rng: random.Random | None = None,
 ) -> None:
     """Полный дневной цикл одного канала. Ошибки скачивания/нарезки не откатывают уже
@@ -143,10 +146,18 @@ def run_daily_video_repost(
         repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
         logger.info("Видео-репост [%s]: опубликовано %s (%s)", channel.name, video.ref, title)
 
+        # TG-заливка идёт ПОСЛЕ отметки в БД: если она упадёт, день всё равно считается
+        # закрытым и завтрашний прогон возьмёт следующий фильм, а не этот же снова.
+        if tg_video_publisher is not None and channel.tg_destination:
+            tg_video_publisher.publish_video(
+                destination=channel.tg_destination, video_path=local_file, caption=body
+            )
+
         _cut_and_schedule_clips(
             repo, channel, settings,
             video_ref=video.ref, video_file=local_file,
-            title=title or video.title, footer_links=footer_links, rng=rng,
+            title=title or video.title, description=description,
+            llm_client=llm_client, footer_links=footer_links, rng=rng,
         )
     finally:
         local_file.unlink(missing_ok=True)  # диск VPS маленький — файл не храним
@@ -160,9 +171,15 @@ def _cut_and_schedule_clips(
     video_ref: str,
     video_file: Path,
     title: str,
+    description: str,
+    llm_client: LLMClient,
     footer_links: FooterLinks | None,
     rng: random.Random | None,
 ) -> None:
+    hooks = generate_clip_hooks(
+        llm_client, title=title, description=description, count=settings.daily_clip_count
+    )
+    logo_path = PROJECT_ROOT / settings.clip_logo_path if settings.clip_logo_path else None
     try:
         cuts = cut_clips(
             video_file,
@@ -172,6 +189,8 @@ def _cut_and_schedule_clips(
             count=settings.daily_clip_count,
             existing_intervals=repo.list_clip_intervals(video_ref),
             min_gap_seconds=settings.daily_clip_min_gap_seconds,
+            headlines=hooks,
+            logo_path=logo_path,
             rng=rng,
         )
     except Exception:
