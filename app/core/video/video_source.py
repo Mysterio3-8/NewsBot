@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,24 @@ _MP4_KEY = re.compile(r"^mp4_(\d+)$")
 
 class VideoDownloadError(Exception):
     """Видео не удалось скачать ни прямой ссылкой, ни через yt-dlp."""
+
+
+def ytdlp_options(**overrides) -> dict[str, Any]:
+    """Базовые опции yt-dlp + cookie-файл, если он задан в YT_COOKIES_FILE.
+
+    Куки нужны, когда YouTube отвечает "Sign in to confirm you're not a bot". На VPS
+    этого пока не происходит, поэтому файл опционален: нет переменной или файла — ходим
+    анонимно. Значения куки в репозитории не хранятся никогда (инвариант: секреты вне
+    git); файл кладётся на машину руками. Учти, что куки залогиненного аккаунта YouTube
+    повышают риск блокировки САМОГО аккаунта — брать стоит одноразовый, не основной."""
+    options: dict[str, Any] = {"quiet": True, "no_warnings": True}
+    cookies_path = os.environ.get("YT_COOKIES_FILE")
+    if cookies_path and Path(cookies_path).exists():
+        options["cookiefile"] = cookies_path
+    elif cookies_path:
+        logger.warning("YT_COOKIES_FILE указывает на несуществующий файл: %s", cookies_path)
+    options.update(overrides)
+    return options
 
 
 @dataclass(frozen=True)
@@ -68,12 +87,7 @@ def list_youtube_channel_videos(channel_url: str, *, count: int = 20) -> list[di
     import yt_dlp
 
     videos_url = channel_url.rstrip("/") + "/videos"
-    options = {
-        "extract_flat": "in_playlist",
-        "quiet": True,
-        "no_warnings": True,
-        "playlistend": count,
-    }
+    options = ytdlp_options(extract_flat="in_playlist", playlistend=count)
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(videos_url, download=False)
     entries = info.get("entries") or [] if info else []
@@ -94,7 +108,7 @@ def fetch_youtube_video_details(video_id: str) -> SourceVideo:
     import yt_dlp
 
     url = f"https://www.youtube.com/watch?v={video_id}"
-    options = {"quiet": True, "no_warnings": True, "skip_download": True}
+    options = ytdlp_options(skip_download=True)
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
     return SourceVideo(
@@ -177,12 +191,10 @@ def _download_with_ytdlp(video: SourceVideo, dest: Path, *, max_height: int) -> 
             f"Нет прямых ссылок на {video.ref}, а yt-dlp не установлен"
         ) from error
 
-    options = {
-        "format": f"best[height<={max_height}][ext=mp4]/best[height<={max_height}]/best",
-        "outtmpl": str(dest.with_suffix("")) + ".%(ext)s",
-        "quiet": True,
-        "no_warnings": True,
-    }
+    options = ytdlp_options(
+        format=f"best[height<={max_height}][ext=mp4]/best[height<={max_height}]/best",
+        outtmpl=str(dest.with_suffix("")) + ".%(ext)s",
+    )
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([video.page_url])
