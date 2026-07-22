@@ -171,6 +171,8 @@ async def _publish_channel_post(
     # Верхняя граница задана → пауза между постами канала случайная в [min, max]
     # (ТЗ 2026-07-21: 1.5-4 часа на рандом, чтобы лента не выглядела роботом).
     max_interval = settings.max_interval_minutes
+    quiet_start = settings.quiet_start_hour
+    quiet_end = settings.quiet_end_hour
     # Свой футер канала (ссылка в конце, напр. на TG-канал кино) переопределяет глобальный.
     # telegram_signature — брендовая подпись для TG-рендера; VK/IG получат призыв
     # подписаться + этот же tg_footer_url (см. footer.build_vk_footer).
@@ -190,6 +192,8 @@ async def _publish_channel_post(
                 max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval,
                 max_interval_minutes=max_interval,
+                quiet_start_hour=quiet_start,
+                quiet_end_hour=quiet_end,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )
@@ -221,6 +225,8 @@ async def _publish_channel_post(
                 max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval,
                 max_interval_minutes=max_interval,
+                quiet_start_hour=quiet_start,
+                quiet_end_hour=quiet_end,
                 channel_id=channel.id,
                 include_hashtags=config.rewrite.include_hashtags,
             )

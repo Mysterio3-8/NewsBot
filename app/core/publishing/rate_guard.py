@@ -19,6 +19,24 @@ def _start_of_today_utc(now: datetime.datetime) -> datetime.datetime:
 
 _NETWORKS = ("tg", "vk")
 
+MSK_OFFSET_HOURS = 3  # часы расписания заданы в МСК, а now — в UTC
+
+
+def is_quiet_now(
+    now_utc: datetime.datetime,
+    quiet_start_hour: int | None,
+    quiet_end_hour: int | None,
+) -> bool:
+    """Ночная пауза (антибан VK: 6-8 ч без активности ночью выглядит как человек).
+    Часы задаются в МСК, окно может пересекать полночь (напр. 0..7 или 23..6).
+    Оба None или равны → пауза выключена."""
+    if quiet_start_hour is None or quiet_end_hour is None or quiet_start_hour == quiet_end_hour:
+        return False
+    msk_hour = (now_utc.hour + MSK_OFFSET_HOURS) % 24
+    if quiet_start_hour < quiet_end_hour:
+        return quiet_start_hour <= msk_hour < quiet_end_hour
+    return msk_hour >= quiet_start_hour or msk_hour < quiet_end_hour  # окно через полночь
+
 
 def check_publish_allowed(
     repo: Repository,
@@ -28,6 +46,8 @@ def check_publish_allowed(
     max_posts_per_day: int,
     min_interval_minutes: int,
     max_interval_minutes: int | None = None,
+    quiet_start_hour: int | None = None,
+    quiet_end_hour: int | None = None,
     channel_id: int | None = None,
     now: datetime.datetime | None = None,
 ) -> str | None:
@@ -43,6 +63,10 @@ def check_publish_allowed(
     """
     if network not in _NETWORKS:
         raise ValueError(f"Неизвестная сеть: {network!r}, ожидается одна из {_NETWORKS}")
+
+    now = now or datetime.datetime.utcnow()
+    if is_quiet_now(now, quiet_start_hour, quiet_end_hour):
+        return f"ночная пауза ({quiet_start_hour}:00–{quiet_end_hour}:00 МСК) — публикация отложена"
 
     already_this_network = repo.get_published_network_at(post_id, network) is not None
     if already_this_network:

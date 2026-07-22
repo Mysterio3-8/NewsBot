@@ -117,6 +117,11 @@ class ChannelSettings:
     min_interval_minutes → пауза выбирается случайно в [min, max] (ТЗ 2026-07-21:
     1.5-4 часа на рандом). None → интервал ровно min_interval_minutes."""
 
+    quiet_start_hour: int | None = None
+    quiet_end_hour: int | None = None
+    """Ночная пауза в МСК (антибан VK): в окне [start, end) публикация не идёт. Окно
+    может пересекать полночь (напр. 0..7). Оба None → пауза выключена."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -149,6 +154,8 @@ class ChannelSettings:
             film_blur_region=data.get("film_blur_region"),
             film_blur_strength=data.get("film_blur_strength", 20),
             max_interval_minutes=data.get("max_interval_minutes"),
+            quiet_start_hour=data.get("quiet_start_hour"),
+            quiet_end_hour=data.get("quiet_end_hour"),
         )
 
     def to_json(self) -> str:
@@ -203,4 +210,8 @@ class ChannelSettings:
             payload["film_blur_strength"] = self.film_blur_strength
         if self.max_interval_minutes is not None:
             payload["max_interval_minutes"] = self.max_interval_minutes
+        if self.quiet_start_hour is not None:
+            payload["quiet_start_hour"] = self.quiet_start_hour
+        if self.quiet_end_hour is not None:
+            payload["quiet_end_hour"] = self.quiet_end_hour
         return json.dumps(payload, ensure_ascii=False)

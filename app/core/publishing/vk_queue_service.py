@@ -32,6 +32,8 @@ def publish_queued_post_vk(
     max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY,
     min_interval_minutes: int = DEFAULT_MIN_INTERVAL_MINUTES,
     max_interval_minutes: int | None = None,
+    quiet_start_hour: int | None = None,
+    quiet_end_hour: int | None = None,
     channel_id: int | None = None,
     include_hashtags: bool = False,
 ) -> VKPublishResult:
@@ -46,6 +48,8 @@ def publish_queued_post_vk(
         max_posts_per_day=max_posts_per_day,
         min_interval_minutes=min_interval_minutes,
         max_interval_minutes=max_interval_minutes,
+        quiet_start_hour=quiet_start_hour,
+        quiet_end_hour=quiet_end_hour,
         channel_id=channel_id,
     )
     if blocked is not None:
