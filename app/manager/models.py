@@ -33,6 +33,7 @@ class SoftRecord(ManagerBase):
     kind: Mapped[str] = mapped_column(String, default="process")
     host: Mapped[str] = mapped_column(String, default="vps")  # где живёт софт
     path_env: Mapped[str | None] = mapped_column(String, nullable=True)  # имя env с путём проекта
+    project_path: Mapped[str | None] = mapped_column(String, nullable=True)  # каталог софта (для manager_contract.yaml)
     command_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # argv как JSON-список
     # Список systemd-юнитов софта (JSON-массив). Софт = НАБОР юнитов: Музыка — 9 штук,
     # Минусы — один .timer (батч, не демон). Пусто → софт не под systemd-управлением.

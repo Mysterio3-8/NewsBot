@@ -105,11 +105,13 @@ MUSIC_UNITS = json.dumps([
     "tg-music-telegram-channel-scan.timer",
 ])
 
+# project_path — каталог софта на VPS (для manager_contract.yaml). Выяснены разведкой.
 DEFAULT_SOFTS: tuple[dict, ...] = (
     {"soft_id": "p_minus", "title": "➖ Минусы (YT→VK)", "host": "vps", "sort_order": 10,
-     "systemd_units_json": json.dumps(["yt-vk-publisher.timer"])},
+     "systemd_units_json": json.dumps(["yt-vk-publisher.timer"]),
+     "project_path": "/opt/yt-vk-publisher"},
     {"soft_id": "p_music", "title": "🎵 Музыка (TG)", "host": "vps", "sort_order": 20,
-     "systemd_units_json": MUSIC_UNITS},
+     "systemd_units_json": MUSIC_UNITS, "project_path": "/opt/tg-music-bot"},
     {"soft_id": "p_nature", "title": "🌿 Природа (VK)", "host": "local", "sort_order": 30,
      "path_env": "NATURE_BOT_PATH"},
     {"soft_id": "p_shorts", "title": "🎬 Shorts", "host": "local", "sort_order": 40,
