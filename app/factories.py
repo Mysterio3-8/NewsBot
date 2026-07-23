@@ -16,6 +16,7 @@ from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_publisher import VKPublisher
+from app.core.publishing.youtube_publisher import YouTubeCredentials, YouTubePublisher
 
 
 def build_telegram_publisher(config: AppConfig) -> TelegramPublisher | None:
@@ -83,6 +84,22 @@ def build_telegram_fetcher() -> TelegramFetcher | None:
         return None
     session_name = os.environ.get("TG_SESSION_NAME", "news_rewriter_session")
     return TelegramFetcher(api_id=int(api_id), api_hash=api_hash, session_name=session_name)
+
+
+def build_youtube_publisher() -> YouTubePublisher | None:
+    """YouTube-загрузчик из .env. Все три ключа обязательны — иначе None (загрузка на
+    YouTube просто не идёт, остальные сети работают). Приватность — YT_UPLOAD_PRIVACY
+    (public/unlisted/private), по умолчанию public."""
+    client_id = os.environ.get("YT_UPLOAD_CLIENT_ID")
+    client_secret = os.environ.get("YT_UPLOAD_CLIENT_SECRET")
+    refresh_token = os.environ.get("YT_UPLOAD_REFRESH_TOKEN")
+    if not (client_id and client_secret and refresh_token):
+        return None
+    credentials = YouTubeCredentials(
+        client_id=client_id, client_secret=client_secret, refresh_token=refresh_token
+    )
+    privacy = os.environ.get("YT_UPLOAD_PRIVACY", "public")
+    return YouTubePublisher(credentials, privacy=privacy)
 
 
 def build_telethon_video_publisher() -> TelethonVideoPublisher | None:

@@ -41,6 +41,7 @@ from app.factories import (
     build_telegram_publisher_for_channel,
     build_telethon_video_publisher,
     build_vk_fetcher,
+    build_youtube_publisher,
     build_vk_publisher_for_channel,
 )
 
@@ -355,6 +356,7 @@ def build_daily_video_job(
     репоста в БД, поэтому пропущенный день догоняется сразу после старта."""
     footer_links = build_footer_links_from_config(config.footer)
     tg_video_publisher = build_telethon_video_publisher()
+    youtube_publisher = build_youtube_publisher()
 
     async def daily_video_job() -> None:
         for channel in repo.list_channels(enabled_only=True):
@@ -391,6 +393,7 @@ def build_daily_video_job(
                     llm_client=llm_client,
                     footer_links=channel_footer,
                     tg_video_publisher=tg_video_publisher,
+                    youtube_publisher=youtube_publisher,
                 )
             except Exception:
                 logger.exception("Видео-репост канала %s упал", channel.name)
@@ -406,6 +409,7 @@ def build_clip_publish_job(
 ):
     """Каждые 10 минут: опубликовать клипы, чьё запланированное время пришло. План — в
     БД (clip_segments), поэтому рестарт сервиса не теряет расписание клипов."""
+    youtube_publisher = build_youtube_publisher()
 
     async def clip_publish_job() -> None:
         def publisher_for(channel: Channel):
@@ -413,7 +417,10 @@ def build_clip_publish_job(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
             )
 
-        await asyncio.to_thread(publish_due_clips, repo, vk_publisher_for=publisher_for)
+        await asyncio.to_thread(
+            publish_due_clips, repo,
+            vk_publisher_for=publisher_for, youtube_publisher=youtube_publisher,
+        )
 
     return clip_publish_job
 

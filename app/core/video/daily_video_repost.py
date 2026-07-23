@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import logging
 import random
+import re
 from pathlib import Path
 
 from app.core.channel_settings import ChannelSettings
@@ -27,6 +28,12 @@ from app.core.publishing.footer import FooterLinks
 from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
+from app.core.publishing.youtube_description import (
+    build_vk_group_url,
+    build_youtube_description,
+    build_youtube_title,
+)
+from app.core.publishing.youtube_publisher import YouTubePublisher
 from app.core.video.clip_cutter import cut_clips
 from app.core.video.film_prep import prepare_film
 from app.core.video.watermark import probe_dimensions
@@ -105,6 +112,7 @@ def run_daily_video_repost(
     llm_client: LLMClient,
     footer_links: FooterLinks | None,
     tg_video_publisher: TelethonVideoPublisher | None = None,
+    youtube_publisher: YouTubePublisher | None = None,
     rng: random.Random | None = None,
 ) -> None:
     """Полный дневной цикл одного канала. Ошибки скачивания/нарезки не откатывают уже
@@ -144,6 +152,12 @@ def run_daily_video_repost(
         if tg_video_publisher is not None and channel.tg_destination:
             tg_video_publisher.publish_video(
                 destination=channel.tg_destination, video_path=local_file, caption=body
+            )
+
+        if youtube_publisher is not None and settings.youtube_upload:
+            _upload_to_youtube(
+                youtube_publisher, channel, settings,
+                video_path=local_file, title=title or video.title, body=body, is_short=False,
             )
 
         _cut_and_schedule_clips(
@@ -226,10 +240,41 @@ def _cut_and_schedule_clips(
         )
 
 
+_CLIP_TIMESTAMP_SUFFIX = re.compile(r"_\d{8}_\d{6}$")
+
+
+def _clip_title_from_path(clip_path: Path) -> str:
+    """Имя клипа «Название фильма_YYYYMMDD_HHMMSS» → «Название фильма» (заголовок для
+    YouTube Shorts; таймстамп в файле нужен для уникальности имени, не для зрителя)."""
+    return _CLIP_TIMESTAMP_SUFFIX.sub("", clip_path.stem) or clip_path.stem
+
+
+def _upload_to_youtube(
+    youtube_publisher: YouTubePublisher,
+    channel: Channel,
+    settings: ChannelSettings,
+    *,
+    video_path: Path,
+    title: str,
+    body: str,
+    is_short: bool,
+) -> None:
+    yt_title = build_youtube_title(title, is_short=is_short)
+    yt_description = build_youtube_description(
+        body,
+        vk_url=build_vk_group_url(channel.vk_destination),
+        tg_url=settings.tg_footer_url,
+    )
+    youtube_publisher.upload(
+        video_path, title=yt_title, description=yt_description, is_short=is_short
+    )
+
+
 def publish_due_clips(
     repo: Repository,
     *,
     vk_publisher_for,
+    youtube_publisher: YouTubePublisher | None = None,
     now: datetime.datetime | None = None,
 ) -> None:
     """Опубликовать клипы, чьё время пришло. vk_publisher_for(channel) → VKPublisher|None
@@ -263,6 +308,14 @@ def publish_due_clips(
             video_title=clip_path.stem,
         )
         if result.success:
+            settings = ChannelSettings.from_json(channel.settings_json)
+            # YouTube Shorts — до удаления файла (клип грузится только раз, best-effort).
+            if youtube_publisher is not None and settings.youtube_upload:
+                _upload_to_youtube(
+                    youtube_publisher, channel, settings,
+                    video_path=clip_path, title=_clip_title_from_path(clip_path),
+                    body=clip.text or "", is_short=True,
+                )
             repo.mark_clip_published(clip.id)
             clip_path.unlink(missing_ok=True)
             logger.info("Клип %d опубликован в VK (канал %s)", clip.id, channel.name)

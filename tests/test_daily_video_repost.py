@@ -106,9 +106,18 @@ class FakeTelethonPublisher:
         return self.success
 
 
+class FakeYouTubePublisher:
+    def __init__(self):
+        self.calls = []
+
+    def upload(self, video_path, **kwargs):
+        self.calls.append({"path": video_path, **kwargs})
+        return "yt_id"
+
+
 def _run(
     repo, channel, fetcher, publisher, tmp_path,
-    *, cuts=None, youtube_video=None, tg_video_publisher=None,
+    *, cuts=None, youtube_video=None, tg_video_publisher=None, youtube_publisher=None,
 ):
     downloaded = tmp_path / "film.mp4"
 
@@ -142,6 +151,7 @@ def _run(
             vk_fetcher=fetcher, vk_publisher=publisher,
             llm_client=None, footer_links=None, rng=random.Random(1),
             tg_video_publisher=tg_video_publisher,
+            youtube_publisher=youtube_publisher,
         )
     return downloaded
 
@@ -181,6 +191,74 @@ def test_clips_are_cut_with_channel_logo_and_ai_hooks(tmp_path):
 def _written(path: Path) -> Path:
     path.write_bytes(b"video")
     return path
+
+
+def _kino_channel_youtube_upload(repo):
+    settings = ChannelSettings(
+        daily_video_group=223779047, daily_clip_count=0, youtube_upload=True,
+        tg_footer_url="https://t.me/kinobestfilmss",
+    )
+    return repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+
+
+def test_film_is_uploaded_to_youtube_when_toggle_on(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel_youtube_upload(repo)
+    youtube = FakeYouTubePublisher()
+
+    _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(), tmp_path,
+        youtube_publisher=youtube,
+    )
+
+    assert len(youtube.calls) == 1
+    call = youtube.calls[0]
+    assert call["is_short"] is False
+    assert "https://t.me/kinobestfilmss" in call["description"]
+    assert "https://vk.com/public240120678" in call["description"]
+
+
+def test_film_not_uploaded_to_youtube_when_toggle_off(tmp_path):
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)  # youtube_upload=False по умолчанию
+    youtube = FakeYouTubePublisher()
+
+    _run(
+        repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(), tmp_path,
+        youtube_publisher=youtube,
+    )
+
+    assert youtube.calls == []
+
+
+def test_clip_uploaded_to_youtube_as_short(tmp_path):
+    from app.core.video.daily_video_repost import publish_due_clips
+
+    repo = _repo(tmp_path)
+    channel = _kino_channel_youtube_upload(repo)
+    clip = tmp_path / "Астрал_20260721_143640.mp4"
+    clip.write_bytes(b"clip")
+    repo.create_clip_segment(
+        channel_id=channel.id, video_ref="youtube_x",
+        start_seconds=1.0, end_seconds=35.0, clip_path=str(clip),
+        text="Астрал", scheduled_at=datetime.datetime(2026, 7, 21, 10, 0),
+    )
+    youtube = FakeYouTubePublisher()
+
+    publish_due_clips(
+        repo,
+        vk_publisher_for=lambda ch: FakePublisher(),
+        youtube_publisher=youtube,
+        now=datetime.datetime(2026, 7, 21, 11, 0),
+    )
+
+    assert len(youtube.calls) == 1
+    call = youtube.calls[0]
+    assert call["is_short"] is True
+    assert call["title"].startswith("Астрал")  # таймстамп из имени файла убран
+    assert "#Shorts" in call["title"]
 
 
 def test_film_is_uploaded_to_telegram_when_channel_has_tg_destination(tmp_path):

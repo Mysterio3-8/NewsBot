@@ -122,6 +122,10 @@ class ChannelSettings:
     """Ночная пауза в МСК (антибан VK): в окне [start, end) публикация не идёт. Окно
     может пересекать полночь (напр. 0..7). Оба None → пауза выключена."""
 
+    youtube_upload: bool = False
+    """Грузить ли фильмы и клипы на свой YouTube-канал (ТЗ 2026-07-22). Работает только
+    если в .env заданы YT_UPLOAD_* — иначе тумблер ни на что не влияет. Кино → True."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -156,6 +160,7 @@ class ChannelSettings:
             max_interval_minutes=data.get("max_interval_minutes"),
             quiet_start_hour=data.get("quiet_start_hour"),
             quiet_end_hour=data.get("quiet_end_hour"),
+            youtube_upload=data.get("youtube_upload", False),
         )
 
     def to_json(self) -> str:
@@ -214,4 +219,6 @@ class ChannelSettings:
             payload["quiet_start_hour"] = self.quiet_start_hour
         if self.quiet_end_hour is not None:
             payload["quiet_end_hour"] = self.quiet_end_hour
+        if self.youtube_upload:
+            payload["youtube_upload"] = True
         return json.dumps(payload, ensure_ascii=False)
