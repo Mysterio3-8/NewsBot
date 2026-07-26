@@ -10,7 +10,7 @@ import json
 
 from app.core.channel_settings import ChannelSettings
 from app.db.models import Channel
-from app.db.repository import Repository, init_db, make_engine
+from app.db.repository import DEFAULT_CHANNEL_NAME, Repository, init_db, make_engine
 
 
 def _ensure_channel(repo: Repository, name: str, *, vk_destination: str, **fields) -> Channel:
@@ -120,10 +120,58 @@ def seed_cinema(repo: Repository) -> None:
     )
 
 
+# Канал 1 «Новости» → публикует в TG @NewsThreeWord + VK 233689032 (таргеты заполняет
+# headless из config.publishing при старте, здесь их не дублируем). Единственный источник —
+# «прямой эфир» (novosti_efir), остальные исторические источники канала гасим (ТЗ 2026-07-26:
+# «брать только с одного канала»).
+NEWS_SOURCE_URL = "https://t.me/novosti_efir"
+
+# Антибан VK (all_auto/CLAUDE.md): объём заметно ниже 50/сут, случайный интервал, ночная
+# пауза 6-8ч в МСК. Публикация в VK-группу использует ЛИЧНЫЙ токен для загрузки фото —
+# самый банимый, поэтому консервативно. quiet 0..7 МСК = 7ч тишины. Значения per-channel
+# (settings_json) перекрывают глобальные 999/10 из config.yaml — иначе Новости постили бы
+# без лимита (ban-risk). Меняются без кода: повторный прогон сида или правка в боте.
+NEWS_ANTIBAN = {
+    "max_posts_per_day": 20,
+    "min_interval_minutes": 40,
+    "max_interval_minutes": 75,
+    "quiet_start_hour": 0,
+    "quiet_end_hour": 7,
+}
+
+
+def _keep_only_source(repo: Repository, channel: Channel, keep_url: str) -> None:
+    """Оставить включённым только источник keep_url, остальные источники канала выключить
+    (не удаляем — чтобы легко вернуть, просто гасим enabled). Идемпотентно."""
+    for source in repo.list_sources(channel_id=channel.id):
+        should_be_on = source.url == keep_url
+        if bool(source.enabled) != should_be_on:
+            repo.update_source(source.id, enabled=should_be_on)
+            print(f"  источник {source.name}: enabled={should_be_on}")
+
+
+def seed_news(repo: Repository) -> None:
+    """Канал «Новости» → включить (VK + TG), сузить источники до одного «прямого эфира»,
+    выставить консервативный антибан. Идемпотентно. Канал создаётся при init_db
+    (_ensure_default_channel), здесь только правим состояние."""
+    channel = next(
+        (c for c in repo.list_channels() if c.name == DEFAULT_CHANNEL_NAME), None
+    )
+    if channel is None:
+        print("Канал «Новости» не найден (создаётся при init_db) — пропуск")
+        return
+    repo.update_channel(channel.id, enabled=True)
+    merge_channel_settings(repo, channel, **NEWS_ANTIBAN)
+    _keep_only_source(repo, channel, NEWS_SOURCE_URL)
+    print(f"Канал «Новости» включён (id={channel.id}), источник — только {NEWS_SOURCE_URL}")
+
+
 def main() -> None:
     engine = make_engine()
     init_db(engine)
-    seed_cinema(Repository(engine))
+    repo = Repository(engine)
+    seed_cinema(repo)
+    seed_news(repo)
 
 
 if __name__ == "__main__":
