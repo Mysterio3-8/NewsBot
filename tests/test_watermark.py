@@ -15,8 +15,8 @@ from app.core.images.watermark import (
 
 
 def test_fit_within_safe_bounds_leaves_normal_photo_untouched():
-    """Фото в безопасном окне (16:9, 4:3, портрет 3:4) не трогаем — ни кропа, ни подложки."""
-    for size in [(1600, 900), (800, 600), (900, 1200)]:
+    """Фото в безопасном окне (16:9, 4:3, портрет 4:5) не трогаем — ни кропа, ни подложки."""
+    for size in [(1600, 900), (800, 600), (900, 1100)]:
         image = Image.new("RGBA", size, (10, 20, 30, 255))
         assert fit_within_safe_bounds(image).size == size
 
@@ -112,6 +112,19 @@ def test_watermarker_raises_when_logo_missing(tmp_path):
 
     with pytest.raises(WatermarkError):
         watermarker.apply(source_image_path, target_aspect_ratio="4:5", post_id=1)
+
+
+def test_watermarker_skips_logo_when_disabled(tmp_path):
+    """logo_enabled=False — лого не накладывается, отсутствие файла лого не роняет apply
+    (режим «простое медиа»: фото без вотермарка)."""
+    source_image_path = tmp_path / "source.jpg"
+    Image.new("RGB", (800, 600), color="blue").save(source_image_path)
+
+    watermarker = Watermarker(
+        make_config(logo_path="assets/does_not_exist.png", logo_enabled=False)
+    )
+    out = watermarker.apply(source_image_path, target_aspect_ratio="4:5", post_id=1)
+    assert out.exists()
 
 
 def test_watermarker_applies_logo_and_saves_output(tmp_path, monkeypatch):

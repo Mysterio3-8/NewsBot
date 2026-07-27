@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
 from app.core.images.collage_splitter import split_vertical_collage
 from app.core.images.promo_banner import has_promo_banner
-from app.core.images.watermark_detector import locate_foreign_watermark
+from app.core.images.watermark_detector import image_has_heavy_text, locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
 from app.core.llm.headline_generator import generate_headlines
@@ -80,6 +81,7 @@ def process_fetched_post(
     rewrite_max_length: int | None = None,
     rewrite_length_factor: float | None = None,
     split_collage: bool = False,
+    simple_media: bool = False,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -212,6 +214,7 @@ def process_fetched_post(
         image_providers=image_providers,
         image_query_mode=image_query_mode,
         image_search_providers=image_search_providers,
+        simple_media=simple_media,
     )
     video_path = _prepare_video(
         raw_post_id=raw_post.id,
@@ -258,6 +261,7 @@ def _prepare_images(
     image_providers: dict[str, ImageProvider] | None,
     image_query_mode: str = "generic",
     image_search_providers: list[str] | None = None,
+    simple_media: bool = False,
 ) -> list[str] | None:
     """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
     отфильтрованы как чужой водяной знак, см. _filter_watermarked_photos), для
@@ -265,6 +269,21 @@ def _prepare_images(
     он реально нужен, чтобы не тратить лимит Groq впустую."""
     if images_config is None or watermark_config is None:
         return None
+
+    # Режим «простое медиа» Новостей (ТЗ 2026-07-27): оригинал без замены + заголовок-хук
+    # на первом, без лого/фейда. Приоритетнее всех прочих веток.
+    if simple_media:
+        return _prepare_simple_media(
+            llm_client,
+            raw_post_id=raw_post_id,
+            post_media_urls=post_media_urls,
+            rewritten_text=rewritten_text,
+            headline=headline,
+            images_config=images_config,
+            watermark_config=watermark_config,
+            headline_card_config=headline_card_config,
+            image_providers=image_providers,
+        )
 
     # Кино-канал (image_query_mode="movie_title"): не берём фото источника и не идём
     # в обычный сток — ищем РЕАЛЬНЫЕ кадры/постеры конкретного фильма по названию,
@@ -333,6 +352,98 @@ def _prepare_images(
         logger.warning("Watermark не удался для raw_post %d: %s", raw_post_id, error)
         return None
 
+    return [str(p) for p in image_paths] or None
+
+
+def _headline_only_card(card: HeadlineCardConfig | None) -> HeadlineCardConfig:
+    """Оформление «только заголовок»: карточка включена, но цветной фейд убран
+    (corner_fade_max_alpha=0, без углов) — на фото ляжет лишь текст-хук."""
+    base = card or HeadlineCardConfig()
+    return dataclasses.replace(
+        base, enabled=True, corner_fade_max_alpha=0.0, corner_fade_corners=[]
+    )
+
+
+def _prepare_simple_media(
+    llm_client: LLMClient,
+    *,
+    raw_post_id: int,
+    post_media_urls: list[str],
+    rewritten_text: str,
+    headline: str | None,
+    images_config: ImagesConfig,
+    watermark_config: WatermarkConfig,
+    headline_card_config: HeadlineCardConfig | None,
+    image_providers: dict[str, ImageProvider] | None,
+) -> list[str] | None:
+    """Режим «простое медиа» Новостей (ТЗ 2026-07-27): оригинальные фото поста БЕЗ замены
+    (детектор чужих знаков не подменяет фото на сток), ВСЕ фото, заголовок-хук ТОЛЬКО на
+    первом и только если на нём мало текста (иначе буквы смешаются — vision-проверка).
+    Без логотипа и цветного фейда (только safe-fit + заголовок). Нет своего фото — один
+    сток по смыслу + заголовок (пост без картинки читается плохо)."""
+    watermarker = Watermarker(
+        dataclasses.replace(watermark_config, logo_enabled=False),
+        images_config.uniquify,
+        _headline_only_card(headline_card_config),
+        aspect_mode=images_config.aspect_mode,
+    )
+
+    originals = [url for url in post_media_urls if url][:MAX_SOURCE_PHOTOS]
+    if originals:
+        # Заголовок только на первом; если на нём много текста — не ставим вовсе
+        # (перенос на второе фото не делаем: хук идёт на ведущий кадр или никуда).
+        first_headline = headline
+        if headline and image_has_heavy_text(llm_client, Path(originals[0])):
+            logger.info("[raw_post %d] на первом фото много текста — заголовок не ставим", raw_post_id)
+            first_headline = None
+        return _apply_simple(
+            watermarker, raw_post_id, images_config,
+            providers_order=["source"],
+            providers={"source": SourceImageProvider(originals)},
+            query="", count=len(originals), headline=first_headline,
+        )
+
+    # Своего фото нет — добавляем один сток по смыслу + заголовок.
+    providers = dict(image_providers or {})
+    stock_order = [n for n in images_config.providers_order if n != "source" and n in providers]
+    if not stock_order:
+        return None
+    query = _safe_image_query(llm_client, rewritten_text)
+    if not query:
+        return None
+    return _apply_simple(
+        watermarker, raw_post_id, images_config,
+        providers_order=stock_order, providers=providers,
+        query=query, count=1, headline=headline,
+    )
+
+
+def _apply_simple(
+    watermarker: Watermarker,
+    raw_post_id: int,
+    images_config: ImagesConfig,
+    *,
+    providers_order: list[str],
+    providers: dict[str, ImageProvider],
+    query: str,
+    count: int,
+    headline: str | None,
+) -> list[str] | None:
+    try:
+        image_paths = prepare_images_for_post(
+            providers_order=providers_order,
+            providers=providers,
+            query=query,
+            count=count,
+            post_id=raw_post_id,
+            headline=headline,
+            watermarker=watermarker,
+            target_aspect_ratio=images_config.target_aspect_ratio,
+            raw_output_dir=OUTPUT_DIR / "raw" / str(raw_post_id),
+        )
+    except WatermarkError as error:
+        logger.warning("Простое медиа не удалось для raw_post %d: %s", raw_post_id, error)
+        return None
     return [str(p) for p in image_paths] or None
 
 

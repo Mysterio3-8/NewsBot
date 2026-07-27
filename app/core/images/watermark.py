@@ -32,7 +32,9 @@ MAX_CROP_FRACTION = 0.02
 # вообще (никакого кропа/подложки — «нормальное фото»), шире/уже — вписываем ЦЕЛИКОМ на
 # тёмную подложку (сплошную, не блюр — блюр пользователь отверг 2026-07-11). Так ни фото,
 # ни наложенные заголовок/лого не обрезаются нигде.
-SAFE_MIN_ASPECT = 0.70  # ~5:7 — «высоту» до этого VK-лента показывает целиком; ниже — паддим
+SAFE_MIN_ASPECT = 0.80  # 4:5 — «высоту» до этого VK-лента показывает целиком; выше (портрет)
+                        # VK режет по центру → срезает низ с заголовком (жалоба 2026-07-27),
+                        # поэтому такие паддим до 4:5.
 SAFE_MAX_ASPECT = 1.78  # 16:9 — «ширину» до этого показывает целиком; шире (панорамы) — паддим
 SAFE_PAD_COLOR = (12, 20, 16)  # тёмный фон подложки, в тон брендовому зелёному
 
@@ -95,16 +97,20 @@ class Watermarker:
             image = fit_to_aspect_ratio(image, target_aspect_ratio)
         image = uniquify(image, self._uniquify_config)
         if self._headline_card_config.enabled:
-            # Зелёный фейд по углам — на КАЖДОМ фото (общий фирменный вид), заголовок
-            # — только на первом (headline передаётся только для index==0, см.
-            # image_pipeline.prepare_images_for_post).
-            image = apply_corner_fade(image, self._headline_card_config)
+            card = self._headline_card_config
+            # Цветной фейд по углам — только если он реально настроен (углы + alpha>0).
+            # Режим «простое медиа» Новостей передаёт alpha=0 → фейда нет, остаётся
+            # только заголовок (запрос 2026-07-27 «убрать фейд вообще, оставить хук»).
+            if card.corner_fade_corners and card.corner_fade_max_alpha > 0:
+                image = apply_corner_fade(image, card)
             if headline:
-                image = overlay_headline(image, headline, self._headline_card_config)
+                image = overlay_headline(image, headline, card)
         image = self._overlay_logo(image)
         return self._save(image, image_path, post_id)
 
     def _overlay_logo(self, image: Image.Image) -> Image.Image:
+        if not self._config.logo_enabled:
+            return image  # режим без вотермарка (простое медиа)
         logo_path = PROJECT_ROOT / self._config.logo_path
         if not logo_path.exists():
             raise WatermarkError(f"Логотип не найден: {logo_path}")

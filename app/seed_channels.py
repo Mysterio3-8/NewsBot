@@ -148,6 +148,10 @@ NEWS_FOOTER = {
     "tg_footer_signature": "🔢 Новости в трёх словах",
 }
 
+# Режим «простое медиа» (ТЗ 2026-07-27): оригинал фото без замены, все медиа, заголовок
+# только на первом и только если на нём мало текста, без лого/фейда.
+NEWS_MEDIA = {"simple_media": True}
+
 
 def _keep_only_source(repo: Repository, channel: Channel, keep_url: str) -> None:
     """Оставить включённым только источник keep_url, остальные источники канала выключить
@@ -170,7 +174,7 @@ def seed_news(repo: Repository) -> None:
         print("Канал «Новости» не найден (создаётся при init_db) — пропуск")
         return
     repo.update_channel(channel.id, enabled=True)
-    merge_channel_settings(repo, channel, **NEWS_ANTIBAN, **NEWS_FOOTER)
+    merge_channel_settings(repo, channel, **NEWS_ANTIBAN, **NEWS_FOOTER, **NEWS_MEDIA)
     _keep_only_source(repo, channel, NEWS_SOURCE_URL)
     print(f"Канал «Новости» включён (id={channel.id}), источник — только {NEWS_SOURCE_URL}")
 

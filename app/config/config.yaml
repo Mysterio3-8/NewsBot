@@ -196,10 +196,10 @@ watermark:
 # включить fade+лого+заголовок, но чтобы можно было включать/выключать в боте.
 headline_card:
   enabled: true
-  corner_fade_color: [20, 150, 95]             # приглушённый зелёный (менее яркий/насыщенный, запрос 2026-07-26)
-  corner_fade_corners: ["bottom-left", "top-right"]  # нижний-левый + верхний-правый
-  corner_fade_max_alpha: 0.38                   # прозрачнее и тусклее (было 0.74 — запрос «меньше яркость/прозрачность»)
-  corner_fade_radius_ratio: 0.65               # меньше свечение, не доходит до центра (было 1.05 — запрос «меньше размер»)
+  corner_fade_color: [20, 150, 95]             # зелёный (не используется при alpha 0)
+  corner_fade_corners: ["bottom-left", "top-right"]
+  corner_fade_max_alpha: 0.0                    # ФЕЙД ВЫКЛЮЧЕН ВООБЩЕ (запрос 2026-07-27 «убери зелёный фэйд»)
+  corner_fade_radius_ratio: 0.65
   band_color: [6, 40, 26]                      # тёмно-зелёная полоса под заголовком
   font_path: "assets/fonts/DejaVuSans-Bold.ttf"
   font_size_ratio: 0.05                        # мельче заголовок на фото (было 0.065 — запрос 2026-07-26)

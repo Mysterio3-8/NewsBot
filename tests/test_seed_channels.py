@@ -61,6 +61,17 @@ def test_seed_news_adds_telegram_footer_link(tmp_path):
     assert settings.tg_footer_signature is not None
 
 
+def test_seed_news_enables_simple_media(tmp_path):
+    engine = make_engine(tmp_path / "media.db")
+    init_db(engine)
+    repo = Repository(engine)
+    _seed_default_channel(repo)
+
+    seed_news(repo)
+
+    assert ChannelSettings.from_json(_news_channel(repo).settings_json).simple_media is True
+
+
 def test_seed_news_is_idempotent(tmp_path):
     engine = make_engine(tmp_path / "idem.db")
     init_db(engine)

@@ -50,6 +50,13 @@ class ChannelSettings:
     None → наследовать глобальный тумблер. False → выключить (напр. Кино — свой стиль,
     без новостного шаблона). True → включить принудительно."""
 
+    simple_media: bool = False
+    """Режим «простое медиа» (ТЗ 2026-07-27, Новости): брать ОРИГИНАЛЬНЫЕ фото поста без
+    замены (детектор чужих знаков не подменяет фото на сток), публиковать ВСЕ фото,
+    накладывать заголовок-хук ТОЛЬКО на первое фото и только если на нём мало текста
+    (иначе буквы смешаются — vision-проверка). Без логотипа и без цветного фейда. Если
+    у поста нет своего фото — добавить один сток по смыслу + заголовок."""
+
     rewrite_prompt: str | None = None
     """Имя своего промпта рерайта канала (напр. "rewrite_kino" — красивый подробный
     кино-стиль). None → новостной "rewrite"."""
@@ -146,6 +153,7 @@ class ChannelSettings:
             image_providers_order=data.get("image_providers_order"),
             logo_path=data.get("logo_path"),
             photo_design=data.get("photo_design"),
+            simple_media=data.get("simple_media", False),
             rewrite_prompt=data.get("rewrite_prompt"),
             rewrite_max_length=data.get("rewrite_max_length"),
             rewrite_length_factor=data.get("rewrite_length_factor"),
@@ -187,6 +195,8 @@ class ChannelSettings:
             payload["logo_path"] = self.logo_path
         if self.photo_design is not None:
             payload["photo_design"] = self.photo_design
+        if self.simple_media:
+            payload["simple_media"] = True
         if self.rewrite_prompt is not None:
             payload["rewrite_prompt"] = self.rewrite_prompt
         if self.rewrite_max_length is not None:

@@ -1,7 +1,25 @@
 from unittest.mock import Mock
 
-from app.core.images.watermark_detector import locate_foreign_watermark
+from app.core.images.watermark_detector import image_has_heavy_text, locate_foreign_watermark
 from app.core.llm.client import LLMClient, LLMUnavailableError
+
+
+def test_image_has_heavy_text_true(tmp_path):
+    client = Mock(spec=LLMClient)
+    client.generate_vision.return_value = "да"
+    assert image_has_heavy_text(client, tmp_path / "screenshot.jpg") is True
+
+
+def test_image_has_heavy_text_false(tmp_path):
+    client = Mock(spec=LLMClient)
+    client.generate_vision.return_value = "нет"
+    assert image_has_heavy_text(client, tmp_path / "photo.jpg") is False
+
+
+def test_image_has_heavy_text_fails_open_when_vision_unavailable(tmp_path):
+    client = Mock(spec=LLMClient)
+    client.generate_vision.side_effect = LLMUnavailableError("vision down")
+    assert image_has_heavy_text(client, tmp_path / "photo.jpg") is False
 
 
 def test_locate_foreign_watermark_returns_empty_set_when_none_found(tmp_path):

@@ -681,6 +681,94 @@ def test_process_fetched_post_filters_disabled_still_dedups(tmp_path):
     assert second.rejected.reason == "дубль по SimHash"
 
 
+def test_simple_media_uses_all_originals_with_headline_on_first(monkeypatch):
+    """simple_media (Новости): оригиналы БЕЗ фильтрации/замены, все фото, заголовок
+    передан (на первое). Детектор текста → мало текста, заголовок ставим."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "image_has_heavy_text", lambda *a, **k: False)
+    captured = {}
+    monkeypatch.setattr(
+        pipeline_module, "prepare_images_for_post",
+        lambda **kw: captured.update(kw) or ["out1.jpg", "out2.jpg"],
+    )
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=["a.jpg", "b.jpg"],
+        rewritten_text="текст",
+        headline="ХУК",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+        simple_media=True,
+    )
+
+    assert result == ["out1.jpg", "out2.jpg"]
+    assert captured["providers_order"] == ["source"]
+    assert captured["count"] == 2  # все оригиналы, не count_per_post
+    assert captured["headline"] == "ХУК"
+
+
+def test_simple_media_skips_headline_when_first_photo_text_heavy(monkeypatch):
+    """Если на первом фото много текста — заголовок не ставим (каша)."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "image_has_heavy_text", lambda *a, **k: True)
+    captured = {}
+    monkeypatch.setattr(
+        pipeline_module, "prepare_images_for_post",
+        lambda **kw: captured.update(kw) or ["out.jpg"],
+    )
+
+    _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=["screenshot.jpg"],
+        rewritten_text="текст",
+        headline="ХУК",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+        simple_media=True,
+    )
+
+    assert captured["headline"] is None
+
+
+def test_simple_media_adds_stock_with_headline_when_no_photo(monkeypatch):
+    """Пост без своего фото: добавляем один сток по смыслу + заголовок."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_safe_image_query", lambda *a, **k: "город")
+    captured = {}
+    monkeypatch.setattr(
+        pipeline_module, "prepare_images_for_post",
+        lambda **kw: captured.update(kw) or ["stock.jpg"],
+    )
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=[],
+        rewritten_text="текст",
+        headline="ХУК",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={"pexels": Mock()},
+        simple_media=True,
+    )
+
+    assert result == ["stock.jpg"]
+    assert captured["providers_order"] == ["pexels"]
+    assert captured["count"] == 1
+    assert captured["headline"] == "ХУК"
+
+
 def test_prepare_images_keep_original_falls_back_to_stock_when_no_own_photo(monkeypatch):
     """keep_original + нет своего фото (2026-07-09): берём сток (Pexels) по запросу из
     текста, без вотермарка — пост без картинки читается плохо."""

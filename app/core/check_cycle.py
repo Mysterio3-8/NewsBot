@@ -190,6 +190,7 @@ def _process_posts(
                 rewrite_max_length=settings.rewrite_max_length,
                 rewrite_length_factor=settings.rewrite_length_factor,
                 split_collage=settings.split_collage,
+                simple_media=settings.simple_media,
             )
         except Exception:
             logger.exception(
