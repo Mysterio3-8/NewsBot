@@ -8,7 +8,35 @@ from app.core.images.watermark import (
     crop_out_watermark_regions,
     crop_to_aspect_ratio,
     fit_to_aspect_ratio,
+    SAFE_MAX_ASPECT,
+    SAFE_MIN_ASPECT,
+    fit_within_safe_bounds,
 )
+
+
+def test_fit_within_safe_bounds_leaves_normal_photo_untouched():
+    """Фото в безопасном окне (16:9, 4:3, портрет 3:4) не трогаем — ни кропа, ни подложки."""
+    for size in [(1600, 900), (800, 600), (900, 1200)]:
+        image = Image.new("RGBA", size, (10, 20, 30, 255))
+        assert fit_within_safe_bounds(image).size == size
+
+
+def test_fit_within_safe_bounds_pads_too_wide_photo_without_cropping():
+    """Панорама 3:1 → поля сверху/снизу до SAFE_MAX, контент целиком (ширина та же)."""
+    image = Image.new("RGBA", (1800, 600), (10, 20, 30, 255))
+    result = fit_within_safe_bounds(image)
+    assert result.width == 1800
+    assert result.height > 600
+    assert result.width / result.height <= SAFE_MAX_ASPECT + 1e-6
+
+
+def test_fit_within_safe_bounds_pads_too_tall_photo_without_cropping():
+    """Вертикаль 9:16 → поля по бокам до SAFE_MIN, контент целиком (высота та же)."""
+    image = Image.new("RGBA", (540, 960), (10, 20, 30, 255))
+    result = fit_within_safe_bounds(image)
+    assert result.height == 960
+    assert result.width > 540
+    assert result.width / result.height >= SAFE_MIN_ASPECT - 1e-6
 
 
 def test_fit_to_aspect_ratio_pads_wide_image_to_square_without_cropping():

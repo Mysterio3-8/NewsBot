@@ -94,6 +94,7 @@ def seed_cinema(repo: Repository) -> None:
     settings = ChannelSettings(
         filters_enabled=False,
         tg_footer_url="https://t.me/kinobestfilmss",
+        tg_footer_signature="🎬 Больше фильмов",
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
         clip_logo_path=CLIP_LOGO_PATH,
         **DAILY_PLAN,
@@ -116,6 +117,7 @@ def seed_cinema(repo: Repository) -> None:
         daily_video_group=None,
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
         clip_logo_path=CLIP_LOGO_PATH,
+        tg_footer_signature="🎬 Больше фильмов",
         **DAILY_PLAN,
     )
 
@@ -137,6 +139,13 @@ NEWS_ANTIBAN = {
     "max_interval_minutes": 75,
     "quiet_start_hour": 0,
     "quiet_end_hour": 7,
+}
+
+# Ссылка на свой TG-канал в конце каждого поста (ТЗ 2026-07-27). TG-рендер — брендовая
+# гиперссылка с этой подписью; VK — призыв подписаться + голый кликабельный URL.
+NEWS_FOOTER = {
+    "tg_footer_url": "https://t.me/NewsThreeWord",
+    "tg_footer_signature": "🔢 Новости в трёх словах",
 }
 
 
@@ -161,7 +170,7 @@ def seed_news(repo: Repository) -> None:
         print("Канал «Новости» не найден (создаётся при init_db) — пропуск")
         return
     repo.update_channel(channel.id, enabled=True)
-    merge_channel_settings(repo, channel, **NEWS_ANTIBAN)
+    merge_channel_settings(repo, channel, **NEWS_ANTIBAN, **NEWS_FOOTER)
     _keep_only_source(repo, channel, NEWS_SOURCE_URL)
     print(f"Канал «Новости» включён (id={channel.id}), источник — только {NEWS_SOURCE_URL}")
 

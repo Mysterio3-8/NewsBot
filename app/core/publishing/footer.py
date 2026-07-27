@@ -31,6 +31,24 @@ def build_footer_links_from_config(footer_config: FooterConfig) -> FooterLinks |
     )
 
 
+def build_channel_footer(
+    tg_url: str | None,
+    tg_signature: str | None,
+    config_footer: FooterConfig,
+    fallback: FooterLinks | None,
+) -> FooterLinks | None:
+    """Футер конкретного канала: если у канала задан свой tg_footer_url — строим подпись
+    с его URL и подписью канала (или брендовой из config, если своя не задана). Иначе —
+    глобальный fallback. Убирает дублирование хардкод-подписи по местам публикации."""
+    if not tg_url:
+        return fallback
+    return FooterLinks(
+        telegram_url=tg_url,
+        telegram_signature=tg_signature or config_footer.telegram_signature,
+        subscribe_cta=config_footer.subscribe_cta,
+    )
+
+
 def build_html_footer(links: FooterLinks) -> str:
     """Telegram — фирменная подпись гиперссылкой на канал (HTML parse_mode)."""
     if not links.telegram_url:

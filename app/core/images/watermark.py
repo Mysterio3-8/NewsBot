@@ -1,6 +1,7 @@
 """Watermark на изображениях (раздел 12.3 SPEC.md)."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageFilter
@@ -23,6 +24,17 @@ ASPECT_RATIOS = {
 # по повторному запросу пользователя в тот же день). Если точного соотношения не
 # достичь в рамках этого лимита — отдаём максимально близкое, но не режем сильнее.
 MAX_CROP_FRACTION = 0.02
+
+# VK/TG/IG показывают одиночное фото целиком, только если его соотношение сторон в
+# «безопасном» окне; за его пределами лента режет превью по центру — и вместе с краями
+# уезжают наш заголовок (снизу) и лого (сверху) (жалоба 2026-07-27: «ВК обрезает фото,
+# заголовок и лого срезаются, некрасиво»). Держим фото в этом окне: внутри — не трогаем
+# вообще (никакого кропа/подложки — «нормальное фото»), шире/уже — вписываем ЦЕЛИКОМ на
+# тёмную подложку (сплошную, не блюр — блюр пользователь отверг 2026-07-11). Так ни фото,
+# ни наложенные заголовок/лого не обрезаются нигде.
+SAFE_MIN_ASPECT = 0.70  # ~5:7 — «высоту» до этого VK-лента показывает целиком; ниже — паддим
+SAFE_MAX_ASPECT = 1.78  # 16:9 — «ширину» до этого показывает целиком; шире (панорамы) — паддим
+SAFE_PAD_COLOR = (12, 20, 16)  # тёмный фон подложки, в тон брендовому зелёному
 
 # Обрезка чужого водяного знака у края (см. watermark_detector.locate_foreign_watermark)
 # — ОТДЕЛЬНЫЙ лимит от MAX_CROP_FRACTION выше: тот бережёт композицию от лишней
@@ -75,7 +87,9 @@ class Watermarker:
         headline: str | None = None,
     ) -> Path:
         image = Image.open(image_path).convert("RGBA")
-        if self._aspect_mode == "crop":
+        if self._aspect_mode == "safe":
+            image = fit_within_safe_bounds(image)
+        elif self._aspect_mode == "crop":
             image = crop_to_aspect_ratio(image, target_aspect_ratio)
         else:
             image = fit_to_aspect_ratio(image, target_aspect_ratio)
@@ -109,6 +123,30 @@ class Watermarker:
         output_path = output_dir / original_path.name
         image.convert("RGB").save(output_path)
         return output_path
+
+
+def fit_within_safe_bounds(
+    image: Image.Image,
+    *,
+    min_aspect: float = SAFE_MIN_ASPECT,
+    max_aspect: float = SAFE_MAX_ASPECT,
+    pad_color: tuple[int, int, int] = SAFE_PAD_COLOR,
+) -> Image.Image:
+    """Фото с соотношением сторон в пределах [min_aspect, max_aspect] — возвращаем как
+    есть (лента покажет целиком, ничего не режем и не добавляем). Слишком широкое —
+    добавляем поля сверху/снизу до max_aspect; слишком высокое — поля по бокам до
+    min_aspect. Контент никогда не режется, подложка сплошная тёмная (не блюр)."""
+    width, height = image.size
+    aspect = width / height
+    if min_aspect <= aspect <= max_aspect:
+        return image
+    if aspect > max_aspect:
+        canvas_w, canvas_h = width, math.ceil(width / max_aspect)
+    else:
+        canvas_w, canvas_h = math.ceil(height * min_aspect), height
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (*pad_color, 255))
+    canvas.paste(image, ((canvas_w - width) // 2, (canvas_h - height) // 2), image)
+    return canvas
 
 
 def fit_to_aspect_ratio(image: Image.Image, ratio_key: str, *, blur_radius: int = 45) -> Image.Image:

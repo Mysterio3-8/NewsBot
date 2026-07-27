@@ -23,7 +23,7 @@ from app.core.llm.client import LLMClient
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.circuit_breaker import CircuitBreaker
-from app.core.publishing.footer import FooterLinks, build_footer_links_from_config
+from app.core.publishing.footer import build_channel_footer, build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.token_bucket import TokenBucket
@@ -174,13 +174,11 @@ async def _publish_channel_post(
     max_interval = settings.max_interval_minutes
     quiet_start = settings.quiet_start_hour
     quiet_end = settings.quiet_end_hour
-    # Свой футер канала (ссылка в конце, напр. на TG-канал кино) переопределяет глобальный.
-    # telegram_signature — брендовая подпись для TG-рендера; VK/IG получат призыв
-    # подписаться + этот же tg_footer_url (см. footer.build_vk_footer).
-    channel_footer = (
-        FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
-        if settings.tg_footer_url
-        else footer_links
+    # Свой футер канала (ссылка в конце, напр. на TG-канал) переопределяет глобальный.
+    # tg_footer_signature — брендовая подпись канала для TG-рендера (у Новостей своя, у
+    # Кино своя); VK/IG получат призыв подписаться + этот же tg_footer_url (build_vk_footer).
+    channel_footer = build_channel_footer(
+        settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
     )
     if tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination:
         try:
@@ -282,10 +280,8 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKF
             settings = ChannelSettings.from_json(channel.settings_json)
             if not settings.weekly_repost:
                 continue
-            channel_footer = (
-                FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
-                if settings.tg_footer_url
-                else footer_links
+            channel_footer = build_channel_footer(
+                settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
             )
             try:
                 await repost_best_post(
@@ -378,10 +374,8 @@ def build_daily_video_job(
             if publisher is None:
                 logger.warning("Видео-репост [%s]: VK publisher недоступен", channel.name)
                 continue
-            channel_footer = (
-                FooterLinks(telegram_signature="🎬 Больше фильмов", telegram_url=settings.tg_footer_url)
-                if settings.tg_footer_url
-                else footer_links
+            channel_footer = build_channel_footer(
+                settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
             )
             try:
                 await asyncio.to_thread(

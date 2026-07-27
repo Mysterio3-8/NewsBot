@@ -48,6 +48,19 @@ def test_seed_news_sets_conservative_antiban(tmp_path):
     assert settings.quiet_start_hour is not None and settings.quiet_end_hour is not None
 
 
+def test_seed_news_adds_telegram_footer_link(tmp_path):
+    engine = make_engine(tmp_path / "footer.db")
+    init_db(engine)
+    repo = Repository(engine)
+    _seed_default_channel(repo)
+
+    seed_news(repo)
+
+    settings = ChannelSettings.from_json(_news_channel(repo).settings_json)
+    assert settings.tg_footer_url == "https://t.me/NewsThreeWord"
+    assert settings.tg_footer_signature is not None
+
+
 def test_seed_news_is_idempotent(tmp_path):
     engine = make_engine(tmp_path / "idem.db")
     init_db(engine)

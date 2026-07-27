@@ -26,6 +26,11 @@ class ChannelSettings:
     tg_footer_url: str | None = None
     """Ссылка, добавляемая в конец поста этого канала (напр. ссылка на TG-канал). None → нет."""
 
+    tg_footer_signature: str | None = None
+    """Подпись гиперссылки футера в TG (напр. «🔢 Новости в трёх словах» / «🎬 Больше
+    фильмов»). None → брендовая подпись из config.footer. Актуально только если задан
+    tg_footer_url."""
+
     image_query_mode: str = "generic"
     """"generic" → обычный сток-запрос по смыслу текста (Pexels/Unsplash/Pixabay).
     "movie_title" → LLM извлекает НАЗВАНИЕ ФИЛЬМА из текста, ищем реальные кадры/постеры
@@ -136,6 +141,7 @@ class ChannelSettings:
             max_posts_per_day=data.get("max_posts_per_day"),
             min_interval_minutes=data.get("min_interval_minutes"),
             tg_footer_url=data.get("tg_footer_url"),
+            tg_footer_signature=data.get("tg_footer_signature"),
             image_query_mode=data.get("image_query_mode", "generic"),
             image_providers_order=data.get("image_providers_order"),
             logo_path=data.get("logo_path"),
@@ -171,6 +177,8 @@ class ChannelSettings:
             payload["min_interval_minutes"] = self.min_interval_minutes
         if self.tg_footer_url is not None:
             payload["tg_footer_url"] = self.tg_footer_url
+        if self.tg_footer_signature is not None:
+            payload["tg_footer_signature"] = self.tg_footer_signature
         if self.image_query_mode != "generic":
             payload["image_query_mode"] = self.image_query_mode
         if self.image_providers_order is not None:

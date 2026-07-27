@@ -1,10 +1,41 @@
 from app.config.loader import FooterConfig
 from app.core.publishing.footer import (
     FooterLinks,
+    build_channel_footer,
     build_footer_links_from_config,
     build_html_footer,
     build_vk_footer,
 )
+
+
+def _footer_config() -> FooterConfig:
+    return FooterConfig(
+        enabled=False,
+        label="x",
+        telegram_url="https://t.me/NewsThreeWord",
+        vk_url="https://vk.com/club233689032",
+        telegram_signature="🔢 Новости в трёх словах",
+        subscribe_cta="Подписывайтесь на Telegram-канал:",
+    )
+
+
+def test_build_channel_footer_uses_channel_url_and_signature():
+    links = build_channel_footer(
+        "https://t.me/NewsThreeWord", "🔢 Новости в трёх словах", _footer_config(), None
+    )
+    assert links.telegram_url == "https://t.me/NewsThreeWord"
+    assert links.telegram_signature == "🔢 Новости в трёх словах"
+    assert links.subscribe_cta == "Подписывайтесь на Telegram-канал:"
+
+
+def test_build_channel_footer_falls_back_to_config_signature_when_channel_has_none():
+    links = build_channel_footer("https://t.me/x", None, _footer_config(), None)
+    assert links.telegram_signature == "🔢 Новости в трёх словах"
+
+
+def test_build_channel_footer_returns_fallback_without_channel_url():
+    fallback = FooterLinks(telegram_url="https://t.me/global")
+    assert build_channel_footer(None, None, _footer_config(), fallback) is fallback
 
 
 def test_build_html_footer_is_branded_hyperlink_to_telegram():
