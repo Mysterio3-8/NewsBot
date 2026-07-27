@@ -245,16 +245,16 @@ async def test_cycle_job_tg_failure_does_not_block_vk(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cycle_job_skips_vk_when_breaker_open_but_still_posts_tg(tmp_path, monkeypatch):
-    """Антибан: если circuit breaker открыт для VK-токена (недавно был rate limit),
-    в VK не постим этот цикл, но TG (независимая сеть) уходит как обычно."""
+async def test_cycle_job_holds_whole_post_when_vk_breaker_open(tmp_path, monkeypatch):
+    """ЖЁСТКАЯ ПАРА (ТЗ 2026-07-27): если VK-сеть цель, но её breaker открыт, в TG в
+    одиночку НЕ публикуем — весь пост откладываем, чтобы сети не расходились. Пост
+    остаётся в очереди и уйдёт в ОБЕ сети, когда VK снова будет доступен."""
     from app.core.publishing.circuit_breaker import CircuitBreaker
     from app.core.publishing.vk_errors import VKErrorClass
 
     m = _patch_env(monkeypatch)
     repo = make_repo(tmp_path)
     _add_channel_post(repo, vk_token_env="VK_GROUP_TOKEN")
-    # Открываем цепь для VK заранее (как будто прошлый цикл словил ошибку 6).
     CircuitBreaker(repo).record_failure("vk", "VK_GROUP_TOKEN", VKErrorClass.RATE_LIMIT)
     config = FakeAppConfig()
 
@@ -266,8 +266,35 @@ async def test_cycle_job_skips_vk_when_breaker_open_but_still_posts_tg(tmp_path,
     job = build_cycle_job(repo, config, Mock(), tg_fetcher=Mock(), vk_fetcher=Mock())
     await job()
 
+    tg_publisher.publish.assert_not_awaited()  # в TG в одиночку не публикуем — ждём VK
+    vk_publisher.publish.assert_not_called()
+    assert repo.list_processed_posts(status="queued")  # пост остался в очереди
+
+
+@pytest.mark.asyncio
+async def test_cycle_job_returns_post_to_queue_when_vk_fails_after_tg(tmp_path, monkeypatch):
+    """Пара не закрылась: TG прошёл, VK упал — пост возвращается в очередь (не остаётся
+    навсегда в TG-only), чтобы VK догнать законным кросс-постом в следующем цикле."""
+    m = _patch_env(monkeypatch)
+    repo = make_repo(tmp_path)
+    _, processed = _add_channel_post(repo)
+    config = FakeAppConfig()
+
+    tg_publisher = AsyncMock(spec=TelegramPublisher)
+    tg_publisher.publish.return_value = PublishResult(success=True, message_id=1, error=None)
+    vk_publisher = Mock(spec=VKPublisher)
+    vk_publisher.publish.return_value = VKPublishResult(success=False, post_id=None, error="boom")
+    _mock_publishers(monkeypatch, m, tg=tg_publisher, vk=vk_publisher)
+
+    job = build_cycle_job(repo, config, Mock(), tg_fetcher=Mock(), vk_fetcher=Mock())
+    await job()
+
     tg_publisher.publish.assert_awaited_once()
-    vk_publisher.publish.assert_not_called()  # VK пропущен — breaker открыт
+    vk_publisher.publish.assert_called_once()
+    updated = repo.get_processed_post(processed.id)
+    assert updated.status == "queued"  # пара не закрыта → снова в очередь
+    assert repo.get_published_network_at(processed.id, "tg") is not None
+    assert repo.get_published_network_at(processed.id, "vk") is None
 
 
 @pytest.mark.asyncio

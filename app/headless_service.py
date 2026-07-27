@@ -25,6 +25,7 @@ from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.circuit_breaker import CircuitBreaker
 from app.core.publishing.footer import build_channel_footer, build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
+from app.core.publishing.rate_guard import check_publish_allowed
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
@@ -152,11 +153,14 @@ async def _publish_channel_post(
     footer_links,
     breaker: CircuitBreaker,
 ) -> None:
-    """Публикует пост в таргеты КОНКРЕТНОГО канала. Сеть пропускается, если у канала не
-    задано её назначение (напр. кино/мемы пока только VK, tg_destination пуст) или сеть
-    выключена глобально. Статус ('published'/'failed') ставит publish_queued_post*.
-    Лимит публикаций и счётчик — per-channel (защита от бана + изоляция каналов): у канала
-    свой max_posts_per_day (ChannelSettings) и свой счётчик за сутки (channel_id)."""
+    """Публикует пост в таргеты КОНКРЕТНОГО канала ЖЁСТКОЙ ПАРОЙ (ТЗ 2026-07-27: «один и
+    тот же пост в VK и TG»): пост уходит в ОБЕ целевые сети вместе или ни в одну. Если
+    VK-сеть цель, но сейчас недоступна (circuit breaker после серии ошибок VK), в TG в
+    одиночку НЕ публикуем — ждём, пока VK снова сможет, иначе TG убегает вперёд, а VK
+    отстаёт («посты в вк и тг не совпадают»). Пара не закрылась (одна сеть упала) — пост
+    возвращается в очередь, недостающая сеть догоняется в следующем цикле (законный
+    кросс-пост). Лимит/счётчик/интервал — per-channel (антибан), проверяются ОДИН раз на
+    пост (не по сети), чтобы сети не расходились."""
     schedule = config.publishing.schedule
     settings = ChannelSettings.from_json(channel.settings_json)
     max_per_day = (
@@ -174,67 +178,99 @@ async def _publish_channel_post(
     max_interval = settings.max_interval_minutes
     quiet_start = settings.quiet_start_hour
     quiet_end = settings.quiet_end_hour
-    # Свой футер канала (ссылка в конце, напр. на TG-канал) переопределяет глобальный.
-    # tg_footer_signature — брендовая подпись канала для TG-рендера (у Новостей своя, у
-    # Кино своя); VK/IG получат призыв подписаться + этот же tg_footer_url (build_vk_footer).
     channel_footer = build_channel_footer(
         settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
     )
-    if tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination:
-        try:
-            await publish_queued_post(
-                repo,
-                tg_publisher,
-                post_id=post_id,
-                chat_id=channel.tg_destination,
-                footer_links=channel_footer,
-                max_posts_per_day=max_per_day,
-                min_interval_minutes=min_interval,
-                max_interval_minutes=max_interval,
-                quiet_start_hour=quiet_start,
-                quiet_end_hour=quiet_end,
-                channel_id=channel.id,
-                include_hashtags=config.rewrite.include_hashtags,
-            )
-        except Exception:
-            logger.exception(
-                "Публикация в Telegram не удалась для поста %d (канал %s)", post_id, channel.name
-            )
 
-    if vk_publisher is not None and config.publishing.vk.enabled and channel.vk_destination:
-        vk_token_env = channel.vk_token_env or config.publishing.vk.token_env
-        if breaker.is_open("vk", vk_token_env):
-            logger.warning(
-                "Публикация в VK пропущена для поста %d (канал %s): circuit breaker открыт (%s)",
-                post_id, channel.name, vk_token_env,
-            )
+    tg_target = bool(
+        tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination
+    )
+    vk_target = bool(
+        vk_publisher is not None and config.publishing.vk.enabled and channel.vk_destination
+    )
+    vk_token_env = channel.vk_token_env or config.publishing.vk.token_env
+
+    tg_pending = tg_target and repo.get_published_network_at(post_id, "tg") is None
+    vk_pending = vk_target and repo.get_published_network_at(post_id, "vk") is None
+    if not tg_pending and not vk_pending:
+        return
+
+    # Достройка кросс-поста: если одна сеть уже прошла, вторую догоняем без гейта
+    # интервала — это тот же релиз, а не новый (антибан на него не тратим).
+    already_published = (
+        repo.get_published_network_at(post_id, "tg") is not None
+        or repo.get_published_network_at(post_id, "vk") is not None
+    )
+
+    # ЖЁСТКАЯ ПАРА: VK недоступен (breaker) → не публикуем и в TG, ждём.
+    if vk_pending and breaker.is_open("vk", vk_token_env):
+        logger.warning(
+            "Пост %d (канал %s) отложен: VK недоступен (breaker %s) — не публикуем в TG в одиночку",
+            post_id, channel.name, vk_token_env,
+        )
+        return
+
+    # Антиспам-гейт нового релиза — ОДИН раз на пост (интервал/лимит/ночная пауза), чтобы
+    # решение «публиковать сейчас» было общим для обеих сетей и они не расходились.
+    if not already_published:
+        blocked = check_publish_allowed(
+            repo, post_id,
+            network="tg" if tg_pending else "vk",
+            max_posts_per_day=max_per_day,
+            min_interval_minutes=min_interval,
+            max_interval_minutes=max_interval,
+            quiet_start_hour=quiet_start,
+            quiet_end_hour=quiet_end,
+            channel_id=channel.id,
+        )
+        if blocked is not None:
+            logger.info("Пост %d (канал %s) не публикуется сейчас (пара): %s", post_id, channel.name, blocked)
             return
-        # Небольшая случайная пауза перед второй сетью — чтобы TG и VK не публиковались
-        # секунда в секунду (антибан). Короткая (3-8с): режим немедленной публикации.
-        delay_seconds = random.uniform(3, 8)
-        logger.info("Пауза %.0f сек перед публикацией в VK", delay_seconds)
-        await asyncio.sleep(delay_seconds)
+
+    tg_ok = not tg_pending
+    vk_ok = not vk_pending
+
+    if tg_pending:
+        try:
+            tg_result = await publish_queued_post(
+                repo, tg_publisher, post_id=post_id, chat_id=channel.tg_destination,
+                footer_links=channel_footer, max_posts_per_day=max_per_day,
+                min_interval_minutes=min_interval, max_interval_minutes=max_interval,
+                quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
+                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
+            )
+            tg_ok = tg_result.success
+        except Exception:
+            logger.exception("Публикация в Telegram не удалась для поста %d (канал %s)", post_id, channel.name)
+
+    if vk_pending:
+        await asyncio.sleep(random.uniform(3, 8))  # антибан: сети не секунда-в-секунду
         try:
             result = publish_queued_post_vk(
-                repo,
-                vk_publisher,
-                post_id=post_id,
-                group_id=int(channel.vk_destination),
-                footer_links=channel_footer,
-                max_posts_per_day=max_per_day,
-                min_interval_minutes=min_interval,
-                max_interval_minutes=max_interval,
-                quiet_start_hour=quiet_start,
-                quiet_end_hour=quiet_end,
-                channel_id=channel.id,
-                include_hashtags=config.rewrite.include_hashtags,
+                repo, vk_publisher, post_id=post_id, group_id=int(channel.vk_destination),
+                footer_links=channel_footer, max_posts_per_day=max_per_day,
+                min_interval_minutes=min_interval, max_interval_minutes=max_interval,
+                quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
+                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
             )
+            vk_ok = result.success
             _record_vk_breaker(breaker, vk_token_env, result)
         except Exception:
-            logger.exception(
-                "Публикация в VK не удалась для поста %d (канал %s)", post_id, channel.name
-            )
+            logger.exception("Публикация в VK не удалась для поста %d (канал %s)", post_id, channel.name)
             breaker.record_failure("vk", vk_token_env, VKErrorClass.TRANSIENT)
+
+    # Пара не закрыта (одна сеть упала) — возвращаем пост в очередь, чтобы недостающую
+    # сеть догнать в следующем цикле. mark_published уже мог выставить status='published'
+    # по успешной сети — сбрасываем в 'queued' (published_<net>_at успешной сети сохранён,
+    # так что повторно в неё пост не уйдёт, а вторая догонится законным кросс-постом).
+    if not (tg_ok and vk_ok):
+        current = repo.get_processed_post(post_id)
+        if current is not None and current.status == "published":
+            repo.update_processed_post_status(post_id, "queued")
+        logger.warning(
+            "Пост %d (канал %s): пара не закрыта (tg_ok=%s, vk_ok=%s) — вернём в очередь для дозачистки",
+            post_id, channel.name, tg_ok, vk_ok,
+        )
 
 
 def _record_vk_breaker(
