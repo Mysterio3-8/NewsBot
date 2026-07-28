@@ -4,7 +4,7 @@ import pytest
 import requests
 
 from app.config.loader import LLMConfig
-from app.core.llm.client import LLMClient, LLMUnavailableError
+from app.core.llm.client import LLMClient, LLMRateLimitError, LLMUnavailableError
 
 TEST_CONFIG = LLMConfig(
     provider="ollama",
@@ -37,6 +37,61 @@ GROQ_CONFIG = LLMConfig(
     timeout_seconds=5,
     retries=1,
 )
+
+def test_api_keys_collects_primary_and_numbered_extras(monkeypatch):
+    """Несколько аккаунтов Groq: GROQ_API_KEY + GROQ_API_KEY_2/_3 (ТЗ 2026-07-28)."""
+    monkeypatch.setenv("GROQ_API_KEY", "k1")
+    monkeypatch.setenv("GROQ_API_KEY_2", "k2")
+    monkeypatch.setenv("GROQ_API_KEY_3", "k3")
+    client = LLMClient(GROQ_CONFIG)
+    assert client._api_keys() == ["k1", "k2", "k3"]
+    assert client._cloud_api_key() == "k1"
+
+
+def test_rotate_api_key_switches_to_next(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k1")
+    monkeypatch.setenv("GROQ_API_KEY_2", "k2")
+    monkeypatch.delenv("GROQ_API_KEY_3", raising=False)
+    client = LLMClient(GROQ_CONFIG)
+
+    assert client._rotate_api_key() is True
+    assert client._cloud_api_key() == "k2"
+
+
+def test_rotate_api_key_noop_with_single_key(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "only")
+    for i in range(2, 11):
+        monkeypatch.delenv(f"GROQ_API_KEY_{i}", raising=False)
+    client = LLMClient(GROQ_CONFIG)
+
+    assert client._rotate_api_key() is False
+    assert client._cloud_api_key() == "only"
+
+
+def test_generate_retries_same_model_with_next_key_on_rate_limit(monkeypatch):
+    """429 на первом ключе → пробуем ТУ ЖЕ (качественную) модель вторым ключом,
+    а не падаем сразу на слабую резервную."""
+    monkeypatch.setenv("GROQ_API_KEY", "k1")
+    monkeypatch.setenv("GROQ_API_KEY_2", "k2")
+    for i in range(3, 11):
+        monkeypatch.delenv(f"GROQ_API_KEY_{i}", raising=False)
+    client = LLMClient(GROQ_CONFIG)
+    monkeypatch.setattr(client, "is_running", lambda: True)
+
+    used_keys: list[str] = []
+
+    def fake_generate_with_model(system_prompt, user_prompt, model):
+        key = client._cloud_api_key()
+        used_keys.append(key)
+        if key == "k1":
+            raise LLMRateLimitError("429")
+        return "готовый текст"
+
+    monkeypatch.setattr(client, "_generate_with_model", fake_generate_with_model)
+
+    assert client.generate("sys", "user") == "готовый текст"
+    assert used_keys == ["k1", "k2"]
+
 
 OPENROUTER_CONFIG = LLMConfig(
     provider="openrouter",

@@ -42,8 +42,24 @@ RETRY_BACKOFF_SECONDS = {"gemini": 15.0, "groq": 25.0, "openrouter": 10.0}
 MAX_RETRY_AFTER_SECONDS = 60.0
 
 
+# Дополнительные ключи того же провайдера ищутся как {api_key_env}_2, _3, ... — лимиты
+# Groq считаются НА АККАУНТ, поэтому исчерпанный ключ не значит, что модель недоступна:
+# переключаемся на следующий ключ и продолжаем работать основной (качественной) моделью,
+# а не падаем на слабую fallback-модель (ТЗ 2026-07-28).
+MAX_EXTRA_API_KEYS = 9
+
+
 class LLMUnavailableError(Exception):
     """LLM недоступна (сервер/ключ не отвечает, модель не найдена, либо запрос не удался после retry)."""
+
+
+class LLMRateLimitError(LLMUnavailableError):
+    """Лимит/квота ключа исчерпаны (429) — есть смысл повторить запрос с другим ключом."""
+
+
+def _is_rate_limit(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    return response is not None and getattr(response, "status_code", None) == 429
 
 
 def _retry_after_seconds(error: Exception) -> float | None:
@@ -79,6 +95,7 @@ class LLMClient:
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
         self._last_request_at: float | None = None
+        self._key_index = 0
 
     def is_running(self) -> bool:
         if self._config.provider in CLOUD_PROVIDERS:
@@ -124,12 +141,24 @@ class LLMClient:
         models = self._models_to_try()
         last_error: Exception | None = None
         for model in models:
-            try:
-                return self._generate_with_model(system_prompt, user_prompt, model)
-            except LLMUnavailableError as error:
-                last_error = error
-                if len(models) > 1:
-                    logger.warning("Модель %s недоступна, пробую следующую: %s", model, error)
+            # Лимит Groq считается НА КЛЮЧ (аккаунт): исчерпан ключ — не значит, что
+            # модель недоступна. Пробуем ту же (качественную) модель другими ключами и
+            # только потом опускаемся на резервную модель послабее.
+            for _ in range(max(len(self._api_keys()), 1)):
+                try:
+                    return self._generate_with_model(system_prompt, user_prompt, model)
+                except LLMRateLimitError as error:
+                    last_error = error
+                    if not self._rotate_api_key():
+                        break
+                    logger.warning(
+                        "Лимит ключа исчерпан (model=%s), переключаюсь на следующий ключ", model
+                    )
+                except LLMUnavailableError as error:
+                    last_error = error
+                    if len(models) > 1:
+                        logger.warning("Модель %s недоступна, пробую следующую: %s", model, error)
+                    break
 
         raise LLMUnavailableError("Все модели недоступны") from last_error
 
@@ -163,6 +192,10 @@ class LLMClient:
                 )
                 backoff_seconds = _retry_after_seconds(error) or backoff_seconds
 
+        if last_error is not None and _is_rate_limit(last_error):
+            raise LLMRateLimitError(
+                f"лимит ключа исчерпан на модели {model} (429)"
+            ) from last_error
         raise LLMUnavailableError(
             f"модель {model} недоступна после {attempts} попыток"
         ) from last_error
@@ -292,8 +325,31 @@ class LLMClient:
                 time.sleep(remaining)
         self._last_request_at = time.monotonic()
 
+    def _api_keys(self) -> list[str]:
+        """Все ключи провайдера: основной {api_key_env} + дополнительные {api_key_env}_2..N.
+        Несколько аккаунтов Groq дают суммарный дневной лимит больше одного."""
+        if not self._config.api_key_env:
+            return []
+        keys = [os.environ.get(self._config.api_key_env)]
+        keys += [
+            os.environ.get(f"{self._config.api_key_env}_{i}")
+            for i in range(2, MAX_EXTRA_API_KEYS + 2)
+        ]
+        return [key for key in keys if key]
+
     def _cloud_api_key(self) -> str | None:
-        return os.environ.get(self._config.api_key_env) or None
+        keys = self._api_keys()
+        if not keys:
+            return None
+        return keys[self._key_index % len(keys)]
+
+    def _rotate_api_key(self) -> bool:
+        """Переключиться на следующий ключ. False — ключ всего один, переключать некуда."""
+        keys = self._api_keys()
+        if len(keys) < 2:
+            return False
+        self._key_index = (self._key_index + 1) % len(keys)
+        return True
 
     def _cloud_proxies(self) -> dict[str, str] | None:
         """Некоторые облачные LLM (Gemini) недоступны из РФ напрямую — LLM_PROXY_URL
