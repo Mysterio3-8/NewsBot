@@ -20,6 +20,7 @@ from app.config.loader import AppConfig
 from app.core.channel_settings import ChannelSettings
 from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
+from app.core.maintenance.cleanup import cleanup_output
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.circuit_breaker import CircuitBreaker
@@ -36,6 +37,7 @@ from app.core.video.daily_video_repost import publish_due_clips, run_daily_video
 from app.core.scheduler import start_of_today_utc
 from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
+from app.paths import OUTPUT_DIR
 from app.factories import (
     build_image_providers,
     build_telegram_fetcher,
@@ -179,7 +181,8 @@ async def _publish_channel_post(
     quiet_start = settings.quiet_start_hour
     quiet_end = settings.quiet_end_hour
     channel_footer = build_channel_footer(
-        settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
+        settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links,
+        vk_url=settings.vk_footer_url,
     )
 
     tg_target = bool(
@@ -317,7 +320,8 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKF
             if not settings.weekly_repost:
                 continue
             channel_footer = build_channel_footer(
-                settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
+                settings.tg_footer_url, settings.tg_footer_signature, config.footer,
+                footer_links, vk_url=settings.vk_footer_url,
             )
             try:
                 await repost_best_post(
@@ -411,7 +415,8 @@ def build_daily_video_job(
                 logger.warning("Видео-репост [%s]: VK publisher недоступен", channel.name)
                 continue
             channel_footer = build_channel_footer(
-                settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links
+                settings.tg_footer_url, settings.tg_footer_signature, config.footer,
+                footer_links, vk_url=settings.vk_footer_url,
             )
             try:
                 await asyncio.to_thread(
@@ -429,6 +434,17 @@ def build_daily_video_job(
                 logger.exception("Видео-репост канала %s упал", channel.name)
 
     return daily_video_job
+
+
+def build_cleanup_job():
+    """Уборка временных медиа раз в час. Без неё диск VPS забился до 94% и уронил
+    публикацию (2026-07-28): скачанные исходники постов не удалялись никогда, а фильмы
+    оставались от процессов, убитых OOM (их `finally` при SIGKILL не выполняется)."""
+
+    async def cleanup_job() -> None:
+        await asyncio.to_thread(cleanup_output, OUTPUT_DIR)
+
+    return cleanup_job
 
 
 def build_clip_publish_job(
@@ -523,6 +539,13 @@ async def run_forever(
         next_run_time=datetime.datetime.now(),
     )
     # Публикатор клипов: каждые 10 мин постит клипы, чьё запланированное время пришло.
+    # Уборка диска — каждый час, первый прогон сразу при старте (диск мог забиться,
+    # пока сервис лежал).
+    scheduler.add_job(
+        build_cleanup_job(),
+        IntervalTrigger(hours=1),
+        next_run_time=datetime.datetime.now(),
+    )
     scheduler.add_job(
         build_clip_publish_job(
             repo, vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket

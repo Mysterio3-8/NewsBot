@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, call, mock_open, patch
 
@@ -59,9 +60,15 @@ def test_publish_with_video_uploads_and_attaches():
 
     with (
         patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
-        patch("builtins.open", mock_open(read_data=b"fake-video-bytes")),
+        tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video_file,
     ):
-        result = publisher.publish(group_id=123, text="новость", video_path=Path("fake.mp4"))
+        # Реальный файл, а не mock_open: загрузка идёт потоковым MultipartEncoder,
+        # которому нужен настоящий файловый объект (см. test_video_upload_streaming).
+        video_file.write(b"fake-video-bytes")
+        video_file.flush()
+        result = publisher.publish(
+            group_id=123, text="новость", video_path=Path(video_file.name), video_title="fake"
+        )
 
     assert result.success is True
     _, kwargs = publisher._api.wall.post.call_args
@@ -89,11 +96,13 @@ def test_publish_with_video_and_photos_attaches_only_video():
 
     with (
         patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
-        patch("builtins.open", mock_open(read_data=b"fake-bytes")),
+        tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video_file,
     ):
+        video_file.write(b"fake-bytes")
+        video_file.flush()
         result = publisher.publish(
             group_id=123, text="новость",
-            image_paths=[Path("a.jpg"), Path("b.jpg")], video_path=Path("clip.mp4"),
+            image_paths=[Path("a.jpg"), Path("b.jpg")], video_path=Path(video_file.name),
         )
 
     assert result.success is True

@@ -898,3 +898,55 @@ def test_prepare_images_movie_title_mode_no_title_extracted_returns_none(monkeyp
 
     assert result is None
     prepare_mock.assert_not_called()
+
+
+def test_prepare_images_keeps_originals_when_stock_disabled(monkeypatch):
+    """ТЗ 2026-07-28: «оригинал из источника, без замены». Раньше фото, у которого чужой
+    знак не убирался обрезкой, выбрасывалось и пост получал сток «по смыслу текста» —
+    отсюда жалоба на «левые какие-то фото»."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_filter_watermarked_photos", lambda *a, **k: [])
+    captured = {}
+
+    def fake_prepare(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(pipeline_module, "prepare_images_for_post", fake_prepare)
+
+    _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=["own1.jpg", "own2.jpg"],
+        rewritten_text="текст",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+        stock_fallback=False,
+    )
+
+    assert captured["count"] == 2  # оригиналы источника, а не одна сток-картинка
+    assert captured["query"] == ""  # сток-запрос к LLM не генерировался
+
+
+def test_prepare_images_returns_none_when_no_own_photos_and_stock_disabled(monkeypatch):
+    """Своих фото нет вовсе — пост уходит текстом, но без чужой картинки."""
+    import app.core.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_filter_watermarked_photos", lambda *a, **k: [])
+
+    result = _prepare_images(
+        Mock(spec=LLMClient),
+        raw_post_id=1,
+        post_media_urls=[],
+        rewritten_text="текст",
+        images_config=_images_config(count_per_post=1),
+        watermark_config=_watermark_config(),
+        headline_card_config=HeadlineCardConfig(),
+        image_providers={},
+        stock_fallback=False,
+    )
+
+    assert result is None

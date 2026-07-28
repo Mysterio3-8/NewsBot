@@ -138,6 +138,15 @@ class ChannelSettings:
     """Грузить ли фильмы и клипы на свой YouTube-канал (ТЗ 2026-07-22). Работает только
     если в .env заданы YT_UPLOAD_* — иначе тумблер ни на что не влияет. Кино → True."""
 
+    stock_fallback: bool = True
+    """Подставлять ли сток-картинку, когда своего фото у поста нет или все отфильтрованы.
+    Кино → False (ТЗ 2026-07-28: «оригинал из источника, без замены») — сток по смыслу
+    текста давал картинки, не относящиеся к фильму."""
+
+    vk_footer_url: str | None = None
+    """Ссылка на свою VK-группу для футера TG-поста («Больше контента в нашем VK»).
+    None → в футере только TG-ссылка, как раньше."""
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -175,6 +184,8 @@ class ChannelSettings:
             quiet_start_hour=data.get("quiet_start_hour"),
             quiet_end_hour=data.get("quiet_end_hour"),
             youtube_upload=data.get("youtube_upload", False),
+            stock_fallback=data.get("stock_fallback", True),
+            vk_footer_url=data.get("vk_footer_url"),
         )
 
     def to_json(self) -> str:
@@ -239,4 +250,8 @@ class ChannelSettings:
             payload["quiet_end_hour"] = self.quiet_end_hour
         if self.youtube_upload:
             payload["youtube_upload"] = True
+        if not self.stock_fallback:
+            payload["stock_fallback"] = False
+        if self.vk_footer_url is not None:
+            payload["vk_footer_url"] = self.vk_footer_url
         return json.dumps(payload, ensure_ascii=False)

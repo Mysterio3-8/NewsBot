@@ -10,3 +10,4 @@ output/
 .pytest_cache/
 cookies/
 *.cookies.txt
+client_secret*.json

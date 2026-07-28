@@ -88,7 +88,7 @@ def test_ai_tab_populates_and_saves(qapp, config_copy):
     page.bind_config(config, config_copy)
 
     assert page.ai_tab.provider_input.currentText() == "groq"
-    assert page.ai_tab.model_input.text() == "llama-3.1-8b-instant"
+    assert page.ai_tab.model_input.text() == "llama-3.3-70b-versatile"
     assert page.ai_tab.api_key_env_input.text() == "GROQ_API_KEY"
 
     page.ai_tab.model_input.setText("meta-llama/llama-3.3-70b-instruct:free")

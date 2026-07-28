@@ -71,18 +71,24 @@ CLIP_LOGO_PATH = "assets/filmlogo.png"
 # ТЗ 2026-07-21: 10 публикаций в сутки — 2 фильма + 4 клипа (по 2 на фильм) + 4 рерайта,
 # пауза между рерайт-постами случайная 1.5-4 часа, круглосуточно.
 DAILY_PLAN = {
-    "daily_video_count": 2,
-    "daily_video_min_gap_hours": 5,
-    "daily_clip_count": 2,
-    "max_posts_per_day": 4,
+    # ТЗ 2026-07-28: 3 фильма + по 1 клипу на фильм + 3 рерайт-поста = 9 публикаций.
+    "daily_video_count": 3,
+    "daily_video_min_gap_hours": 4,
+    "daily_clip_count": 1,
+    "max_posts_per_day": 3,
     "min_interval_minutes": 90,
     "max_interval_minutes": 240,
-    # Логотип на самом фильме. ВНИМАНИЕ: включает полный ре-энкод (~50 мин CPU на
-    # трёхчасовой фильм на 1-ядерном VPS). Снять — убрать этот ключ.
-    "film_logo_path": "assets/filmlogo.png",
+    # film_logo_path СНЯТ намеренно (ТЗ 2026-07-28): наложение логотипа на фильм — это
+    # полный ре-энкод, ~28 минут CPU и вторая копия файла на диске. При трёх фильмах в
+    # сутки на 1-ядерном VPS с 961 МБ RAM это гарантированный OOM и забитый диск.
+    # Логотип на КЛИПАХ остаётся (clip_logo_path) — они короткие и лёгкие.
     # Грузить фильмы и клипы на свой YouTube-канал (ТЗ 2026-07-22). Реально работает,
     # только если в .env заданы YT_UPLOAD_* — без них тумблер молчит, остальное идёт.
     "youtube_upload": True,
+    # Оригинал из источника, без подмены на сток (ТЗ 2026-07-28: «левые какие-то фото»).
+    "stock_fallback": False,
+    # Вторая строка футера TG-поста — ссылка на свою VK-группу.
+    "vk_footer_url": "https://vk.com/public240120678",
 }
 
 
@@ -118,6 +124,9 @@ def seed_cinema(repo: Repository) -> None:
         daily_video_youtube_channels=DAILY_VIDEO_YOUTUBE_CHANNELS,
         clip_logo_path=CLIP_LOGO_PATH,
         tg_footer_signature="🎬 Больше фильмов",
+        # Явный None снимает логотип с ФИЛЬМА в уже засеянной прод-БД: merge только
+        # дописывает ключи, поэтому убрать настройку можно лишь перезаписав её.
+        film_logo_path=None,
         **DAILY_PLAN,
     )
 

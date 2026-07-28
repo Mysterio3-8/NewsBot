@@ -191,6 +191,7 @@ def _process_posts(
                 rewrite_length_factor=settings.rewrite_length_factor,
                 split_collage=settings.split_collage,
                 simple_media=settings.simple_media,
+                stock_fallback=settings.stock_fallback,
             )
         except Exception:
             logger.exception(

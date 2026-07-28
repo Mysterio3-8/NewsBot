@@ -130,6 +130,12 @@ def run_daily_video_repost(
     title, description = rewrite_video_texts(
         llm_client, title=video.title, description=video.description
     )
+    # Отметка ДО скачивания, а не после публикации. Иначе процесс, убитый на тяжёлом
+    # шаге (OOM при заливке фильма — реальный инцидент 2026-07-27: 7 перезаливок одного
+    # видео за ночь, ~28 минут CPU каждая), оставлял видео непомеченным, и следующий
+    # цикл качал его заново по кругу. Цена — при разовом сбое это видео пропускается,
+    # что несравнимо дешевле бесконечного цикла.
+    repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
     local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
     try:
         body = "\n\n".join(part for part in (title, description) if part.strip())
@@ -144,7 +150,6 @@ def run_daily_video_repost(
         if not result.success:
             logger.error("Видео-репост [%s]: публикация не удалась: %s", channel.name, result.error)
             return
-        repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
         logger.info("Видео-репост [%s]: опубликовано %s (%s)", channel.name, video.ref, title)
 
         # TG-заливка идёт ПОСЛЕ отметки в БД: если она упадёт, день всё равно считается

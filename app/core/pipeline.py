@@ -82,6 +82,7 @@ def process_fetched_post(
     rewrite_length_factor: float | None = None,
     split_collage: bool = False,
     simple_media: bool = False,
+    stock_fallback: bool = True,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -215,6 +216,7 @@ def process_fetched_post(
         image_query_mode=image_query_mode,
         image_search_providers=image_search_providers,
         simple_media=simple_media,
+        stock_fallback=stock_fallback,
     )
     video_path = _prepare_video(
         raw_post_id=raw_post.id,
@@ -262,6 +264,7 @@ def _prepare_images(
     image_query_mode: str = "generic",
     image_search_providers: list[str] | None = None,
     simple_media: bool = False,
+    stock_fallback: bool = True,
 ) -> list[str] | None:
     """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
     отфильтрованы как чужой водяной знак, см. _filter_watermarked_photos), для
@@ -314,10 +317,20 @@ def _prepare_images(
         )
 
     own_photos = _filter_watermarked_photos(llm_client, post_media_urls)
+    # Подмена на сток выключена (ТЗ 2026-07-28: «оригинал из источника, без замены»).
+    # Раньше фото, у которого чужой знак не убирался обрезкой, выбрасывалось и пост
+    # получал сток-картинку «по смыслу текста» — она к фильму отношения не имела, отсюда
+    # жалоба на «левые какие-то фото». Теперь такой кадр остаётся как есть: свой кадр с
+    # чужим знаком полезнее случайной стоковой картинки.
+    if not stock_fallback and not own_photos and post_media_urls:
+        own_photos = post_media_urls[:MAX_SOURCE_PHOTOS]
+        logger.info("[raw_post %d] сток отключён — беру оригиналы источника", raw_post_id)
 
     providers: dict[str, ImageProvider] = dict(image_providers or {})
     if own_photos:
         providers["source"] = SourceImageProvider(own_photos)
+    if not stock_fallback and not own_photos:
+        return None  # своих фото нет вовсе — пост уйдёт текстом, но без чужой картинки
 
     if not any(name in providers for name in images_config.providers_order):
         return None

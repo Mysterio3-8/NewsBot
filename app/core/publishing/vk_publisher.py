@@ -8,6 +8,7 @@ from pathlib import Path
 
 import requests
 import vk_api
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 from app.core.publishing.token_bucket import TokenBucket, token_key
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_error
@@ -15,6 +16,9 @@ from app.core.publishing.vk_errors import VKErrorClass, classify_vk_error
 logger = logging.getLogger("publishing")
 
 RETRY_DELAYS_SECONDS = [0, 5, 30, 120]
+
+# Фильм в сотни мегабайт заливается долго — таймаут на весь поток, а не на первый байт.
+VIDEO_UPLOAD_TIMEOUT_SECONDS = 1800
 
 # На этих классах ошибок ретраить нельзя — дальнейшие попытки только углубляют
 # флуд-бан. Выходим сразу, отдаём код наверх, circuit breaker откроет паузу.
@@ -225,9 +229,25 @@ class VKPublisher:
         if description:
             save_params["description"] = description
         save_result = self._upload_api.video.save(**save_params)
-        with open(video_path, "rb") as file:
-            response = requests.post(
-                save_result["upload_url"], files={"video_file": file}, timeout=300
-            )
-        response.raise_for_status()
+        _post_video_file(save_result["upload_url"], video_path)
         return f"video{save_result['owner_id']}_{save_result['video_id']}"
+
+
+def _post_video_file(upload_url: str, video_path: Path) -> None:
+    """Загрузить файл видео ПОТОКОМ, не читая его целиком в память.
+
+    Критично для VPS (2026-07-28): `requests.post(..., files={...})` строит multipart-тело
+    в памяти целиком — фильм на 655 МБ при 961 МБ RAM мгновенно ронял процесс по OOM
+    (`killed status=9`), причём ДО отметки «опубликовано» в БД, из-за чего следующий цикл
+    качал тот же фильм заново — за ночь 7 перезаливок одного видео. MultipartEncoder
+    отдаёт тело генератором, потребление памяти не зависит от размера файла.
+    """
+    with open(video_path, "rb") as file:
+        encoder = MultipartEncoder(fields={"video_file": (video_path.name, file, "video/mp4")})
+        response = requests.post(
+            upload_url,
+            data=encoder,
+            headers={"Content-Type": encoder.content_type},
+            timeout=VIDEO_UPLOAD_TIMEOUT_SECONDS,
+        )
+    response.raise_for_status()

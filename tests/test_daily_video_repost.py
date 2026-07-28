@@ -338,13 +338,16 @@ def test_second_run_skips_already_reposted_video(tmp_path):
     assert publisher2.calls == []  # единственное видео уже публиковалось — пропуск
 
 
-def test_failed_publish_not_recorded_and_file_removed(tmp_path):
+def test_failed_publish_still_marks_video_and_removes_file(tmp_path):
+    """Видео помечается ДО скачивания (2026-07-27): процесс, убитый OOM на заливке
+    фильма, оставлял его непомеченным, и следующий цикл качал тот же файл заново —
+    7 перезаливок за ночь по ~28 минут CPU. Разовый пропуск видео дешевле цикла."""
     repo = _repo(tmp_path)
     channel = _kino_channel(repo)
 
     downloaded = _run(repo, channel, FakeFetcher([_vk_item(10)]), FakePublisher(success=False), tmp_path)
 
-    assert repo.list_reposted_video_refs(channel.id) == set()  # завтра попробуем снова
+    assert repo.list_reposted_video_refs(channel.id) == {"-223779047_10"}
     assert not downloaded.exists()
 
 
