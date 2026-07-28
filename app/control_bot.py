@@ -24,6 +24,7 @@ from app.config.loader import (
     update_schedule_config,
 )
 from app.core.channel_settings import ChannelSettings
+from app.core.maintenance.cleanup import cleanup_output, format_disk_report
 from app.core.manual_post import MAX_BUTTONS, PostButton, parse_button_input
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
@@ -79,6 +80,7 @@ HELP_TEXT = (
     "/interval <мин> — как часто проверять каналы\n"
     "/freshness <часов> — окно свежести/бэклога\n"
     "/maxposts <n> — лимит постов в день\n"
+    "/disk — занятое место и уборка временных файлов\n"
     "\nУправление VK Nature Bot (отдельный процесс, свой репозиторий):\n"
     "/nature_run — запустить\n"
     "/nature_stop — остановить\n"
@@ -454,10 +456,28 @@ def set_channel_setting(repo: Repository, channel_id: int, field: str, value_str
     elif field == "interval":
         settings = dataclasses.replace(settings, min_interval_minutes=value)
         label = "интервал (мин)"
+    elif field == "films":
+        settings = dataclasses.replace(settings, daily_video_count=value)
+        label = "фильмов/день"
+    elif field == "clips":
+        settings = dataclasses.replace(settings, daily_clip_count=value)
+        label = "клипов на фильм"
     else:
         return "Неизвестная настройка."
     repo.update_channel(channel_id, settings_json=settings.to_json())
     return f"Канал «{channel.name}»: {label} = {value} ✅"
+
+
+def render_disk() -> str:
+    """Сводка по временным файлам + ручная уборка. Добавлено после инцидента
+    2026-07-28: диск дошёл до 94% и публикация встала, а увидеть это можно было
+    только по ssh."""
+    freed = cleanup_output(OUTPUT_DIR)
+    report = format_disk_report(OUTPUT_DIR)
+    return (
+        f"💾 Временные файлы:\n{report}\n\n"
+        f"Уборка: удалено {freed.removed_files}, освобождено {freed.freed_mb:.0f} МБ"
+    )
 
 
 def render_settings(config: AppConfig) -> str:
@@ -589,6 +609,11 @@ def build_dispatcher(
     async def on_queue(message: Message) -> None:
         if await guard(message):
             await message.answer(render_queue(repo))
+
+    @dp.message(Command("disk"))
+    async def on_disk(message: Message) -> None:
+        if await guard(message):
+            await message.answer(render_disk())
 
     @dp.message(Command("publish"))
     async def on_publish(message: Message) -> None:
@@ -1372,7 +1397,13 @@ def build_dispatcher(
         _, _, channel_id, field = cb.data.split(":")
         await state.set_state(ChannelSettingInput.waiting_value)
         await state.update_data(channel_id=int(channel_id), setting_field=field)
-        label = "лимит постов/день" if field == "maxposts" else "интервал в минутах"
+        labels = {
+            "maxposts": "лимит постов/день",
+            "interval": "интервал в минутах",
+            "films": "сколько фильмов качать в день",
+            "clips": "сколько клипов резать из каждого фильма",
+        }
+        label = labels.get(field, "значение")
         await _edit_current(cb, f"Пришли число — {label}:", None)
         await cb.answer()
 

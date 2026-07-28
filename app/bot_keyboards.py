@@ -123,11 +123,30 @@ def channel_card_menu(channel, settings) -> InlineKeyboardMarkup:
                 text=f"🔍 Фильтр новостей: {'вкл' if settings.filters_enabled else 'выкл'}",
                 callback_data=f"ch:filter:{channel.id}",
             )],
+            # Видео-настройки канала (ТЗ 2026-07-28: «пусть также с помощью бота
+            # управляется») — показываются только там, где видео-репост включён.
+            *_video_rows(channel, settings),
             [InlineKeyboardButton(text="📰 Источники канала", callback_data=f"ch:sources:{channel.id}")],
             [InlineKeyboardButton(text="⬅️ К списку каналов", callback_data="ch:list")],
             _close_row(),
         ]
     )
+
+
+def _video_rows(channel, settings) -> list[list[InlineKeyboardButton]]:
+    has_video = bool(settings.daily_video_youtube_channels) or settings.daily_video_group is not None
+    if not has_video:
+        return []
+    return [[
+        InlineKeyboardButton(
+            text=f"🎬 Фильмов/день: {settings.daily_video_count}",
+            callback_data=f"ch:set:{channel.id}:films",
+        ),
+        InlineKeyboardButton(
+            text=f"✂️ Клипов на фильм: {settings.daily_clip_count}",
+            callback_data=f"ch:set:{channel.id}:clips",
+        ),
+    ]]
 
 
 def _close_row() -> list[InlineKeyboardButton]:
