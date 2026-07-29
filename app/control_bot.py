@@ -794,6 +794,7 @@ def build_dispatcher(
     from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
     from app import bot_keyboards as kb
+    from app import soundcloud_panel
 
     # Внешние софты берутся из БД-реестра менеджера (manager_repo). Готовые
     # контроллеры процессов (Природа/Shorts из .env) переиспользуются по soft_id —
@@ -892,6 +893,9 @@ def build_dispatcher(
 
     class ChannelSettingInput(StatesGroup):
         waiting_value = State()  # ждём число для настройки канала (лимит/интервал)
+
+    class SoundCloudInput(StatesGroup):
+        waiting_url = State()  # ждём ссылку на плейлист SoundCloud
 
     # Единое меню-сообщение на чат: навигация РЕДАКТИРУЕТ его, а не плодит новые
     # (запрос пользователя 2026-07-08). chat_id -> message_id последнего меню.
@@ -1460,11 +1464,27 @@ def build_dispatcher(
             cb, render_soft_list(softs, statuses), kb.softs_list_menu(soft_list_rows(softs, statuses))
         )
 
+    def _soft_record(soft_id: str):
+        return manager_repo.get_soft(soft_id) if manager_repo else None
+
+    def _soundcloud_path(soft_id: str) -> str | None:
+        """Путь к софту, если он объявил альбомный поток в реестре."""
+        record = _soft_record(soft_id)
+        return record.project_path if soundcloud_panel.supports_soundcloud(record) else None
+
     async def _show_soft(cb: CallbackQuery, soft: Soft, header: str | None = None) -> None:
         running = _soft_running(soft)
         text = header if header is not None else f"{'🟢' if running else '⚪'} {soft.title}"
         await _edit_current(
-            cb, text, kb.soft_menu(soft.soft_id, kind=soft.kind, running=running, channel_id=soft.channel_id)
+            cb,
+            text,
+            kb.soft_menu(
+                soft.soft_id,
+                kind=soft.kind,
+                running=running,
+                channel_id=soft.channel_id,
+                soundcloud=_soundcloud_path(soft.soft_id) is not None,
+            ),
         )
 
     @dp.callback_query(F.data == "soft:list")
@@ -1536,6 +1556,59 @@ def build_dispatcher(
         )
         soft = find_soft(_softs(), f"ch_{channel_id}")
         await _show_soft(cb, soft, header=text)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:sc:"))
+    async def on_soft_soundcloud(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        if _soundcloud_path(soft_id) is None:
+            await cb.answer("У этого софта нет альбомного потока", show_alert=True)
+            return
+        await state.set_state(SoundCloudInput.waiting_url)
+        await state.update_data(soft_id=soft_id)
+        await cb.message.answer(
+            "🎵 Пришли ссылку на плейлист SoundCloud.\n\n"
+            "Скачаю все треки с обложками, склею в один сборник, опубликую его, "
+            "а дальше буду выкладывать треки по одному раз в 3–5 часов.\n\n"
+            "Отменить — /cancel"
+        )
+        await cb.answer()
+
+    @dp.message(StateFilter(SoundCloudInput.waiting_url))
+    async def on_soundcloud_url(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        url = (message.text or "").strip()
+        if url == "/cancel":
+            await state.clear()
+            await message.answer("Отменил.")
+            return
+
+        data = await state.get_data()
+        project_path = _soundcloud_path(data.get("soft_id", ""))
+        await state.clear()
+        if project_path is None:
+            await message.answer("Софт больше не доступен в реестре.")
+            return
+
+        waiting = await message.answer("⏳ Читаю плейлист…")
+        payload = await soundcloud_panel.enqueue(project_path, url, message.chat.id)
+        await waiting.edit_text(soundcloud_panel.render_enqueue_result(payload))
+
+    @dp.callback_query(F.data.startswith("soft:scq:"))
+    async def on_soft_soundcloud_queue(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        project_path = _soundcloud_path(soft_id)
+        if project_path is None:
+            await cb.answer("У этого софта нет альбомного потока", show_alert=True)
+            return
+        payload = await soundcloud_panel.status(project_path)
+        soft = find_soft(_softs(), soft_id)
+        await _show_soft(cb, soft, header=soundcloud_panel.render_status(payload))
         await cb.answer()
 
     @dp.callback_query(F.data.startswith("soft:na:"))

@@ -80,6 +80,29 @@ class ManagerRepository:
             )
             session.commit()
 
+    def ensure_config_flag(self, soft_id: str, key: str, value) -> None:
+        """Дописывает один флаг в config_json, не трогая остальные настройки.
+
+        Нужно сиду: возможности софта (напр. альбомный поток) объявляются кодом,
+        а лимиты в том же config_json правит владелец из бота — перезапись всего
+        объекта стирала бы его настройки при каждом старте.
+        """
+        with self._session_factory() as session:
+            record = session.query(SoftRecord).filter(SoftRecord.soft_id == soft_id).first()
+            if record is None:
+                return
+            try:
+                config = json.loads(record.config_json or "{}")
+            except json.JSONDecodeError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+            if config.get(key) == value:
+                return
+            config[key] = value
+            record.config_json = json.dumps(config, ensure_ascii=False)
+            session.commit()
+
     def delete_soft(self, soft_id: str) -> None:
         with self._session_factory() as session:
             session.query(SoftRecord).filter(SoftRecord.soft_id == soft_id).delete()
@@ -107,9 +130,14 @@ MUSIC_UNITS = json.dumps([
 
 # project_path — каталог софта на VPS (для manager_contract.yaml). Выяснены разведкой.
 DEFAULT_SOFTS: tuple[dict, ...] = (
-    {"soft_id": "p_minus", "title": "➖ Минусы (YT→VK)", "host": "vps", "sort_order": 10,
-     "systemd_units_json": json.dumps(["yt-vk-publisher.timer"]),
-     "project_path": "/opt/yt-vk-publisher"},
+    # Софт в /opt/yt-vk-publisher переведён с YouTube-роликов на альбомы SoundCloud
+    # (решение владельца 2026-07-28): YouTube-таймер выключен, работает тик альбомного
+    # конвейера. capabilities — то, что умеет софт; в реестр кладётся отдельно от
+    # настроек владельца (см. ensure_config_flag).
+    {"soft_id": "p_minus", "title": "🎵 Альбомы (SC→VK)", "host": "vps", "sort_order": 10,
+     "systemd_units_json": json.dumps(["tg-sc-publisher.timer"]),
+     "project_path": "/opt/yt-vk-publisher",
+     "capabilities": {"soundcloud": True}},
     {"soft_id": "p_music", "title": "🎵 Музыка (TG)", "host": "vps", "sort_order": 20,
      "systemd_units_json": MUSIC_UNITS, "project_path": "/opt/tg-music-bot"},
     {"soft_id": "p_nature", "title": "🌿 Природа (VK)", "host": "local", "sort_order": 30,
@@ -120,12 +148,15 @@ DEFAULT_SOFTS: tuple[dict, ...] = (
 
 
 def seed_default_softs(repo: ManagerRepository) -> None:
-    """Идемпотентно заводит известные внешние софты. Обновляет title/path_env/order,
-    но НЕ трогает enabled/config (их владелец правит из бота)."""
+    """Идемпотентно заводит известные внешние софты. Обновляет title/path_env/order
+    и возможности (capabilities), но НЕ трогает enabled и настройки владельца."""
     for spec in DEFAULT_SOFTS:
         soft_id = spec["soft_id"]
-        fields = {k: v for k, v in spec.items() if k != "soft_id"}
+        capabilities = spec.get("capabilities", {})
+        fields = {k: v for k, v in spec.items() if k not in ("soft_id", "capabilities")}
         if repo.get_soft(soft_id) is None:
             repo.upsert_soft(soft_id, kind="process", **fields)
         else:
             repo.upsert_soft(soft_id, **fields)  # обновляем только метаданные списка
+        for key, value in capabilities.items():
+            repo.ensure_config_flag(soft_id, key, value)

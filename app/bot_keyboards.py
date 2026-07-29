@@ -51,17 +51,31 @@ def softs_list_menu(rows) -> InlineKeyboardMarkup:
 
 
 def soft_menu(
-    soft_id: str, *, kind: str, running: bool, channel_id: int | None = None
+    soft_id: str,
+    *,
+    kind: str,
+    running: bool,
+    channel_id: int | None = None,
+    soundcloud: bool = False,
 ) -> InlineKeyboardMarkup:
     """Меню одного софта (набор кнопок из ТЗ). Для канала (kind='channel') кнопки
     Лимит/Интервал/Источники/Доп делегируют в готовые обработчики ch:*; для движка и
-    внешних процессов эти настройки пока за контрактом → soft:na (заглушка)."""
+    внешних процессов эти настройки пока за контрактом → soft:na (заглушка).
+
+    soundcloud=True добавляет альбомный поток — софт объявляет его флагом в реестре."""
     power = (
         InlineKeyboardButton(text="⏹ Выключить", callback_data=f"soft:off:{soft_id}")
         if running
         else InlineKeyboardButton(text="▶️ Включить", callback_data=f"soft:on:{soft_id}")
     )
     rows = [[power, InlineKeyboardButton(text="📊 Статус", callback_data=f"soft:status:{soft_id}")]]
+    if soundcloud:
+        rows.append(
+            [
+                InlineKeyboardButton(text="🎵 Загрузить плейлист", callback_data=f"soft:sc:{soft_id}"),
+                InlineKeyboardButton(text="📋 Очередь", callback_data=f"soft:scq:{soft_id}"),
+            ]
+        )
     if kind == "channel" and channel_id is not None:
         rows += [
             [

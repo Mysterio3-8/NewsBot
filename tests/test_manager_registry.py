@@ -67,7 +67,9 @@ def test_default_softs_carry_real_vps_units(tmp_path):
     assert all(s.kind == "process" for s in softs.values())
 
     assert softs["p_minus"].host == "vps"
-    assert json.loads(softs["p_minus"].systemd_units_json) == ["yt-vk-publisher.timer"]
+    # Софт переведён с YouTube-роликов на альбомы SoundCloud (решение владельца
+    # 2026-07-28): управляем таймером альбомного конвейера, YouTube-таймер выключен.
+    assert json.loads(softs["p_minus"].systemd_units_json) == ["tg-sc-publisher.timer"]
 
     music_units = json.loads(softs["p_music"].systemd_units_json)
     assert softs["p_music"].host == "vps"
@@ -75,3 +77,27 @@ def test_default_softs_carry_real_vps_units(tmp_path):
 
     assert softs["p_nature"].host == "local"
     assert softs["p_nature"].systemd_units_json is None
+
+
+def test_capability_flag_does_not_wipe_owner_settings(tmp_path):
+    """Сид объявляет возможности софта, но лимиты владельца в том же config_json
+    трогать не имеет права — иначе они стирались бы при каждом старте бота."""
+    repo = make_repo(tmp_path)
+    seed_default_softs(repo)
+    repo.update_config("p_minus", {"limits": {"max_posts_per_day": 4}})
+
+    seed_default_softs(repo)
+
+    config = json.loads(repo.get_soft("p_minus").config_json)
+    assert config["limits"]["max_posts_per_day"] == 4
+    assert config["soundcloud"] is True
+
+
+def test_capability_flag_survives_broken_config_json(tmp_path):
+    repo = make_repo(tmp_path)
+    seed_default_softs(repo)
+    repo.upsert_soft("p_minus", config_json="{это не json")
+
+    seed_default_softs(repo)
+
+    assert json.loads(repo.get_soft("p_minus").config_json)["soundcloud"] is True

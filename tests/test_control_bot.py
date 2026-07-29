@@ -109,12 +109,14 @@ def test_build_dispatcher_registers_media_handler():
     dp = bot.build_dispatcher(Mock(), Mock(), "config.yaml")
     # 38 было до управления каналами; +2 message (reply-кнопка «Каналы» + FSM ввода
     # настройки канала) = 40; +1 message (reply-кнопка «Софты») = 41;
-    # +1 команда /disk (уборка и сводка по диску, ТЗ 2026-07-28) = 42
-    assert len(dp.message.handlers) == 42
+    # +1 команда /disk (уборка и сводка по диску, ТЗ 2026-07-28) = 42;
+    # +1 message (FSM ввода ссылки SoundCloud для альбомного потока Музыки) = 43
+    assert len(dp.message.handlers) == 43
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
-    # (soft:list/open/on/off/status/dests/na) = 37
-    assert len(dp.callback_query.handlers) == 37
+    # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток
+    # (soft:sc — принять ссылку, soft:scq — очередь) = 39
+    assert len(dp.callback_query.handlers) == 39
 
 
 def test_build_nature_controller_none_without_env_path():
