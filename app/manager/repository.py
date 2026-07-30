@@ -140,11 +140,12 @@ DEFAULT_SOFTS: tuple[dict, ...] = (
      "capabilities": {"soundcloud": True}},
     {"soft_id": "p_music", "title": "🎵 Музыка (TG)", "host": "vps", "sort_order": 20,
      "systemd_units_json": MUSIC_UNITS, "project_path": "/opt/tg-music-bot"},
-    {"soft_id": "p_nature", "title": "🌿 Природа (VK)", "host": "local", "sort_order": 30,
-     "path_env": "NATURE_BOT_PATH"},
-    {"soft_id": "p_shorts", "title": "🎬 Shorts", "host": "local", "sort_order": 40,
-     "path_env": "SHORTS_PATH"},
 )
+
+# Убраны из пульта по запросу владельца 2026-07-30: нужны только 4 основных софта
+# (Новости, Кино, Минусы, Музыка). Записи удаляются из реестра при старте, чтобы
+# кнопки не висели мёртвым грузом.
+RETIRED_SOFT_IDS: tuple[str, ...] = ("p_nature", "p_shorts")
 
 
 def seed_default_softs(repo: ManagerRepository) -> None:
@@ -160,3 +161,5 @@ def seed_default_softs(repo: ManagerRepository) -> None:
             repo.upsert_soft(soft_id, **fields)  # обновляем только метаданные списка
         for key, value in capabilities.items():
             repo.ensure_config_flag(soft_id, key, value)
+    for soft_id in RETIRED_SOFT_IDS:
+        repo.delete_soft(soft_id)

@@ -30,7 +30,7 @@ def test_seed_is_idempotent_and_keeps_enabled(tmp_path):
     repo = make_repo(tmp_path)
     seed_default_softs(repo)
     ids = {s.soft_id for s in repo.list_softs()}
-    assert {"p_nature", "p_shorts", "p_minus", "p_music"} <= ids
+    assert {"p_minus", "p_music"} <= ids
     # владелец выключил софт из бота — повторный сид не должен его снова включать
     repo.set_enabled("p_minus", False)
     seed_default_softs(repo)
@@ -75,8 +75,17 @@ def test_default_softs_carry_real_vps_units(tmp_path):
     assert softs["p_music"].host == "vps"
     assert "tg-music-bot.service" in music_units and len(music_units) == 9
 
-    assert softs["p_nature"].host == "local"
-    assert softs["p_nature"].systemd_units_json is None
+    # Природа и Shorts убраны из пульта (2026-07-30) — только 4 основных софта
+    assert "p_nature" not in softs
+    assert "p_shorts" not in softs
+
+
+def test_seed_removes_retired_softs(tmp_path):
+    """Если Природа/Shorts остались в старой БД — сид их вычищает."""
+    repo = make_repo(tmp_path)
+    repo.upsert_soft("p_nature", title="🌿 Природа", kind="process")
+    seed_default_softs(repo)
+    assert repo.get_soft("p_nature") is None
 
 
 def test_capability_flag_does_not_wipe_owner_settings(tmp_path):

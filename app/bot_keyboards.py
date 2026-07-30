@@ -160,6 +160,11 @@ def _video_rows(channel, settings) -> list[list[InlineKeyboardButton]]:
             text=f"✂️ Клипов на фильм: {settings.daily_clip_count}",
             callback_data=f"ch:set:{channel.id}:clips",
         ),
+    ], [
+        InlineKeyboardButton(
+            text=f"⏳ Зазор фильмов: {settings.video_gap_minutes} мин",
+            callback_data=f"ch:set:{channel.id}:filmgap",
+        ),
     ]]
 
 

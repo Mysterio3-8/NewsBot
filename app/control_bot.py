@@ -462,6 +462,9 @@ def set_channel_setting(repo: Repository, channel_id: int, field: str, value_str
     elif field == "clips":
         settings = dataclasses.replace(settings, daily_clip_count=value)
         label = "клипов на фильм"
+    elif field == "filmgap":
+        settings = dataclasses.replace(settings, daily_video_min_gap_minutes=value)
+        label = "зазор между фильмами (мин)"
     else:
         return "Неизвестная настройка."
     repo.update_channel(channel_id, settings_json=settings.to_json())
@@ -1406,6 +1409,7 @@ def build_dispatcher(
             "interval": "интервал в минутах",
             "films": "сколько фильмов качать в день",
             "clips": "сколько клипов резать из каждого фильма",
+            "filmgap": "минимум минут между фильмами (24 фильма/сутки → ~30)",
         }
         label = labels.get(field, "значение")
         await _edit_current(cb, f"Пришли число — {label}:", None)

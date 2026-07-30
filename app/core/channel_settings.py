@@ -111,6 +111,18 @@ class ChannelSettings:
     daily_video_min_gap_hours: int = 5
     """Минимум часов между двумя видео одних суток — чтобы фильмы не шли подряд."""
 
+    daily_video_min_gap_minutes: int | None = None
+    """Зазор между фильмами в МИНУТАХ. Приоритетнее daily_video_min_gap_hours — нужен
+    при большом daily_video_count (24 фильма/сутки не влезают в целочасовой зазор).
+    None → берётся daily_video_min_gap_hours × 60."""
+
+    @property
+    def video_gap_minutes(self) -> int:
+        """Фактический зазор между фильмами в минутах (минуты перекрывают часы)."""
+        if self.daily_video_min_gap_minutes is not None:
+            return self.daily_video_min_gap_minutes
+        return self.daily_video_min_gap_hours * 60
+
     film_logo_path: str | None = None
     """Логотип в правом верхнем углу САМОГО ФИЛЬМА (не клипа). None → фильм публикуется
     как скачан, без перекодирования. ВНИМАНИЕ: наложение требует полного ре-энкода —
@@ -177,6 +189,7 @@ class ChannelSettings:
             clip_logo_path=data.get("clip_logo_path"),
             daily_video_count=data.get("daily_video_count", 1),
             daily_video_min_gap_hours=data.get("daily_video_min_gap_hours", 5),
+            daily_video_min_gap_minutes=data.get("daily_video_min_gap_minutes"),
             film_logo_path=data.get("film_logo_path"),
             film_blur_region=data.get("film_blur_region"),
             film_blur_strength=data.get("film_blur_strength", 20),
@@ -236,6 +249,8 @@ class ChannelSettings:
             payload["daily_video_count"] = self.daily_video_count
         if self.daily_video_min_gap_hours != 5:
             payload["daily_video_min_gap_hours"] = self.daily_video_min_gap_hours
+        if self.daily_video_min_gap_minutes is not None:
+            payload["daily_video_min_gap_minutes"] = self.daily_video_min_gap_minutes
         if self.film_logo_path is not None:
             payload["film_logo_path"] = self.film_logo_path
         if self.film_blur_region is not None:

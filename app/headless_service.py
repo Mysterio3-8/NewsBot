@@ -349,17 +349,23 @@ def should_run_daily_video(
     *,
     per_day: int = 1,
     min_gap_hours: int = 5,
+    min_gap_minutes: int | None = None,
     start_hour_utc: int = DAILY_VIDEO_START_HOUR_UTC,
     window_minutes: int = DAILY_VIDEO_WINDOW_MINUTES,
 ) -> bool:
     """Пора ли делать очередное видео дня. Не больше per_day за календарные сутки (UTC),
-    между видео — минимум min_gap_hours. Первое видео стартует со случайного момента в
-    окне start_hour..start_hour+window; момент детерминирован ДАТОЙ, а не текущим
-    временем, — рестарт сервиса не сдвигает его и не запускает репост повторно."""
+    между видео — минимум min_gap_minutes (если задан) либо min_gap_hours. Минуты нужны
+    при большом per_day: 24 фильма/сутки в целочасовой зазор не влезают. Первое видео
+    стартует со случайного момента в окне start_hour..start_hour+window; момент
+    детерминирован ДАТОЙ, а не текущим временем, — рестарт сервиса не сдвигает его и не
+    запускает репост повторно."""
     if reposted_today >= per_day:
         return False
+    gap = datetime.timedelta(
+        minutes=min_gap_minutes if min_gap_minutes is not None else min_gap_hours * 60
+    )
     if last_repost_at is not None:
-        if now - last_repost_at < datetime.timedelta(hours=min_gap_hours):
+        if now - last_repost_at < gap:
             return False
     if reposted_today > 0:
         return True  # зазор уже выдержан, окно старта касается только первого видео
@@ -405,7 +411,7 @@ def build_daily_video_job(
                 repo.last_reposted_video_at(channel.id),
                 repo.count_reposted_videos_since(channel.id, start_of_today_utc()),
                 per_day=settings.daily_video_count,
-                min_gap_hours=settings.daily_video_min_gap_hours,
+                min_gap_minutes=settings.video_gap_minutes,
             ):
                 continue
             publisher = build_vk_publisher_for_channel(
