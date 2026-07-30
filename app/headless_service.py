@@ -415,7 +415,8 @@ def build_daily_video_job(
             ):
                 continue
             publisher = build_vk_publisher_for_channel(
-                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
+                repo=repo,
             )
             if publisher is None:
                 logger.warning("Видео-репост [%s]: VK publisher недоступен", channel.name)
@@ -466,7 +467,8 @@ def build_clip_publish_job(
     async def clip_publish_job() -> None:
         def publisher_for(channel: Channel):
             return build_vk_publisher_for_channel(
-                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
+                repo=repo,
             )
 
         await asyncio.to_thread(

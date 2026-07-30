@@ -111,6 +111,14 @@ class ChannelSettings:
     daily_video_min_gap_hours: int = 5
     """Минимум часов между двумя видео одних суток — чтобы фильмы не шли подряд."""
 
+    vk_upload_token_envs: list[str] = field(default_factory=list)
+    """Пул ИМЁН env-переменных с личными VK-токенами для загрузки медиа (балансер).
+    Пусто → используется одиночный Channel.vk_upload_token_env, как раньше. Несколько
+    токенов нужны при большом объёме: 24 фильма/сутки на один личный токен = бан."""
+
+    vk_token_daily_cap: int | None = None
+    """Сколько загрузок в сутки допускать на ОДИН токен пула. None → дефолт балансера."""
+
     daily_video_min_gap_minutes: int | None = None
     """Зазор между фильмами в МИНУТАХ. Приоритетнее daily_video_min_gap_hours — нужен
     при большом daily_video_count (24 фильма/сутки не влезают в целочасовой зазор).
@@ -190,6 +198,8 @@ class ChannelSettings:
             daily_video_count=data.get("daily_video_count", 1),
             daily_video_min_gap_hours=data.get("daily_video_min_gap_hours", 5),
             daily_video_min_gap_minutes=data.get("daily_video_min_gap_minutes"),
+            vk_upload_token_envs=data.get("vk_upload_token_envs", []),
+            vk_token_daily_cap=data.get("vk_token_daily_cap"),
             film_logo_path=data.get("film_logo_path"),
             film_blur_region=data.get("film_blur_region"),
             film_blur_strength=data.get("film_blur_strength", 20),
@@ -251,6 +261,10 @@ class ChannelSettings:
             payload["daily_video_min_gap_hours"] = self.daily_video_min_gap_hours
         if self.daily_video_min_gap_minutes is not None:
             payload["daily_video_min_gap_minutes"] = self.daily_video_min_gap_minutes
+        if self.vk_upload_token_envs:
+            payload["vk_upload_token_envs"] = self.vk_upload_token_envs
+        if self.vk_token_daily_cap is not None:
+            payload["vk_token_daily_cap"] = self.vk_token_daily_cap
         if self.film_logo_path is not None:
             payload["film_logo_path"] = self.film_logo_path
         if self.film_blur_region is not None:
