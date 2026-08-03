@@ -45,7 +45,12 @@ def test_seed_news_sets_conservative_antiban(tmp_path):
     assert settings.min_interval_minutes is not None
     assert settings.max_interval_minutes is not None
     assert settings.min_interval_minutes < settings.max_interval_minutes
-    assert settings.quiet_start_hour is not None and settings.quiet_end_hour is not None
+    # Ночная пауза снята осознанно (ТЗ 2026-08-03) — вместо неё антибан держат объём,
+    # широкий интервал и пул личных токенов, размазывающий загрузки по аккаунтам.
+    assert settings.quiet_start_hour == settings.quiet_end_hour
+    assert len(settings.vk_upload_token_envs) >= 2
+    # Интервал должен физически растягивать дневной лимит на все сутки.
+    assert settings.max_posts_per_day * settings.min_interval_minutes >= 20 * 60
 
 
 def test_seed_news_adds_telegram_footer_link(tmp_path):
@@ -84,4 +89,4 @@ def test_seed_news_is_idempotent(tmp_path):
     channel = _news_channel(repo)
     assert channel.enabled is True
     # settings_json не раздувается дублями ключей — merge обновляет на месте
-    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 20
+    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 10

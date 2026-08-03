@@ -1,14 +1,13 @@
 """Сборка сервисов из config.yaml + .env. Используется и UI, и headless-режимом."""
 from __future__ import annotations
 
-import datetime
 import logging
 import os
 
 from app.config.loader import AppConfig
 from app.core.channel_settings import ChannelSettings
 from app.core.images.providers.base import ImageProvider
-from app.core.publishing import token_balancer
+from app.core.publishing.vk_token_pool import DEFAULT_DAILY_CAP, VkTokenPool
 from app.db.models import Channel
 from app.core.images.providers.google_provider import GoogleImageProvider
 from app.core.images.providers.pexels_provider import PexelsProvider
@@ -68,19 +67,17 @@ def build_vk_publisher_for_channel(
     *,
     token_bucket: TokenBucket | None = None,
     cooldown_bucket: TokenBucket | None = None,
-    repo=None,
 ) -> VKPublisher | None:
     """Publisher канала: групповой токен из channel.vk_token_env + опц. личный upload-
-    токен из channel.vk_upload_token_env (group-токен не грузит медиа, VK error 27).
+    токен (group-токен не грузит медиа, VK error 27).
 
-    Если у канала задан ПУЛ личных токенов (settings.vk_upload_token_envs) и передан
-    repo — upload-токен выбирает балансер (наименее нагруженный сегодня), чтобы объём
-    не выжигал один токен. Без пула/repo поведение прежнее — один токен."""
+    Личный токен выбирает ОБЩИЙ на весь сервер пул, если у канала задан
+    settings.vk_upload_token_envs — тогда нагрузка делится поровну между аккаунтами
+    вместе с остальными софтами. Пула нет → одиночный channel.vk_upload_token_env."""
     group_token = os.environ.get(channel.vk_token_env)
     if not group_token:
         return None
-    upload_env = pick_upload_token_env(channel, repo)
-    upload_token = os.environ.get(upload_env) if upload_env else None
+    upload_token = pick_upload_token(channel)
     return VKPublisher(
         group_token,
         upload_token=upload_token,
@@ -89,34 +86,35 @@ def build_vk_publisher_for_channel(
     )
 
 
-VK_TOKEN_USAGE_SETTING = "vk_token_usage"
-
-
-def pick_upload_token_env(channel: Channel, repo=None) -> str | None:
-    """Какой личный токен использовать для загрузки медиа этого канала. Пул задан и есть
-    repo → балансер (наименее нагруженный сегодня, счётчик пишется сразу). Иначе —
-    одиночный channel.vk_upload_token_env, как было."""
+def build_channel_token_pool(channel: Channel) -> VkTokenPool | None:
+    """Общий пул личных токенов для канала. None — у канала пул не настроен."""
     settings = ChannelSettings.from_json(channel.settings_json)
-    pool = settings.vk_upload_token_envs
-    if not pool or repo is None:
-        return channel.vk_upload_token_env
+    if not settings.vk_upload_token_envs:
+        return None
+    return VkTokenPool(
+        settings.vk_upload_token_envs,
+        daily_cap=settings.vk_token_daily_cap or DEFAULT_DAILY_CAP,
+    )
 
-    now = datetime.datetime.utcnow()
-    states = token_balancer.load_states(repo.get_setting(VK_TOKEN_USAGE_SETTING))
-    cap = settings.vk_token_daily_cap or token_balancer.DEFAULT_PER_TOKEN_DAILY_CAP
-    chosen = token_balancer.pick_token(pool, states, now=now, per_token_daily_cap=cap)
-    if chosen is None:
+
+def pick_upload_token(channel: Channel) -> str | None:
+    """Личный токен для загрузки медиа этого канала.
+
+    Пул настроен → берём наименее нагруженный сегодня аккаунт из ОБЩИХ на весь сервер
+    счётчиков (их же видят Минусы и Музыка). Пул исчерпан → None, и публикатор уходит
+    в свой обычный best-effort: текст выйдет, медиа не приложится. Это осознанно —
+    лучше пост без картинки, чем ещё один бан."""
+    pool = build_channel_token_pool(channel)
+    if pool is None:
+        return os.environ.get(channel.vk_upload_token_env) if channel.vk_upload_token_env else None
+    lease = pool.pick()
+    if lease is None:
         logger.warning(
-            "Балансер: все личные токены канала «%s» исчерпаны/в кулдауне — медиа не грузим",
+            "Пул токенов: для канала «%s» свободных аккаунтов нет — медиа не грузим",
             channel.name,
         )
         return None
-    repo.set_setting(
-        VK_TOKEN_USAGE_SETTING,
-        token_balancer.dump_states(token_balancer.record_use(states, chosen, now)),
-    )
-    logger.info("Балансер: канал «%s» грузит медиа токеном %s", channel.name, chosen)
-    return chosen
+    return lease.token
 
 
 def build_telegram_fetcher() -> TelegramFetcher | None:

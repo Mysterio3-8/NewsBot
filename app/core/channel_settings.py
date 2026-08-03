@@ -111,6 +111,11 @@ class ChannelSettings:
     daily_video_min_gap_hours: int = 5
     """Минимум часов между двумя видео одних суток — чтобы фильмы не шли подряд."""
 
+    daily_video_start_hour_utc: int | None = None
+    """С какого часа UTC можно публиковать фильмы. None → дефолт 8 (11:00 МСК).
+    При большом daily_video_count нужен 0: счётчик суток обнуляется в полночь UTC,
+    поэтому старт в 08:00 UTC при зазоре 60 мин вмещает максимум 16 фильмов, не 24."""
+
     vk_upload_token_envs: list[str] = field(default_factory=list)
     """Пул ИМЁН env-переменных с личными VK-токенами для загрузки медиа (балансер).
     Пусто → используется одиночный Channel.vk_upload_token_env, как раньше. Несколько
@@ -198,6 +203,7 @@ class ChannelSettings:
             daily_video_count=data.get("daily_video_count", 1),
             daily_video_min_gap_hours=data.get("daily_video_min_gap_hours", 5),
             daily_video_min_gap_minutes=data.get("daily_video_min_gap_minutes"),
+            daily_video_start_hour_utc=data.get("daily_video_start_hour_utc"),
             vk_upload_token_envs=data.get("vk_upload_token_envs", []),
             vk_token_daily_cap=data.get("vk_token_daily_cap"),
             film_logo_path=data.get("film_logo_path"),
@@ -261,6 +267,8 @@ class ChannelSettings:
             payload["daily_video_min_gap_hours"] = self.daily_video_min_gap_hours
         if self.daily_video_min_gap_minutes is not None:
             payload["daily_video_min_gap_minutes"] = self.daily_video_min_gap_minutes
+        if self.daily_video_start_hour_utc is not None:
+            payload["daily_video_start_hour_utc"] = self.daily_video_start_hour_utc
         if self.vk_upload_token_envs:
             payload["vk_upload_token_envs"] = self.vk_upload_token_envs
         if self.vk_token_daily_cap is not None:

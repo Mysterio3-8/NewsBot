@@ -83,6 +83,13 @@ def build_cycle_job(
         return tg_pub_cache[channel.tg_token_env]
 
     def _vk_publisher_for(channel: Channel) -> VKPublisher | None:
+        # Канал с пулом личных токенов кэшировать нельзя: publisher фиксирует конкретный
+        # upload-токен, а балансер должен выбирать его ЗАНОВО на каждую публикацию —
+        # иначе весь объём процесса уходит в один аккаунт (ровно это и банит VK).
+        if ChannelSettings.from_json(channel.settings_json).vk_upload_token_envs:
+            return build_vk_publisher_for_channel(
+                channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
+            )
         if channel.vk_token_env not in vk_pub_cache:
             vk_pub_cache[channel.vk_token_env] = build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket
@@ -412,11 +419,15 @@ def build_daily_video_job(
                 repo.count_reposted_videos_since(channel.id, start_of_today_utc()),
                 per_day=settings.daily_video_count,
                 min_gap_minutes=settings.video_gap_minutes,
+                start_hour_utc=(
+                    settings.daily_video_start_hour_utc
+                    if settings.daily_video_start_hour_utc is not None
+                    else DAILY_VIDEO_START_HOUR_UTC
+                ),
             ):
                 continue
             publisher = build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
-                repo=repo,
             )
             if publisher is None:
                 logger.warning("Видео-репост [%s]: VK publisher недоступен", channel.name)
@@ -468,7 +479,6 @@ def build_clip_publish_job(
         def publisher_for(channel: Channel):
             return build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
-                repo=repo,
             )
 
         await asyncio.to_thread(
