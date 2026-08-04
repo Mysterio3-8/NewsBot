@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,13 @@ VIDEO_UPLOAD_TIMEOUT_SECONDS = 1800
 _FAIL_FAST_CLASSES = frozenset({VKErrorClass.RATE_LIMIT, VKErrorClass.AUTH_BLOCKED})
 
 
+class MediaUploadUnavailable(Exception):
+    """У поста есть медиа, но личного токена для загрузки нет (пул занят).
+
+    Не ошибка публикации, а сигнал «отложить»: пост возвращается в очередь и выйдет
+    целым, когда аккаунт освободится."""
+
+
 @dataclass(frozen=True)
 class VKPublishResult:
     success: bool
@@ -40,12 +48,20 @@ class VKPublisher:
     _cooldown: TokenBucket | None = None
     _group_key: str | None = None
     _upload_key: str | None = None
+    # Экземпляр, собранный через __new__, считается уже разрешённым: провайдера у него
+    # нет, а _upload_api тест подставляет сам.
+    _upload_resolved: bool = True
+    _upload_token_provider: "Callable[[], str | None] | None" = None
+    _upload_token: str | None = None
+    _require_media: bool = False
 
     def __init__(
         self,
         group_token: str,
         *,
         upload_token: str | None = None,
+        upload_token_provider: "Callable[[], str | None] | None" = None,
+        require_media: bool = False,
         token_bucket: TokenBucket | None = None,
         cooldown_bucket: TokenBucket | None = None,
     ) -> None:
@@ -55,6 +71,17 @@ class VKPublisher:
         # аккаунт с правами админа группы), ТОЛЬКО загрузка медиа идёт через него, а
         # сам wall.post всегда через group_token (from_group=1) — минимизирует то, что
         # личный аккаунт вообще делает в автоматическом режиме.
+        #
+        # upload_token_provider — ЛЕНИВАЯ выдача токена: провайдер дёргается только когда
+        # у поста реально есть медиа (см. _resolve_upload). Это принципиально при пуле
+        # токенов: раньше токен занимался в момент СБОРКИ публикатора, то есть на каждый
+        # рассмотренный пост — включая посты без медиа и те, что тут же отклонял
+        # rate_guard. Аккаунт при этом блокировался зазором на 10 минут впустую, и пул из
+        # двух аккаунтов голодал (2026-08-04: 2740 отказов против 43 выдач).
+        self._require_media = require_media
+        self._upload_token_provider = upload_token_provider
+        self._upload_resolved = upload_token_provider is None
+        self._upload_token: str | None = upload_token
         self._upload_api = (
             vk_api.VkApi(token=upload_token).get_api() if upload_token else self._api
         )
@@ -71,6 +98,24 @@ class VKPublisher:
         self._group_key = token_key(group_token)
         self._upload_key = token_key(upload_token) if upload_token else self._group_key
 
+    def _resolve_upload(self) -> None:
+        """Забрать личный токен у провайдера — ровно один раз и только под реальную
+        загрузку медиа. Провайдер вернул None (все аккаунты пула заняты) — остаёмся на
+        групповом токене, а решение «публиковать ли текстом» принимает вызывающий по
+        require_media."""
+        if self._upload_resolved:
+            return
+        self._upload_resolved = True
+        token = self._upload_token_provider() if self._upload_token_provider else None
+        if not token:
+            return
+        self._upload_token = token
+        self._upload_api = vk_api.VkApi(token=token).get_api()
+        self._upload_key = token_key(token)
+
+    def _has_upload_token(self) -> bool:
+        return self._upload_token is not None
+
     def publish(
         self,
         *,
@@ -85,10 +130,31 @@ class VKPublisher:
         # Загрузка медиа — best-effort: если фото/видео не залилось (напр. групповой
         # токен не имеет доступа к photos.getWallUploadServer — ошибка 27), публикуем
         # текст без него, а не роняем весь пост. Цель — пост всё равно уходит в VK.
-        attachments = self._build_attachments(
-            group_id, image_paths, video_path,
-            video_title=video_title, video_description=video_description,
-        )
+        try:
+            attachments = self._build_attachments(
+                group_id, image_paths, video_path,
+                video_title=video_title, video_description=video_description,
+            )
+        except MediaUploadUnavailable as error:
+            # Осознанно НЕ публикуем голый текст: пост с медиа, вышедший текстом, портит
+            # ленту (жалоба владельца 2026-08-04). Неуспех возвращает пост в очередь —
+            # он выйдет следующим циклом, когда аккаунт пула освободится.
+            logger.warning("VK: публикация отложена — %s", error)
+            return VKPublishResult(
+                success=False, post_id=None, error=str(error), error_code=None
+            )
+
+        # Токен был, но VK всё равно отказал в загрузке (напр. [7] — у аккаунта нет права
+        # добавлять видео в эту группу). Загрузка ловится best-effort внутри
+        # _build_attachments, поэтому пустой список здесь — единственный признак, что
+        # медиа не доехало. Инвариант тот же: пост с медиа не выходит текстом.
+        if self._require_media and (image_paths or video_path is not None) and not attachments:
+            logger.warning(
+                "VK: публикация отложена — медиа не загрузилось, текстом не публикуем"
+            )
+            return VKPublishResult(
+                success=False, post_id=None, error="медиа не загрузилось", error_code=None
+            )
         # КРИТИЧНО (найдено 2026-07-05): photos.saveWallPhoto через личный upload_token
         # сохраняет фото за ЛИЧНЫМ owner_id (не за группой) — групповой _api не имеет
         # доступа к этому объекту (подтверждено вживую: photos.getById той же фотки той
@@ -145,6 +211,13 @@ class VKPublisher:
     ) -> list[str]:
         if not image_paths and video_path is None:
             return []  # нет медиа — личный токен вообще не трогаем, ждать нечего
+
+        # Медиа есть — только теперь занимаем аккаунт в пуле.
+        self._resolve_upload()
+        if self._require_media and not self._has_upload_token():
+            raise MediaUploadUnavailable(
+                "личный токен для загрузки медиа недоступен (все аккаунты пула заняты)"
+            )
 
         # ЖЁСТКИЙ кулдаун — ОДИН раз перед началом загрузки МЕДИА ЭТОГО ПОСТА целиком
         # (не между getWallUploadServer/saveWallPhoto — там нужна скорость, иначе рвётся

@@ -124,6 +124,16 @@ class ChannelSettings:
     vk_token_daily_cap: int | None = None
     """Сколько загрузок в сутки допускать на ОДИН токен пула. None → дефолт балансера."""
 
+    require_media: bool = True
+    """Пост, у которого ЕСТЬ медиа, публиковать только вместе с медиа.
+
+    Личный токен для загрузки берётся из пула и может быть занят (зазор между
+    загрузками одного аккаунта). Раньше в этом случае публикатор молча уходил в
+    best-effort и постил голый текст — владелец 2026-08-04: «в кино только какие
+    посты странные текстовые без фото и фильма, так не надо это всё портит».
+    Теперь такой пост остаётся в очереди и выйдет следующим циклом, когда аккаунт
+    освободится. Пост, у которого медиа не было изначально, флаг не трогает."""
+
     daily_video_min_gap_minutes: int | None = None
     """Зазор между фильмами в МИНУТАХ. Приоритетнее daily_video_min_gap_hours — нужен
     при большом daily_video_count (24 фильма/сутки не влезают в целочасовой зазор).
@@ -206,6 +216,7 @@ class ChannelSettings:
             daily_video_start_hour_utc=data.get("daily_video_start_hour_utc"),
             vk_upload_token_envs=data.get("vk_upload_token_envs", []),
             vk_token_daily_cap=data.get("vk_token_daily_cap"),
+            require_media=data.get("require_media", True),
             film_logo_path=data.get("film_logo_path"),
             film_blur_region=data.get("film_blur_region"),
             film_blur_strength=data.get("film_blur_strength", 20),
@@ -273,6 +284,8 @@ class ChannelSettings:
             payload["vk_upload_token_envs"] = self.vk_upload_token_envs
         if self.vk_token_daily_cap is not None:
             payload["vk_token_daily_cap"] = self.vk_token_daily_cap
+        if not self.require_media:
+            payload["require_media"] = self.require_media
         if self.film_logo_path is not None:
             payload["film_logo_path"] = self.film_logo_path
         if self.film_blur_region is not None:

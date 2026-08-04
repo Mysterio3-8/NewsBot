@@ -360,3 +360,111 @@ def test_publish_fails_fast_on_auth_blocked():
     assert result.success is False
     assert result.error_code == 5
     assert publisher._api.wall.post.call_count == 1
+
+
+def test_provider_not_called_when_post_has_no_media():
+    """Регрессия 2026-08-04: токен занимался в момент сборки публикатора, то есть на
+    КАЖДЫЙ рассмотренный пост — включая посты без медиа. Аккаунт блокировался зазором
+    пула на 10 минут впустую, и пул из двух аккаунтов голодал (2740 отказов против 43
+    выдач за сутки). Провайдер обязан молчать, пока грузить нечего."""
+    calls = []
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = publisher._api
+    publisher._upload_resolved = False
+    publisher._upload_token_provider = lambda: calls.append("pick") or "tok"
+    publisher._api.wall.post.return_value = {"post_id": 70}
+
+    result = publisher.publish(group_id=123, text="без медиа")
+
+    assert result.success is True
+    assert calls == []  # аккаунт в пуле не тронут
+
+
+def test_provider_called_once_for_post_with_several_photos():
+    """Один пост = одна занятая ячейка пула, сколько бы фото в нём ни было."""
+    calls = []
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = MagicMock()
+    publisher._upload_resolved = False
+
+    def provider():
+        calls.append("pick")
+        return "personal-token"
+
+    publisher._upload_token_provider = provider
+    upload_api = MagicMock()
+    upload_api.photos.getWallUploadServer.return_value = {"upload_url": "http://upload"}
+    upload_api.photos.saveWallPhoto.return_value = [{"owner_id": -123, "id": 9}]
+    upload_api.wall.post.return_value = {"post_id": 71}
+
+    upload_response = MagicMock()
+    upload_response.json.return_value = {"photo": "p", "server": 1, "hash": "h"}
+
+    with (
+        patch("app.core.publishing.vk_publisher.vk_api.VkApi") as vk_api_cls,
+        patch("app.core.publishing.vk_publisher.requests.post", return_value=upload_response),
+        patch("builtins.open", mock_open(read_data=b"x")),
+    ):
+        vk_api_cls.return_value.get_api.return_value = upload_api
+        result = publisher.publish(
+            group_id=123, text="три фото", image_paths=["a.jpg", "b.jpg", "c.jpg"]
+        )
+
+    assert result.success is True
+    assert calls == ["pick"]  # три фото — но аккаунт занят один раз
+    assert upload_api.photos.saveWallPhoto.call_count == 3
+
+
+def test_require_media_postpones_post_instead_of_publishing_bare_text():
+    """Жалоба владельца 2026-08-04: «в кино только какие посты странные текстовые без
+    фото и фильма, так не надо это всё портит». Пул занят → пост НЕ выходит калекой,
+    а возвращается в очередь (success=False) и выйдет целым позже."""
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = publisher._api
+    publisher._upload_resolved = False
+    publisher._upload_token_provider = lambda: None  # все аккаунты пула заняты
+    publisher._require_media = True
+
+    result = publisher.publish(group_id=123, text="фильм", image_paths=["a.jpg"])
+
+    assert result.success is False
+    publisher._api.wall.post.assert_not_called()  # голый текст в ленту не ушёл
+
+
+def test_require_media_off_keeps_old_best_effort_behaviour():
+    """Канал, которому медиа не критично, продолжает публиковаться текстом."""
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = publisher._api
+    publisher._upload_resolved = False
+    publisher._upload_token_provider = lambda: None
+    publisher._require_media = False
+    publisher._api.photos.getWallUploadServer.side_effect = Exception("[27] Group auth")
+    publisher._api.wall.post.return_value = {"post_id": 72}
+
+    result = publisher.publish(group_id=123, text="новость", image_paths=["a.jpg"])
+
+    assert result.success is True
+
+
+def test_require_media_postpones_when_upload_rejected_by_vk():
+    """Токен выдан, но VK отказал в загрузке — реальный случай 2026-08-04: аккаунт
+    828469474 не имеет права добавлять видео в группу КиноЛайф ([7] can't add video).
+    Загрузка ловится best-effort внутри _build_attachments, поэтому единственный признак
+    беды — пустой список вложений. Пост с медиа всё равно не должен выйти текстом."""
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = MagicMock()
+    publisher._require_media = True
+    publisher._upload_api.photos.getWallUploadServer.side_effect = Exception(
+        "[7] owner has not right for this action"
+    )
+
+    result = publisher.publish(group_id=123, text="фильм", image_paths=["a.jpg"])
+
+    assert result.success is False
+    publisher._api.wall.post.assert_not_called()
+    publisher._upload_api.wall.post.assert_not_called()

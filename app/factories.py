@@ -77,10 +77,14 @@ def build_vk_publisher_for_channel(
     group_token = os.environ.get(channel.vk_token_env)
     if not group_token:
         return None
-    upload_token = pick_upload_token(channel)
+    # Токен берётся ЛЕНИВО — публикатор дёрнет провайдер, только если у поста реально
+    # есть медиа. Занимать аккаунт в момент сборки публикатора нельзя: сборка идёт на
+    # каждый рассмотренный пост, а зазор пула блокирует аккаунт на 10 минут (см.
+    # комментарий в VKPublisher.__init__).
     return VKPublisher(
         group_token,
-        upload_token=upload_token,
+        upload_token_provider=lambda: pick_upload_token(channel),
+        require_media=ChannelSettings.from_json(channel.settings_json).require_media,
         token_bucket=token_bucket,
         cooldown_bucket=cooldown_bucket,
     )
