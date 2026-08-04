@@ -26,6 +26,15 @@ VIDEO_UPLOAD_TIMEOUT_SECONDS = 1800
 _FAIL_FAST_CLASSES = frozenset({VKErrorClass.RATE_LIMIT, VKErrorClass.AUTH_BLOCKED})
 
 
+POSTPONED_PREFIX = "postponed: "
+"""Маркер «пост отложен, а не сломался».
+
+Отложенная публикация — НЕ сбой сети VK, и circuit breaker её считать не должен:
+иначе череда отложек откроет цепь, а жёсткая пара VK↔TG тогда перестанет публиковать
+и в Telegram — встанет весь канал. Ровно по этой причине уже существует префикс
+`throttled:` для отказов rate_guard (см. `_record_vk_breaker`)."""
+
+
 class MediaUploadUnavailable(Exception):
     """У поста есть медиа, но личного токена для загрузки нет (пул занят).
 
@@ -141,7 +150,7 @@ class VKPublisher:
             # он выйдет следующим циклом, когда аккаунт пула освободится.
             logger.warning("VK: публикация отложена — %s", error)
             return VKPublishResult(
-                success=False, post_id=None, error=str(error), error_code=None
+                success=False, post_id=None, error=f"{POSTPONED_PREFIX}{error}", error_code=None
             )
 
         # Токен был, но VK всё равно отказал в загрузке (напр. [7] — у аккаунта нет права
@@ -153,7 +162,10 @@ class VKPublisher:
                 "VK: публикация отложена — медиа не загрузилось, текстом не публикуем"
             )
             return VKPublishResult(
-                success=False, post_id=None, error="медиа не загрузилось", error_code=None
+                success=False,
+                post_id=None,
+                error=f"{POSTPONED_PREFIX}медиа не загрузилось",
+                error_code=None,
             )
         # КРИТИЧНО (найдено 2026-07-05): photos.saveWallPhoto через личный upload_token
         # сохраняет фото за ЛИЧНЫМ owner_id (не за группой) — групповой _api не имеет

@@ -468,3 +468,22 @@ def test_require_media_postpones_when_upload_rejected_by_vk():
     assert result.success is False
     publisher._api.wall.post.assert_not_called()
     publisher._upload_api.wall.post.assert_not_called()
+
+
+def test_postponed_result_is_marked_so_breaker_ignores_it():
+    """Отложенная публикация не должна двигать circuit breaker: череда отложек из-за
+    занятого пула открыла бы цепь, а жёсткая пара VK↔TG тогда перестала бы публиковать
+    и в Telegram — встал бы весь канал."""
+    from app.core.publishing.vk_publisher import POSTPONED_PREFIX
+
+    publisher = VKPublisher.__new__(VKPublisher)
+    publisher._api = MagicMock()
+    publisher._upload_api = publisher._api
+    publisher._upload_resolved = False
+    publisher._upload_token_provider = lambda: None
+    publisher._require_media = True
+
+    result = publisher.publish(group_id=123, text="фильм", image_paths=["a.jpg"])
+
+    assert result.success is False
+    assert result.error.startswith(POSTPONED_PREFIX)

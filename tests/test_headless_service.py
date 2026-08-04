@@ -368,3 +368,23 @@ def test_sync_default_channel_targets_fills_from_config(tmp_path):
     updated = repo.get_channel(default.id)
     assert updated.tg_destination == "@channel"
     assert updated.vk_destination == "233689032"
+
+
+def test_breaker_ignores_postponed_vk_result():
+    """Регрессия 2026-08-04: отложенный из-за занятого пула пост возвращает
+    success=False с error_code=None, что классифицировалось как TRANSIENT и двигало
+    breaker. Несколько отложек подряд открыли бы цепь и остановили публикацию в ОБЕ
+    сети, хотя VK полностью исправен."""
+    from unittest.mock import MagicMock
+
+    from app.core.publishing.vk_publisher import POSTPONED_PREFIX, VKPublishResult
+    from app.headless_service import _record_vk_breaker
+
+    breaker = MagicMock()
+    result = VKPublishResult(
+        success=False, post_id=None, error=f"{POSTPONED_PREFIX}пул занят", error_code=None
+    )
+
+    _record_vk_breaker(breaker, "VK_GROUP_TOKEN_KINO", result)
+
+    breaker.record_failure.assert_not_called()

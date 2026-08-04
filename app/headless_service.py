@@ -30,7 +30,7 @@ from app.core.publishing.rate_guard import check_publish_allowed
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.token_bucket import TokenBucket
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
-from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
+from app.core.publishing.vk_publisher import POSTPONED_PREFIX, VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.publishing.weekly_repost import repost_best_post
 from app.core.video.daily_video_repost import publish_due_clips, run_daily_video_repost
@@ -287,11 +287,13 @@ def _record_vk_breaker(
     breaker: CircuitBreaker, token_env: str, result: VKPublishResult
 ) -> None:
     """Успех закрывает цепь, реальный сбой VK — двигает breaker к паузе. Отказ
-    rate_guard (throttled) — НЕ сетевая ошибка, breaker не трогаем."""
+    rate_guard (throttled) и отложенная публикация (postponed) — НЕ сетевые ошибки,
+    breaker не трогаем: иначе череда отложек из-за занятого пула токенов откроет цепь,
+    а жёсткая пара VK↔TG перестанет публиковать и в Telegram."""
     if result.success:
         breaker.record_success("vk", token_env)
         return
-    if result.error and result.error.startswith("throttled:"):
+    if result.error and result.error.startswith(("throttled:", POSTPONED_PREFIX)):
         return
     breaker.record_failure("vk", token_env, classify_vk_code(result.error_code))
 
