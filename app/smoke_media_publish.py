@@ -40,14 +40,18 @@ def _build_probe_image(directory: Path) -> Path:
 
     ⚠️ Одноцветную заливку VK молча ОТВЕРГАЕТ: upload-сервер отвечает `photo: ""`, и
     saveWallPhoto падает `[100] photo is undefined` (проверено вживую 2026-08-04).
-    Поэтому картинка шумная — иначе дым-тест давал бы ложный ПРОВАЛ на здоровом коде."""
+    Поэтому картинка шумная — иначе дым-тест давал бы ложный ПРОВАЛ на здоровом коде.
+
+    Шум берётся БЕЗ фиксированного seed намеренно: одинаковый пробник от деплоя к
+    деплою VK отвергает как повторную загрузку того же файла (так и всплыла ошибка
+    выше — первая одноцветная картинка загрузилась, вторая такая же уже нет)."""
     import random
 
     from PIL import Image
 
     width, height = 1200, 800
     image = Image.new("RGB", (width, height))
-    rng = random.Random(20260804)
+    rng = random.SystemRandom()
     image.putdata(
         [
             (rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255))
