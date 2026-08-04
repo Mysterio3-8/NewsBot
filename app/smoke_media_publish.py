@@ -38,28 +38,44 @@ VK_API_VERSION = "5.199"
 def _build_probe_image(directory: Path) -> Path:
     """Синтетическая картинка: тест не должен зависеть от того, что лежит в output/.
 
-    ⚠️ Одноцветную заливку VK молча ОТВЕРГАЕТ: upload-сервер отвечает `photo: ""`, и
-    saveWallPhoto падает `[100] photo is undefined` (проверено вживую 2026-08-04).
-    Поэтому картинка шумная — иначе дым-тест давал бы ложный ПРОВАЛ на здоровом коде.
+    Пробник обязан быть ПОХОЖ НА ОБЫЧНОЕ ФОТО. Проверено вживую 2026-08-04, upload-сервер
+    VK отвечает `photo: ""` (а `saveWallPhoto` затем падает `[100] photo is undefined`)
+    на двух крайностях: одноцветная заливка и сплошной RGB-шум (несжимаемый, ~580 КБ на
+    1200×800). Настоящие фото из `output/` тем же токеном в ту же секунду грузятся
+    штатно. Поэтому здесь плавный градиент с несколькими фигурами: обычный размер файла,
+    нормальная сжимаемость.
 
-    Шум берётся БЕЗ фиксированного seed намеренно: одинаковый пробник от деплоя к
-    деплою VK отвергает как повторную загрузку того же файла (так и всплыла ошибка
-    выше — первая одноцветная картинка загрузилась, вторая такая же уже нет)."""
+    Уникальность на каждый запуск обязательна: байт-в-байт тот же файл VK отвергает как
+    повторную загрузку (так и всплыла первая ошибка — одноцветный пробник загрузился
+    один раз, а второй такой же уже нет)."""
     import random
 
-    from PIL import Image
+    from PIL import Image, ImageDraw
 
     width, height = 1200, 800
-    image = Image.new("RGB", (width, height))
     rng = random.SystemRandom()
-    image.putdata(
-        [
-            (rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255))
-            for _ in range(width * height)
-        ]
-    )
+    base = (rng.randint(20, 90), rng.randint(60, 140), rng.randint(60, 140))
+    image = Image.new("RGB", (width, height), base)
+    draw = ImageDraw.Draw(image)
+    # Плавный вертикальный градиент — сжимается как обычная фотография.
+    for y in range(height):
+        shade = y / height
+        draw.line(
+            [(0, y), (width, y)],
+            fill=(
+                int(base[0] + shade * 90),
+                int(base[1] + shade * 70),
+                int(base[2] + shade * 50),
+            ),
+        )
+    for _ in range(6):
+        x0, y0 = rng.randint(0, width - 200), rng.randint(0, height - 200)
+        draw.ellipse(
+            [x0, y0, x0 + rng.randint(80, 200), y0 + rng.randint(80, 200)],
+            fill=(rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255)),
+        )
     path = directory / "smoke_probe.jpg"
-    image.save(path)
+    image.save(path, quality=88)
     return path
 
 
