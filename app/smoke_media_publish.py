@@ -36,11 +36,26 @@ VK_API_VERSION = "5.199"
 
 
 def _build_probe_image(directory: Path) -> Path:
-    """Синтетическая картинка: тест не должен зависеть от того, что лежит в output/."""
+    """Синтетическая картинка: тест не должен зависеть от того, что лежит в output/.
+
+    ⚠️ Одноцветную заливку VK молча ОТВЕРГАЕТ: upload-сервер отвечает `photo: ""`, и
+    saveWallPhoto падает `[100] photo is undefined` (проверено вживую 2026-08-04).
+    Поэтому картинка шумная — иначе дым-тест давал бы ложный ПРОВАЛ на здоровом коде."""
+    import random
+
     from PIL import Image
 
+    width, height = 1200, 800
+    image = Image.new("RGB", (width, height))
+    rng = random.Random(20260804)
+    image.putdata(
+        [
+            (rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255))
+            for _ in range(width * height)
+        ]
+    )
     path = directory / "smoke_probe.jpg"
-    Image.new("RGB", (900, 600), (28, 92, 62)).save(path)
+    image.save(path)
     return path
 
 
