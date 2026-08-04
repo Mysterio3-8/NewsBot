@@ -127,10 +127,17 @@ def run_smoke(channel_match: str, verify_token_env: str) -> int:
         result = publisher.publish(group_id=group_id, text=SMOKE_TEXT, image_paths=[image])
 
     if not result.success:
-        # require_media: пул занят → пост осознанно отложен, а не выпущен калекой.
-        print(f"ОТЛОЖЕНО: {result.error}")
-        print("Пул токенов занят. Это не регрессия — медиа-пост не ушёл голым текстом.")
-        return 0
+        # Отличать отложенную публикацию от НАСТОЯЩЕЙ ошибки VK обязательно: без этого
+        # тест печатал «ОТЛОЖЕНО» и отдавал 0 на [214] Access to adding post denied,
+        # то есть глушил ровно ту поломку, ради которой написан.
+        from app.core.publishing.vk_publisher import POSTPONED_PREFIX
+
+        if (result.error or "").startswith(POSTPONED_PREFIX):
+            print(f"ОТЛОЖЕНО: {result.error}")
+            print("Пул токенов занят. Это не регрессия — медиа-пост не ушёл голым текстом.")
+            return 0
+        print(f"ПРОВАЛ: VK отказал в публикации — {result.error}")
+        return 1
 
     verify_token = read_env_file("/etc/vk-tokens.env").get(verify_token_env)
     if not verify_token:
