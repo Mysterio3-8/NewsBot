@@ -98,6 +98,7 @@ def build_channel_token_pool(channel: Channel) -> VkTokenPool | None:
     return VkTokenPool(
         settings.vk_upload_token_envs,
         daily_cap=settings.vk_token_daily_cap or DEFAULT_DAILY_CAP,
+        caller=f"news:{channel.name}",
     )
 
 

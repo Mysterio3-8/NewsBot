@@ -152,6 +152,7 @@ def run_daily_video_repost(
         VkTokenPool(
             settings.vk_upload_token_envs,
             daily_cap=settings.vk_token_daily_cap or DEFAULT_DAILY_CAP,
+            caller=f"film:{channel.name}",
         )
         if settings.vk_upload_token_envs
         else None

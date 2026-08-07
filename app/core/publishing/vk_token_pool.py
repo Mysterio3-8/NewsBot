@@ -144,6 +144,11 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
             cooling_until TEXT,
             last_used_at  TEXT
         );
+        CREATE TABLE IF NOT EXISTS token_grants (
+            granted_at  TEXT NOT NULL,
+            account_key TEXT NOT NULL,
+            caller      TEXT NOT NULL
+        );
         """
     )
     # Самолечащаяся миграция: last_used_at добавлен позже, у ранних установок его нет.
@@ -152,6 +157,24 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE token_usage ADD COLUMN last_used_at TEXT")
     conn.commit()
     return conn
+
+
+def _record_grant(conn: sqlite3.Connection, account_key: str, caller: str, now: datetime.datetime) -> None:
+    """Журнал выдач: КТО занял слот.
+
+    Без него софты слепы друг к другу. 07.08 счётчик показал 20 выдач за сутки, а в
+    логах софтов нашлись только 4 — остальные 16 ушли неизвестно куда, и понять, почему
+    Минусы не получают слот, было нечем. Пишем в общий файл, а не в лог каждого софта:
+    у них разные логгеры и разные каталоги."""
+    conn.execute(
+        "INSERT INTO token_grants (granted_at, account_key, caller) VALUES (?, ?, ?)",
+        (now.isoformat(), account_key, caller),
+    )
+    # Журнал нужен для разбора «за последние сутки», вечно копить его незачем.
+    conn.execute(
+        "DELETE FROM token_grants WHERE granted_at < ?",
+        ((now - datetime.timedelta(days=3)).isoformat(),),
+    )
 
 
 def _fetch_account_id(token: str) -> str | None:
@@ -193,8 +216,10 @@ class VkTokenPool:
         env_file: str | Path | None = None,
         daily_cap: int = DEFAULT_DAILY_CAP,
         min_gap_minutes: int = MIN_GAP_MINUTES,
+        caller: str = "unknown",
     ) -> None:
         self.pool_env_names = pool_env_names
+        self.caller = caller
         self.db_path = db_path or os.environ.get("VK_TOKEN_POOL_DB", DEFAULT_DB_PATH)
         self.env_file = env_file or os.environ.get("VK_TOKEN_POOL_ENV_FILE", DEFAULT_ENV_FILE)
         self.daily_cap = daily_cap
@@ -275,8 +300,11 @@ class VkTokenPool:
                 """,
                 (key, today, now.isoformat()),
             )
+            _record_grant(conn, key, self.caller, now)
             conn.commit()
-        logger.info("Пул токенов: загрузка уходит на %s (аккаунт %s)", name, key)
+        logger.info(
+            "Пул токенов: загрузка уходит на %s (аккаунт %s, кто: %s)", name, key, self.caller
+        )
         return TokenLease(name, token, key)
 
     def has_free_account(self, *, now: datetime.datetime | None = None) -> bool:
