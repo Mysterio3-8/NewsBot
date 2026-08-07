@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 
 from app.config.loader import LLMConfig
+from app.core.llm import prompt_store
 from app.paths import PROMPTS_DIR
 
 logger = logging.getLogger("llm")
@@ -92,10 +93,13 @@ def _retry_after_seconds(error: Exception) -> float | None:
 
 
 class LLMClient:
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, repo=None) -> None:
         self._config = config
         self._last_request_at: float | None = None
         self._key_index = 0
+        # repo нужен только для переопределений промптов из бота (prompt_store).
+        # None → работаем на заводских файлах, как раньше.
+        self._repo = repo
 
     def is_running(self) -> bool:
         if self._config.provider in CLOUD_PROVIDERS:
@@ -120,6 +124,11 @@ class LLMClient:
         return self._config.model in model_names
 
     def load_prompt(self, name: str) -> str:
+        """Текст шаблона: сначала правка владельца из бота (БД), иначе заводской файл.
+        Так изменённый промпт переживает деплой — deploy.sh синкает prompts/ с диска."""
+        override = prompt_store.get_override(self._repo, name)
+        if override:
+            return override
         prompt_path = PROMPTS_DIR / f"{name}.txt"
         if not prompt_path.exists():
             raise FileNotFoundError(f"Промпт не найден: {prompt_path}")

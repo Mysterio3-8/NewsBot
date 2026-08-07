@@ -83,7 +83,8 @@ class ServiceController:
 
     def _run_service(self, config) -> None:
         asyncio.set_event_loop(self._loop)
-        llm_client = LLMClient(config.llm)
+        # repo → правки шаблонов из бота подхватываются боевым пайплайном
+        llm_client = LLMClient(config.llm, repo=self._repo)
         try:
             self._loop.run_until_complete(
                 run_forever(self._repo, config, llm_client, stop_event=self._stop_event)

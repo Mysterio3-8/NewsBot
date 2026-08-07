@@ -86,6 +86,7 @@ def soft_menu(
                 InlineKeyboardButton(text="📚 Источники", callback_data=f"ch:sources:{channel_id}"),
                 InlineKeyboardButton(text="📢 Каналы", callback_data=f"soft:dests:{channel_id}"),
             ],
+            [InlineKeyboardButton(text="📝 Шаблоны текстов", callback_data="tpl:list")],
             [InlineKeyboardButton(text="⚙️ Дополнительные настройки", callback_data=f"ch:open:{channel_id}")],
         ]
     else:
@@ -141,6 +142,7 @@ def channel_card_menu(channel, settings) -> InlineKeyboardMarkup:
             # управляется») — показываются только там, где видео-репост включён.
             *_video_rows(channel, settings),
             [InlineKeyboardButton(text="📰 Источники канала", callback_data=f"ch:sources:{channel.id}")],
+            [InlineKeyboardButton(text="📝 Шаблоны текстов", callback_data="tpl:list")],
             [InlineKeyboardButton(text="⬅️ К списку каналов", callback_data="ch:list")],
             _close_row(),
         ]
@@ -166,6 +168,33 @@ def _video_rows(channel, settings) -> list[list[InlineKeyboardButton]]:
             callback_data=f"ch:set:{channel.id}:filmgap",
         ),
     ]]
+
+
+def prompts_menu(rows, back_to: str) -> InlineKeyboardMarkup:
+    """Список текстовых шаблонов. rows — объекты с .name/.title/.overridden.
+    back_to — callback_data кнопки «Назад» (карточка софта, откуда пришли)."""
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{'✏️' if r.overridden else '📄'} {r.title}",
+            callback_data=f"tpl:open:{r.name}",
+        )]
+        for r in rows
+    ]
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_to)])
+    buttons.append(_close_row())
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def prompt_card_menu(name: str, *, overridden: bool) -> InlineKeyboardMarkup:
+    """Карточка одного шаблона: изменить текст, сбросить к заводскому, назад."""
+    rows = [[InlineKeyboardButton(text="✏️ Изменить текст", callback_data=f"tpl:edit:{name}")]]
+    if overridden:
+        rows.append(
+            [InlineKeyboardButton(text="↩️ Сбросить к заводскому", callback_data=f"tpl:reset:{name}")]
+        )
+    rows.append([InlineKeyboardButton(text="🔙 К шаблонам", callback_data="tpl:list")])
+    rows.append(_close_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _close_row() -> list[InlineKeyboardButton]:

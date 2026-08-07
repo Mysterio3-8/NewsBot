@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import re
 
 from pathlib import Path
 
@@ -36,7 +37,8 @@ from app.db.repository import Repository
 from app.manager import systemd
 from app.moscow_time import format_moscow_time
 from app.factories import build_telegram_publisher, build_vk_publisher
-from app.paths import OUTPUT_DIR
+from app.core.llm import prompt_store
+from app.paths import OUTPUT_DIR, PROMPTS_DIR
 from app.process_controller import ProcessController
 
 logger = logging.getLogger("app")
@@ -471,6 +473,76 @@ def set_channel_setting(repo: Repository, channel_id: int, field: str, value_str
     return f"Канал «{channel.name}»: {label} = {value} ✅"
 
 
+PROMPT_PREVIEW_LIMIT = 3000
+"""Telegram режет сообщение на 4096 символов — длинный шаблон показываем началом."""
+
+
+def prompt_rows(repo: Repository) -> list:
+    """View-модели списка шаблонов: какие изменены владельцем, какие заводские."""
+    from types import SimpleNamespace
+
+    return [
+        SimpleNamespace(
+            name=name,
+            title=title,
+            overridden=prompt_store.is_overridden(repo, name),
+        )
+        for name, title in prompt_store.EDITABLE_PROMPTS.items()
+        if (PROMPTS_DIR / f"{name}.txt").exists() or prompt_store.is_overridden(repo, name)
+    ]
+
+
+def render_prompt_card(repo: Repository, name: str, config: AppConfig) -> str:
+    """Текущий текст шаблона + пометка, заводской он или правленый."""
+    title = prompt_store.EDITABLE_PROMPTS.get(name, name)
+    override = prompt_store.get_override(repo, name)
+    if override is not None:
+        state, text = "✏️ изменён вами", override
+    else:
+        state = "📄 заводской"
+        path = PROMPTS_DIR / f"{name}.txt"
+        text = path.read_text(encoding="utf-8") if path.exists() else "(файл не найден)"
+    body = text[:PROMPT_PREVIEW_LIMIT]
+    if len(text) > PROMPT_PREVIEW_LIMIT:
+        body += f"\n\n… (показано {PROMPT_PREVIEW_LIMIT} из {len(text)} символов)"
+    return f"📝 {title}\nСостояние: {state}\n\n{body}"
+
+
+def save_prompt(repo: Repository, name: str, text: str) -> str:
+    """Сохранить новый текст шаблона. Плейсхолдеры не проверяем строго — но если
+    владелец потерял обязательный {{...}}, рерайт упадёт, поэтому предупреждаем."""
+    text = text.strip()
+    if not text:
+        return "Пустой текст не сохраняю. Пришли текст шаблона."
+    if name not in prompt_store.EDITABLE_PROMPTS:
+        return "Неизвестный шаблон."
+    prompt_store.set_override(repo, name, text)
+    title = prompt_store.EDITABLE_PROMPTS[name]
+    warning = ""
+    factory = PROMPTS_DIR / f"{name}.txt"
+    if factory.exists():
+        lost = _lost_placeholders(factory.read_text(encoding="utf-8"), text)
+        if lost:
+            warning = (
+                f"\n\n⚠️ В заводском тексте были плейсхолдеры {', '.join(sorted(lost))}, "
+                f"а в новом их нет — без них генерация может упасть. Проверь работу или сбрось."
+            )
+    return f"✅ «{title}» сохранён ({len(text)} символов).{warning}"
+
+
+def _lost_placeholders(factory_text: str, new_text: str) -> set[str]:
+    factory_keys = set(re.findall(r"\{\{(\w+)\}\}", factory_text))
+    new_keys = set(re.findall(r"\{\{(\w+)\}\}", new_text))
+    return factory_keys - new_keys
+
+
+def reset_prompt(repo: Repository, name: str) -> str:
+    if name not in prompt_store.EDITABLE_PROMPTS:
+        return "Неизвестный шаблон."
+    prompt_store.reset_override(repo, name)
+    return f"↩️ «{prompt_store.EDITABLE_PROMPTS[name]}» возвращён к заводскому."
+
+
 def render_disk() -> str:
     """Сводка по временным файлам + ручная уборка. Добавлено после инцидента
     2026-07-28: диск дошёл до 94% и публикация встала, а увидеть это можно было
@@ -638,7 +710,7 @@ def build_dispatcher(
         from app.core.llm.client import LLMClient
 
         config = load_config(config_path)
-        llm_client = LLMClient(config.llm)
+        llm_client = LLMClient(config.llm, repo=repo)
         result = await test_post_now(repo, config, llm_client, vk_ref=parts[1].strip())
         await message.answer(result)
 
@@ -897,6 +969,9 @@ def build_dispatcher(
     class ChannelSettingInput(StatesGroup):
         waiting_value = State()  # ждём число для настройки канала (лимит/интервал)
 
+    class PromptInput(StatesGroup):
+        waiting_text = State()  # ждём новый текст шаблона
+
     class SoundCloudInput(StatesGroup):
         waiting_url = State()  # ждём ссылку на плейлист SoundCloud
 
@@ -1124,6 +1199,17 @@ def build_dispatcher(
         result = add_source(repo, message.text or "")
         await _edit_menu_message(
             message, "📰 Источники (тап — вкл/выкл):\n\n" + result, kb.sources_menu(repo.list_sources())
+        )
+
+    @dp.message(StateFilter(PromptInput.waiting_text))
+    async def on_prompt_text(message: Message, state: FSMContext) -> None:
+        name = (await state.get_data()).get("prompt_name")
+        await state.clear()
+        result = save_prompt(repo, name, message.text or "")
+        await _edit_menu_message(
+            message,
+            f"{result}\n\n{render_prompt_card(repo, name, load_config(config_path))}",
+            kb.prompt_card_menu(name, overridden=prompt_store.is_overridden(repo, name)),
         )
 
     @dp.message(StateFilter(ChannelSettingInput.waiting_value))
@@ -1396,6 +1482,62 @@ def build_dispatcher(
             kb.sources_menu(repo.list_sources(channel_id=channel_id)),
         )
         await cb.answer()
+
+    async def _show_prompt_list(cb: CallbackQuery) -> None:
+        await _edit_current(
+            cb,
+            "📝 Шаблоны текстов (✏️ — изменён вами, 📄 — заводской):",
+            kb.prompts_menu(prompt_rows(repo), back_to="soft:list"),
+        )
+
+    @dp.callback_query(F.data == "tpl:list")
+    async def on_tpl_list(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        await state.clear()
+        await _show_prompt_list(cb)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("tpl:open:"))
+    async def on_tpl_open(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        name = cb.data.split(":", 2)[2]
+        await _edit_current(
+            cb,
+            render_prompt_card(repo, name, load_config(config_path)),
+            kb.prompt_card_menu(name, overridden=prompt_store.is_overridden(repo, name)),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("tpl:edit:"))
+    async def on_tpl_edit(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        name = cb.data.split(":", 2)[2]
+        await state.set_state(PromptInput.waiting_text)
+        await state.update_data(prompt_name=name)
+        title = prompt_store.EDITABLE_PROMPTS.get(name, name)
+        await _edit_current(
+            cb,
+            f"✏️ Пришли новый текст шаблона «{title}» одним сообщением.\n\n"
+            "Плейсхолдеры вида {{TEXT}} сохраняй — код подставляет в них данные.",
+            None,
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("tpl:reset:"))
+    async def on_tpl_reset(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        name = cb.data.split(":", 2)[2]
+        result = reset_prompt(repo, name)
+        await _edit_current(
+            cb,
+            f"{result}\n\n{render_prompt_card(repo, name, load_config(config_path))}",
+            kb.prompt_card_menu(name, overridden=False),
+        )
+        await cb.answer("Сброшено")
 
     @dp.callback_query(F.data.startswith("ch:set:"))
     async def on_ch_set(cb: CallbackQuery, state: FSMContext) -> None:
