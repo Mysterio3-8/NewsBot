@@ -8,6 +8,8 @@ from app.core.channel_settings import ChannelSettings
 from app.core.publishing.vk_publisher import VKPublishResult
 from app.core.video.clip_cutter import ClipCut
 from app.core.video.daily_video_repost import (
+    CLIP_MAX_SPACING_MINUTES,
+    CLIP_MIN_SPACING_MINUTES,
     plan_clip_times,
     publish_due_clips,
     run_daily_video_repost,
@@ -81,7 +83,11 @@ def test_plan_clip_times_spaced_by_random_interval():
     assert now + datetime.timedelta(minutes=30) <= times[0] <= now + datetime.timedelta(minutes=90)
     for earlier, later in zip(times, times[1:]):
         gap = later - earlier
-        assert datetime.timedelta(minutes=90) <= gap <= datetime.timedelta(minutes=240)
+        assert (
+            datetime.timedelta(minutes=CLIP_MIN_SPACING_MINUTES)
+            <= gap
+            <= datetime.timedelta(minutes=CLIP_MAX_SPACING_MINUTES)
+        )
 
 
 def test_plan_clip_times_keeps_going_past_midnight():
@@ -89,9 +95,10 @@ def test_plan_clip_times_keeps_going_past_midnight():
     now = datetime.datetime(2026, 7, 18, 21, 30)
     times = plan_clip_times(now, 3, rng=random.Random(5))
 
-    assert times[-1].day == 19
+    assert times[-1] > now  # план уходит за полночь, а не жмётся в остаток суток
+    assert times[-1].day != now.day
     for earlier, later in zip(times, times[1:]):
-        assert later - earlier >= datetime.timedelta(minutes=90)
+        assert later - earlier >= datetime.timedelta(minutes=CLIP_MIN_SPACING_MINUTES)
 
 
 # --- run_daily_video_repost ---
@@ -490,3 +497,23 @@ def test_expired_clip_removed_from_plan(tmp_path):
     assert publisher.calls == []  # протухший клип не постим и не держим в плане
     assert repo.list_due_clips(datetime.datetime.utcnow()) == []
     assert not clip_file.exists()
+
+
+def test_two_clips_bracket_the_day_around_text_posts():
+    """ТЗ владельца 2026-08-06: «кино так фильм, клип, пост, пост, пост, клип».
+
+    Первый клип идёт сразу за фильмом, второй закрывает сутки — между ними остаётся
+    окно, куда ложатся три текстовых поста со своим интервалом 330–460 мин."""
+    film_at = datetime.datetime(2026, 8, 6, 9, 0)
+    clips = plan_clip_times(film_at, 2, rng=random.Random(7))
+
+    first_gap = clips[0] - film_at
+    assert datetime.timedelta(minutes=30) <= first_gap <= datetime.timedelta(minutes=90)
+
+    # Второй клип уходит на конец суток, а не липнет к первому.
+    assert clips[1] - film_at >= datetime.timedelta(hours=17)
+    assert clips[1] - film_at <= datetime.timedelta(hours=21)
+
+    # Три поста по нижней границе интервала (330 мин) успевают лечь между клипами.
+    room_for_posts = clips[1] - clips[0]
+    assert room_for_posts >= datetime.timedelta(minutes=3 * 330)

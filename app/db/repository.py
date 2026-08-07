@@ -589,7 +589,32 @@ class Repository:
                     .filter(Source.channel_id == channel_id)
                 )
             row = query.order_by(ProcessedPost.published_at.desc()).first()
-            return row[0] if row else None
+            moments = [row[0]] if row else []
+
+            # Фильм и клипы — такие же записи в сообществе, как текстовый пост, поэтому
+            # интервальный гейт обязан их учитывать. Иначе три планировщика (фильм по
+            # своему окну, клипы по clip_segments, посты по очереди) работают вслепую
+            # друг к другу, и порядок дня разъезжается. ТЗ владельца 2026-08-06:
+            # «кино так фильм, клип, пост, пост, пост, клип».
+            if channel_id is not None:
+                video_at = (
+                    session.query(RepostedVideo.created_at)
+                    .filter(RepostedVideo.channel_id == channel_id)
+                    .order_by(RepostedVideo.created_at.desc())
+                    .first()
+                )
+                clip_at = (
+                    session.query(ClipSegment.published_at)
+                    .filter(
+                        ClipSegment.channel_id == channel_id,
+                        ClipSegment.published_at.is_not(None),
+                    )
+                    .order_by(ClipSegment.published_at.desc())
+                    .first()
+                )
+                moments += [r[0] for r in (video_at, clip_at) if r and r[0] is not None]
+
+            return max(moments) if moments else None
 
     def get_raw_post(self, raw_post_id: int) -> RawPost | None:
         with self._session_factory() as session:
