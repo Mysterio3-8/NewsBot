@@ -31,9 +31,17 @@ ssh "$HOST" "systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVI
 # удаляется. Занятый пул токенов деплой НЕ валит (это не регрессия), публикация без
 # вложения — валит.
 echo "==> Дым-тест публикации с медиа..."
-if ssh "$HOST" "cd $REMOTE_DIR && venv/bin/python -m app.smoke_media_publish"; then
-  echo "==> Готово."
-else
+set +e
+ssh "$HOST" "cd $REMOTE_DIR && venv/bin/python -m app.smoke_media_publish"
+SMOKE_CODE=$?
+set -e
+# 255 — обрыв самого ssh, а не вердикт теста. Раньше это печаталось как «публикация
+# сломана» и пугало зря: сервер моргал, а медиа было ни при чём.
+if [ "$SMOKE_CODE" -eq 255 ]; then
+  echo "!! Связь с сервером оборвалась — дым-тест НЕ выполнен. Код задеплоен."
+  echo "   Проверить вручную: ssh $HOST 'cd $REMOTE_DIR && venv/bin/python -m app.smoke_media_publish'"
+elif [ "$SMOKE_CODE" -ne 0 ]; then
   echo "!! ДЫМ-ТЕСТ ПРОВАЛЕН: публикация с медиа сломана. Код задеплоен — чинить сейчас."
   exit 1
 fi
+echo "==> Готово."
