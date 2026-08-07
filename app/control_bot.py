@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import re
@@ -38,6 +39,7 @@ from app.manager import systemd
 from app.moscow_time import format_moscow_time
 from app.factories import build_telegram_publisher, build_vk_publisher
 from app.core.llm import prompt_store
+from app.manager.contract import SoftContract, write_contract_file
 from app.paths import OUTPUT_DIR, PROMPTS_DIR
 from app.process_controller import ProcessController
 
@@ -473,6 +475,103 @@ def set_channel_setting(repo: Repository, channel_id: int, field: str, value_str
     return f"Канал «{channel.name}»: {label} = {value} ✅"
 
 
+SOFT_LIMIT_PROMPTS = {
+    "maxposts": "📅 Пришли число — сколько публикаций в день максимум:",
+    "interval": "⏱ Пришли интервал в минутах. Можно диапазон через дефис (напр. 55-65) —\n"
+                "случайная пауза в этих границах, чтобы тайминг не выглядел роботом.",
+    "quiet": "🌙 Пришли часы ночной паузы МСК через дефис (напр. 0-7).\n"
+             "Ноль или «выкл» — отключить паузу.",
+}
+
+
+def save_soft_limit(manager_repo, soft_id: str, field: str, raw: str) -> str:
+    """Записать лимит внешнего софта в контракт (реестр менеджера) и, если известен
+    каталог проекта, отрендерить туда manager_contract.yaml — софт его читает."""
+    if manager_repo is None:
+        return "Реестр менеджера недоступен."
+    record = manager_repo.get_soft(soft_id)
+    if record is None:
+        return "Софт не найден в реестре."
+    contract = SoftContract.from_config_json(record.config_json)
+    raw = (raw or "").strip().lower()
+    try:
+        contract = _apply_limit(contract, field, raw)
+    except ValueError as error:
+        return f"{error} Попробуй ещё раз."
+
+    config = json.loads(record.config_json or "{}") if record.config_json else {}
+    if not isinstance(config, dict):
+        config = {}
+    # limits перезаписываем ЦЕЛИКОМ, а не мержим: снятая настройка (напр. выключенная
+    # ночная пауза) исчезает из контракта, и merge оставил бы старое значение жить.
+    config["limits"] = contract.to_config_dict().get("limits", {})
+    manager_repo.update_config(soft_id, config)
+
+    note = ""
+    if record.project_path:
+        try:
+            path = write_contract_file(record.project_path, contract)
+            note = f"\nКонтракт записан: {path}"
+        except OSError as error:  # каталог недоступен — настройка всё равно сохранена
+            note = f"\n⚠️ Не удалось записать файл контракта: {error}"
+    return f"✅ Сохранено.{note}"
+
+
+def _apply_limit(contract: SoftContract, field: str, raw: str) -> SoftContract:
+    """Разбор введённого значения. Бросает ValueError с человеческим текстом."""
+    if field == "maxposts":
+        if not raw.isdigit():
+            return _fail("Нужно целое число.")
+        return dataclasses.replace(contract, max_posts_per_day=int(raw))
+    if field == "interval":
+        low, high = _parse_range(raw)
+        return dataclasses.replace(contract, min_interval_minutes=low, max_interval_minutes=high)
+    if field == "quiet":
+        if raw in ("0", "выкл", "off", "нет"):
+            return dataclasses.replace(contract, quiet_start_hour=None, quiet_end_hour=None)
+        start, end = _parse_range(raw)
+        if end is None:
+            return _fail("Нужны два часа через дефис, напр. 0-7.")
+        if not (0 <= start <= 23 and 0 <= end <= 23):
+            return _fail("Часы должны быть от 0 до 23.")
+        return dataclasses.replace(contract, quiet_start_hour=start, quiet_end_hour=end)
+    return _fail("Неизвестная настройка.")
+
+
+def _fail(message: str):
+    raise ValueError(message)
+
+
+def _parse_range(raw: str) -> tuple[int, int | None]:
+    """«55-65» → (55, 65); «60» → (60, None)."""
+    parts = [p.strip() for p in raw.replace("–", "-").split("-") if p.strip()]
+    if not parts or not all(p.isdigit() for p in parts):
+        return _fail("Нужно число или диапазон через дефис (напр. 55-65).")
+    if len(parts) == 1:
+        return int(parts[0]), None
+    low, high = int(parts[0]), int(parts[1])
+    if high < low:
+        return _fail("Правая граница диапазона меньше левой.")
+    return low, high
+
+
+def render_soft_contract(manager_repo, soft_id: str) -> str:
+    """Человекочитаемый контракт софта для карточки в боте."""
+    if manager_repo is None:
+        return "Реестр менеджера недоступен."
+    record = manager_repo.get_soft(soft_id)
+    if record is None:
+        return "Софт не найден в реестре."
+    contract = SoftContract.from_config_json(record.config_json)
+    where = record.project_path or "путь не задан"
+    return (
+        f"📄 Контракт «{record.title}»\n"
+        f"Каталог: {where}\n\n"
+        f"{contract.render_summary()}\n\n"
+        f"Софт читает эти лимиты из manager_contract.yaml в своём каталоге."
+    )
+
+
 PROMPT_PREVIEW_LIMIT = 3000
 """Telegram режет сообщение на 4096 символов — длинный шаблон показываем началом."""
 
@@ -889,6 +988,13 @@ def build_dispatcher(
     def _softs() -> list[Soft]:
         return build_soft_list(repo.list_channels(), _process_softs())
 
+    def _soft_contract(soft_id: str):
+        """Контракт внешнего софта из реестра менеджера (лимиты, правимые из бота)."""
+        if manager_repo is None:
+            return None
+        record = manager_repo.get_soft(soft_id)
+        return SoftContract.from_config_json(record.config_json) if record else None
+
     def _soft_units(soft_id: str) -> list[str]:
         """systemd-юниты софта из реестра (софт = набор юнитов, см. manager/systemd.py)."""
         record = manager_repo.get_soft(soft_id) if manager_repo else None
@@ -968,6 +1074,9 @@ def build_dispatcher(
 
     class ChannelSettingInput(StatesGroup):
         waiting_value = State()  # ждём число для настройки канала (лимит/интервал)
+
+    class SoftLimitInput(StatesGroup):
+        waiting_value = State()  # ждём значение лимита внешнего софта (контракт)
 
     class PromptInput(StatesGroup):
         waiting_text = State()  # ждём новый текст шаблона
@@ -1199,6 +1308,25 @@ def build_dispatcher(
         result = add_source(repo, message.text or "")
         await _edit_menu_message(
             message, "📰 Источники (тап — вкл/выкл):\n\n" + result, kb.sources_menu(repo.list_sources())
+        )
+
+    @dp.message(StateFilter(SoftLimitInput.waiting_value))
+    async def on_soft_limit_value(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        soft_id, field = data.get("soft_id"), data.get("limit_field")
+        await state.clear()
+        result = save_soft_limit(manager_repo, soft_id, field, message.text or "")
+        soft = find_soft(_softs(), soft_id)
+        await _edit_menu_message(
+            message,
+            f"{result}\n\n{render_soft_contract(manager_repo, soft_id)}",
+            kb.soft_menu(
+                soft_id,
+                kind=soft.kind if soft else SOFT_KIND_PROCESS,
+                running=_soft_running(soft) if soft else False,
+                soundcloud=_soundcloud_path(soft_id) is not None,
+                contract=_soft_contract(soft_id),
+            ),
         )
 
     @dp.message(StateFilter(PromptInput.waiting_text))
@@ -1630,6 +1758,7 @@ def build_dispatcher(
                 running=running,
                 channel_id=soft.channel_id,
                 soundcloud=_soundcloud_path(soft.soft_id) is not None,
+                contract=_soft_contract(soft.soft_id),
             ),
         )
 
@@ -1757,14 +1886,27 @@ def build_dispatcher(
         await _show_soft(cb, soft, header=soundcloud_panel.render_status(payload))
         await cb.answer()
 
-    @dp.callback_query(F.data.startswith("soft:na:"))
-    async def on_soft_na(cb: CallbackQuery) -> None:
+    @dp.callback_query(F.data.startswith("soft:lim:"))
+    async def on_soft_limit(cb: CallbackQuery, state: FSMContext) -> None:
         if not await _callback_guard(cb):
             return
-        await cb.answer(
-            "Пока настраивается внутри самого софта. Полное управление извне — следующий срез.",
-            show_alert=True,
-        )
+        _, _, soft_id, field = cb.data.split(":")
+        await state.set_state(SoftLimitInput.waiting_value)
+        await state.update_data(soft_id=soft_id, limit_field=field)
+        await _edit_current(cb, SOFT_LIMIT_PROMPTS[field], None)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:cfg:"))
+    async def on_soft_contract(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        soft = find_soft(_softs(), soft_id)
+        if soft is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        await _show_soft(cb, soft, header=render_soft_contract(manager_repo, soft_id))
+        await cb.answer()
 
     @dp.message(F.video | F.photo | F.document)
     async def on_media(message: Message) -> None:

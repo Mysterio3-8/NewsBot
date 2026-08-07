@@ -111,14 +111,16 @@ def test_build_dispatcher_registers_media_handler():
     # настройки канала) = 40; +1 message (reply-кнопка «Софты») = 41;
     # +1 команда /disk (уборка и сводка по диску, ТЗ 2026-07-28) = 42;
     # +1 message (FSM ввода ссылки SoundCloud для альбомного потока Музыки) = 43;
-    # +1 message (FSM ввода текста шаблона — редактор промптов из бота) = 44
-    assert len(dp.message.handlers) == 44
+    # +1 message (FSM ввода текста шаблона — редактор промптов из бота) = 44;
+    # +1 message (FSM ввода лимита внешнего софта через контракт) = 45
+    assert len(dp.message.handlers) == 45
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток
     # (soft:sc — принять ссылку, soft:scq — очередь) = 39; +4 редактор шаблонов
-    # (tpl:list/open/edit/reset) = 43
-    assert len(dp.callback_query.handlers) == 43
+    # (tpl:list/open/edit/reset) = 43; заглушка soft:na заменена на soft:lim +
+    # soft:cfg (реальное управление лимитами внешних софтов) = 44
+    assert len(dp.callback_query.handlers) == 44
 
 
 def test_build_nature_controller_none_without_env_path():

@@ -57,10 +57,12 @@ def soft_menu(
     running: bool,
     channel_id: int | None = None,
     soundcloud: bool = False,
+    contract=None,
 ) -> InlineKeyboardMarkup:
     """Меню одного софта (набор кнопок из ТЗ). Для канала (kind='channel') кнопки
-    Лимит/Интервал/Источники/Доп делегируют в готовые обработчики ch:*; для движка и
-    внешних процессов эти настройки пока за контрактом → soft:na (заглушка).
+    Лимит/Интервал/Источники/Доп делегируют в готовые обработчики ch:*; для внешнего
+    софта те же настройки идут через КОНТРАКТ (manager_contract.yaml в его каталоге) —
+    значения показываются прямо на кнопках.
 
     soundcloud=True добавляет альбомный поток — софт объявляет его флагом в реестре."""
     power = (
@@ -90,16 +92,24 @@ def soft_menu(
             [InlineKeyboardButton(text="⚙️ Дополнительные настройки", callback_data=f"ch:open:{channel_id}")],
         ]
     else:
+        limit = _contract_value(contract, "max_posts_per_day")
+        gap = _contract_interval(contract)
+        quiet = _contract_quiet(contract)
         rows += [
             [
-                InlineKeyboardButton(text="📅 Лимит в день", callback_data=f"soft:na:{soft_id}"),
-                InlineKeyboardButton(text="⏱ Интервал", callback_data=f"soft:na:{soft_id}"),
+                InlineKeyboardButton(
+                    text=f"📅 Лимит/день: {limit}", callback_data=f"soft:lim:{soft_id}:maxposts"
+                ),
+                InlineKeyboardButton(
+                    text=f"⏱ Интервал: {gap}", callback_data=f"soft:lim:{soft_id}:interval"
+                ),
             ],
             [
-                InlineKeyboardButton(text="📚 Источники", callback_data=f"soft:na:{soft_id}"),
-                InlineKeyboardButton(text="📢 Каналы", callback_data=f"soft:na:{soft_id}"),
+                InlineKeyboardButton(
+                    text=f"🌙 Ночная пауза: {quiet}", callback_data=f"soft:lim:{soft_id}:quiet"
+                ),
             ],
-            [InlineKeyboardButton(text="⚙️ Дополнительные настройки", callback_data=f"soft:na:{soft_id}")],
+            [InlineKeyboardButton(text="📄 Показать контракт", callback_data=f"soft:cfg:{soft_id}")],
         ]
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="soft:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -168,6 +178,26 @@ def _video_rows(channel, settings) -> list[list[InlineKeyboardButton]]:
             callback_data=f"ch:set:{channel.id}:filmgap",
         ),
     ]]
+
+
+def _contract_value(contract, field: str) -> str:
+    """Значение поля контракта для подписи кнопки. Не задано → «не задан»."""
+    value = getattr(contract, field, None) if contract is not None else None
+    return "не задан" if value is None else str(value)
+
+
+def _contract_interval(contract) -> str:
+    if contract is None or contract.min_interval_minutes is None:
+        return "не задан"
+    if contract.max_interval_minutes is not None:
+        return f"{contract.min_interval_minutes}–{contract.max_interval_minutes}м"
+    return f"{contract.min_interval_minutes}м"
+
+
+def _contract_quiet(contract) -> str:
+    if contract is None or contract.quiet_start_hour is None or contract.quiet_end_hour is None:
+        return "выкл"
+    return f"{contract.quiet_start_hour}–{contract.quiet_end_hour}ч"
 
 
 def prompts_menu(rows, back_to: str) -> InlineKeyboardMarkup:

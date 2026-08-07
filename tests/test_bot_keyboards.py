@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from app import bot_keyboards as kb
+from app.manager.contract import SoftContract
 
 
 def _callback_datas(markup) -> list[str]:
@@ -93,9 +94,29 @@ def test_soft_menu_channel_delegates_to_ch_handlers():
     assert "soft:list" in datas
 
 
-def test_soft_menu_process_uses_na_placeholder():
-    datas = _callback_datas(kb.soft_menu("p_nature", kind="process", running=False))
-    assert "soft:on:p_nature" in datas  # остановлен → кнопка включения
-    assert "soft:status:p_nature" in datas
-    assert "soft:na:p_nature" in datas  # тонкие настройки за контрактом
-    assert "ch:set:" not in " ".join(datas)
+def test_soft_menu_process_edits_contract():
+    """У внешнего софта кнопки лимитов больше не заглушка — ведут в контракт."""
+    datas = _callback_datas(kb.soft_menu("p_music", kind="process", running=False))
+    assert "soft:on:p_music" in datas
+    assert "soft:status:p_music" in datas
+    assert "soft:lim:p_music:maxposts" in datas
+    assert "soft:lim:p_music:interval" in datas
+    assert "soft:lim:p_music:quiet" in datas
+    assert "soft:cfg:p_music" in datas
+    assert not any(d.startswith("soft:na:") for d in datas)
+
+
+def test_soft_menu_shows_contract_values_on_buttons():
+    contract = SoftContract(max_posts_per_day=24, min_interval_minutes=55,
+                            max_interval_minutes=65, quiet_start_hour=0, quiet_end_hour=7)
+    markup = kb.soft_menu("p_music", kind="process", running=True, contract=contract)
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert any("24" in x for x in labels)
+    assert any("55–65" in x for x in labels)
+    assert any("0–7" in x for x in labels)
+
+
+def test_soft_menu_without_contract_says_not_set():
+    labels = [b.text for row in kb.soft_menu("p_music", kind="process", running=True).inline_keyboard
+              for b in row]
+    assert any("не задан" in x for x in labels)
