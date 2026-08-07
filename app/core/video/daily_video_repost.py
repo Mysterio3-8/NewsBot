@@ -28,6 +28,7 @@ from app.core.publishing.footer import FooterLinks
 from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.vk_publisher import VKPublisher
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
+from app.core.publishing.vk_token_pool import DEFAULT_DAILY_CAP, VkTokenPool
 from app.core.publishing.youtube_description import (
     build_vk_group_url,
     build_youtube_description,
@@ -139,6 +140,27 @@ def run_daily_video_repost(
     video = _pick_video(repo, channel, settings, vk_fetcher)
     if video is None:
         logger.info("Видео-репост [%s]: новых видео в источнике нет", channel.name)
+        return
+
+    # Токен проверяется ДО тяжёлой работы. Порядок шагов ниже жёсткий: фильм помечается
+    # опубликованным ещё до скачивания, поэтому неудача на публикации СЪЕДАЕТ фильм —
+    # он больше не выберется, и сутки останутся без кино. Ровно это и случилось 05–06.08
+    # после того, как отложенная публикация (require_media) стала возвращать неуспех:
+    # в логе «Видео-репост: публикация не удалась: postponed» два дня подряд.
+    # Пул занят — просто уходим, ничего не пометив и не скачав: джоб вернётся через 15 мин.
+    pool = (
+        VkTokenPool(
+            settings.vk_upload_token_envs,
+            daily_cap=settings.vk_token_daily_cap or DEFAULT_DAILY_CAP,
+        )
+        if settings.vk_upload_token_envs
+        else None
+    )
+    if pool is not None and not pool.has_free_account():
+        logger.info(
+            "Видео-репост [%s]: личный токен занят — фильм не трогаем, вернёмся позже",
+            channel.name,
+        )
         return
 
     title, description = rewrite_video_texts(

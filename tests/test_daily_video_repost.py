@@ -517,3 +517,55 @@ def test_two_clips_bracket_the_day_around_text_posts():
     # Три поста по нижней границе интервала (330 мин) успевают лечь между клипами.
     room_for_posts = clips[1] - clips[0]
     assert room_for_posts >= datetime.timedelta(minutes=3 * 330)
+
+
+def test_film_not_consumed_when_token_pool_busy(monkeypatch, tmp_path):
+    """Регрессия 05–06.08: фильм помечается опубликованным ДО скачивания (защита от
+    OOM-цикла), а отложенная публикация стала возвращать неуспех — фильм «съедался» и
+    больше не выбирался, сутки оставались без кино. В логе два дня подряд:
+    «Видео-репост: публикация не удалась: postponed». Занят пул — не помечаем и не качаем."""
+    from app.core.video import daily_video_repost as mod
+
+    marked: list[str] = []
+    downloaded: list[str] = []
+
+    class _Pool:
+        def has_free_account(self, **_):
+            return False
+
+    class _Repo:
+        def list_reposted_video_refs(self, channel_id):
+            return []
+
+        def add_reposted_video(self, **kwargs):
+            marked.append(kwargs["video_ref"])
+
+    class _Channel:
+        id = 1
+        name = "Кино"
+        vk_destination = "240120678"
+        settings_json = (
+            '{"daily_video_youtube_channels": ["https://youtube.com/@x"],'
+            ' "vk_upload_token_envs": ["VK_UPLOAD_TOKEN_1"]}'
+        )
+
+    monkeypatch.setattr(mod, "VkTokenPool", lambda *a, **k: _Pool())
+    monkeypatch.setattr(
+        mod,
+        "_pick_video",
+        lambda *a, **k: mod.SourceVideo(
+            ref="yt1", title="t", description="d",
+            duration_seconds=60, direct_urls=[], page_url="https://youtu.be/x",
+        ),
+    )
+    monkeypatch.setattr(
+        mod, "download_video", lambda *a, **k: downloaded.append("x") or tmp_path / "f.mp4"
+    )
+
+    mod.run_daily_video_repost(
+        _Repo(), _Channel(), vk_fetcher=None, vk_publisher=None,
+        llm_client=None, footer_links=None,
+    )
+
+    assert marked == [], "фильм не должен помечаться, пока токена нет"
+    assert downloaded == [], "качать фильм при занятом пуле незачем"

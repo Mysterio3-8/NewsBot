@@ -270,6 +270,48 @@ class VkTokenPool:
         logger.info("Пул токенов: загрузка уходит на %s (аккаунт %s)", name, key)
         return TokenLease(name, token, key)
 
+    def has_free_account(self, *, now: datetime.datetime | None = None) -> bool:
+        """Есть ли сейчас свободный аккаунт — БЕЗ захвата слота.
+
+        Нужна тем, кто перед публикацией делает дорогую работу: Кино качает фильм на
+        сотни мегабайт и помечает его опубликованным ДО загрузки (защита от OOM-цикла,
+        2026-07-28). Если после этого токена не окажется, фильм уже помечен и больше не
+        возьмётся — сутки без фильма. Дешёвая проверка заранее снимает основную массу
+        таких случаев: пул занят — даже не начинаем качать.
+
+        Гонку это не исключает (между проверкой и загрузкой слот может уйти другому
+        софту), поэтому вызывающий обязан пережить отказ на самой публикации."""
+        now = now or datetime.datetime.utcnow()
+        candidates = resolve_tokens(self.pool_env_names, self.env_file)
+        if not candidates:
+            return False
+        today = now.date().isoformat()
+        gap = datetime.timedelta(minutes=self.min_gap_minutes)
+        try:
+            with _connect(self.db_path) as conn:
+                rows = {
+                    row[0]: row
+                    for row in conn.execute(
+                        "SELECT account_key, day, used_today, used_total, cooling_until, "
+                        "last_used_at FROM token_usage"
+                    )
+                }
+                for name, token in candidates:
+                    row = rows.get(self._account_key(conn, token, now))
+                    if row is None:
+                        return True
+                    if row[4] and now < datetime.datetime.fromisoformat(row[4]):
+                        continue
+                    if row[1] == today and row[2] >= self.daily_cap:
+                        continue
+                    if row[5] and now - datetime.datetime.fromisoformat(row[5]) < gap:
+                        continue
+                    return True
+                return False
+        except sqlite3.Error as exc:
+            logger.warning("Пул токенов: проверка доступности не удалась (%s) — считаем занятым", exc)
+            return False
+
     def _account_key(self, conn: sqlite3.Connection, token: str, now: datetime.datetime) -> str:
         """user_id аккаунта, закэшированный по хэшу токена. Токен принадлежит одному
         аккаунту навсегда, поэтому разрешаем один раз и больше в сеть не ходим."""
