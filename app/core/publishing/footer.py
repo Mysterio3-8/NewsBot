@@ -64,6 +64,19 @@ def build_html_footer(links: FooterLinks) -> str:
     return "\n".join(lines)
 
 
+def build_markdown_footer(links: FooterLinks) -> str:
+    """Тот же футер, но markdown-разметкой — для заливки фильма в TG через Telethon.
+
+    HTML-версия тут не годится: Telethon по умолчанию разбирает подпись как markdown,
+    и `<a href=...>` уехал бы в канал сырыми тегами."""
+    lines = []
+    if links.telegram_url:
+        lines.append(f"[{links.telegram_signature}]({links.telegram_url})")
+    if links.vk_url:
+        lines.append(f"[{links.vk_signature}]({links.vk_url})")
+    return "\n".join(lines)
+
+
 def build_vk_footer(links: FooterLinks) -> str:
     """VK / Instagram — призыв подписаться на Telegram + голый (кликабельный) URL."""
     if not links.telegram_url:

@@ -10,6 +10,8 @@ from app.core.publishing.footer import FooterLinks, build_vk_footer
 from app.core.publishing.rate_guard import check_publish_allowed
 from app.core.publishing.text_formatting import split_hashtags, strip_markdown
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
+from app.core.video.clip_cutter import probe_duration_seconds
+from app.core.video.watermark import probe_dimensions
 from app.db.repository import Repository
 
 logger = logging.getLogger("publishing")
@@ -36,6 +38,8 @@ def publish_queued_post_vk(
     quiet_end_hour: int | None = None,
     channel_id: int | None = None,
     include_hashtags: bool = False,
+    video_as_post: bool = True,
+    video_description: str | None = None,
 ) -> VKPublishResult:
     processed = repo.get_processed_post(post_id)
     if processed is None:
@@ -62,10 +66,22 @@ def publish_queued_post_vk(
     image_paths = (
         [Path(p) for p in json.loads(processed.image_paths)] if processed.image_paths else []
     )
-    publish_kwargs = dict(group_id=group_id, text=text, image_paths=image_paths)
-    if processed.video_path:
-        publish_kwargs["video_path"] = Path(processed.video_path)
-    result = publisher.publish(**publish_kwargs)
+    if processed.video_path and not video_as_post:
+        # ТЗ владельца 2026-08-10: пост с видео записью на стене не публикуем — ролик
+        # уходит в раздел «Видео» сообщества, вертикальный короткий — в «Клипы».
+        video_path = Path(processed.video_path)
+        result = publisher.publish_video_only(
+            group_id=group_id,
+            video_path=video_path,
+            title=processed.headline or None,
+            description=video_description or text,
+            as_clip=_looks_like_clip(video_path),
+        )
+    else:
+        publish_kwargs = dict(group_id=group_id, text=text, image_paths=image_paths)
+        if processed.video_path:
+            publish_kwargs["video_path"] = Path(processed.video_path)
+        result = publisher.publish(**publish_kwargs)
 
     if result.success:
         repo.mark_published(post_id, "vk", datetime.datetime.utcnow(), vk_post_id=result.post_id)
@@ -76,6 +92,25 @@ def publish_queued_post_vk(
         repo.update_processed_post_status(post_id, "failed")
 
     return result
+
+
+CLIP_MAX_SECONDS = 180
+"""Потолок длительности клипа в VK — ролик длиннее в «Клипы» всё равно не попадёт."""
+
+
+def _looks_like_clip(video_path: Path) -> bool:
+    """Вертикальный и короткий ролик → раздел «Клипы», остальное → «Видео».
+
+    FAIL-SAFE: ffprobe недоступен или файла нет → False, то есть обычная видеозапись.
+    Ошибиться в эту сторону дёшево (ролик просто ляжет в «Видео»), в обратную — нет:
+    закрытый метод `shortVideo.create` на горизонтальном ролике может отвалиться."""
+    try:
+        width, height = probe_dimensions(video_path)
+        duration = probe_duration_seconds(video_path)
+    except Exception:
+        logger.info("Не удалось измерить %s — гружу обычной видеозаписью", video_path)
+        return False
+    return height > width and duration <= CLIP_MAX_SECONDS
 
 
 def _already_published(repo: Repository, post_id: int) -> bool:

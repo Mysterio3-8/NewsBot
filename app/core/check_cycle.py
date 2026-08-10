@@ -192,6 +192,10 @@ def _process_posts(
                 split_collage=settings.split_collage,
                 simple_media=settings.simple_media,
                 stock_fallback=settings.stock_fallback,
+                promo_banner_mode=settings.promo_banner_mode,
+                shuffle_images=settings.shuffle_images,
+                max_images_per_post=settings.max_images_per_post,
+                seo_profile=settings.seo_profile() if settings.seo_enabled else None,
             )
         except Exception:
             logger.exception(

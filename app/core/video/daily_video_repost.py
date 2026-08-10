@@ -24,9 +24,9 @@ from app.core.llm.clip_hook import generate_clip_hooks
 from app.core.llm.client import LLMClient
 from app.core.llm.video_rewriter import rewrite_video_texts
 from app.core.monitoring.vk_fetcher import VKFetcher
-from app.core.publishing.footer import FooterLinks
+from app.core.publishing.footer import FooterLinks, build_markdown_footer
 from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
-from app.core.publishing.vk_publisher import VKPublisher
+from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
 from app.core.publishing.vk_token_pool import DEFAULT_DAILY_CAP, VkTokenPool
 from app.core.publishing.youtube_description import (
@@ -35,6 +35,7 @@ from app.core.publishing.youtube_description import (
     build_youtube_title,
 )
 from app.core.publishing.youtube_publisher import YouTubePublisher
+from app.core.seo.builder import build_video_seo_description
 from app.core.video.clip_cutter import cut_clips
 from app.core.video.film_prep import prepare_film
 from app.core.video.watermark import probe_dimensions
@@ -176,13 +177,9 @@ def run_daily_video_repost(
     local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
     try:
         body = "\n\n".join(part for part in (title, description) if part.strip())
-        text = _build_vk_publish_text(None, body, footer_links, False)
-        result = vk_publisher.publish(
-            group_id=int(channel.vk_destination),
-            text=text,
-            video_path=local_file,
-            video_title=title or None,
-            video_description=description or None,
+        result = _publish_film(
+            vk_publisher, channel, settings,
+            video_path=local_file, title=title, body=body, footer_links=footer_links,
         )
         if not result.success:
             logger.error("Видео-репост [%s]: публикация не удалась: %s", channel.name, result.error)
@@ -193,7 +190,9 @@ def run_daily_video_repost(
         # закрытым и завтрашний прогон возьмёт следующий фильм, а не этот же снова.
         if tg_video_publisher is not None and channel.tg_destination:
             tg_video_publisher.publish_video(
-                destination=channel.tg_destination, video_path=local_file, caption=body
+                destination=channel.tg_destination,
+                video_path=local_file,
+                caption=build_film_caption(body, footer_links),
             )
 
         if youtube_publisher is not None and settings.youtube_upload:
@@ -210,6 +209,96 @@ def run_daily_video_repost(
         )
     finally:
         local_file.unlink(missing_ok=True)  # диск VPS маленький — файл не храним
+
+
+TG_CAPTION_LIMIT = 1024
+"""Лимит подписи к видео в Telegram. Обрезаем ЗДЕСЬ, а не в публикаторе: там режется
+хвост, то есть ровно футер со ссылками — а он владельцу и нужен (ТЗ 2026-08-10)."""
+
+
+def build_film_caption(body: str, footer_links: FooterLinks | None) -> str:
+    """Подпись к фильму в TG: текст + ссылки на свой канал и свою VK-группу.
+
+    Раньше фильм уходил в Telegram голым текстом без футера — ссылки были только у
+    обычных постов. ТЗ 2026-08-10: «к фильмам в тг тоже это добавляй».
+
+    Markdown, а не HTML: Telethon разбирает подпись как markdown, HTML-теги уехали бы
+    в канал сырыми."""
+    footer = build_markdown_footer(footer_links) if footer_links else ""
+    if not footer:
+        return body[:TG_CAPTION_LIMIT]
+    room = TG_CAPTION_LIMIT - len(footer) - 2
+    trimmed = body.strip()[:max(room, 0)].rstrip()
+    return f"{trimmed}\n\n{footer}" if trimmed else footer
+
+
+def channel_seo_links(channel: Channel, settings: ChannelSettings) -> list[str]:
+    """Ссылки канала для «подвала» описания ролика. Пустые поля просто не дают строки."""
+    links = []
+    if settings.tg_footer_url:
+        links.append(f"📲 Telegram: {settings.tg_footer_url}")
+    if settings.vk_footer_url:
+        links.append(f"🔷 VK: {settings.vk_footer_url}")
+    elif channel.vk_destination:
+        links.append(f"🔷 VK: {build_vk_group_url(channel.vk_destination)}")
+    return links
+
+
+def build_video_description(
+    channel: Channel,
+    settings: ChannelSettings,
+    *,
+    title: str,
+    body: str,
+    footer_links: FooterLinks | None,
+) -> str:
+    """Описание ролика в каталоге сообщества.
+
+    SEO включён — большое поисковое описание (ТЗ 2026-08-10: ролик не публикуется
+    записью, его описание в ленте свёрнуто, значит место под ключи бесплатное).
+    Выключен — прежний текст поста, чтобы канал без SEO-профиля ничего не заметил."""
+    if not settings.seo_enabled:
+        return _build_vk_publish_text(None, body, footer_links, False)
+    return build_video_seo_description(
+        title=title,
+        body=body,
+        profile=settings.seo_profile(channel_seo_links(channel, settings)),
+    )
+
+
+def _publish_film(
+    vk_publisher: VKPublisher,
+    channel: Channel,
+    settings: ChannelSettings,
+    *,
+    video_path: Path,
+    title: str,
+    body: str,
+    footer_links: FooterLinks | None,
+) -> VKPublishResult:
+    """Фильм в сообщество: либо запись на стене с вложением, либо только раздел «Видео».
+
+    `video_as_post=False` — ТЗ владельца 2026-08-10 («пусть фильмы идут в видео»).
+    Стена под фильмы больше не занимается, но интервальный гейт публикаций
+    (`get_last_published_at`) двигается по-прежнему — иначе текстовый пост вышел бы
+    впритык за фильмом и порядок дня «фильм → клип → посты» рассыпался бы."""
+    description = build_video_description(
+        channel, settings, title=title, body=body, footer_links=footer_links
+    )
+    if settings.video_as_post:
+        return vk_publisher.publish(
+            group_id=int(channel.vk_destination),
+            text=_build_vk_publish_text(None, body, footer_links, False),
+            video_path=video_path,
+            video_title=title or None,
+            video_description=description or None,
+        )
+    return vk_publisher.publish_video_only(
+        group_id=int(channel.vk_destination),
+        video_path=video_path,
+        title=title or None,
+        description=description or None,
+    )
 
 
 def _prepare_local_file(local_file: Path, settings: ChannelSettings) -> Path:
@@ -343,14 +432,30 @@ def publish_due_clips(
         if publisher is None:
             logger.warning("Клип %d: publisher канала %s недоступен", clip.id, channel.name)
             continue
-        result = publisher.publish(
-            group_id=int(channel.vk_destination),
-            text=clip.text or "",
-            video_path=clip_path,
-            video_title=clip_path.stem,
-        )
+        settings = ChannelSettings.from_json(channel.settings_json)
+        if settings.video_as_post:
+            result = publisher.publish(
+                group_id=int(channel.vk_destination),
+                text=clip.text or "",
+                video_path=clip_path,
+                video_title=clip_path.stem,
+            )
+        else:
+            # ТЗ 2026-08-10: «клипы в клипы» — записи на стене не создаём, ролик уходит
+            # в раздел коротких видео сообщества со своим (большим) описанием.
+            result = publisher.publish_video_only(
+                group_id=int(channel.vk_destination),
+                video_path=clip_path,
+                title=_clip_title_from_path(clip_path),
+                description=build_video_description(
+                    channel, settings,
+                    title=_clip_title_from_path(clip_path),
+                    body=clip.text or "",
+                    footer_links=None,
+                ),
+                as_clip=True,
+            )
         if result.success:
-            settings = ChannelSettings.from_json(channel.settings_json)
             # YouTube Shorts — до удаления файла (клип грузится только раз, best-effort).
             if youtube_publisher is not None and settings.youtube_upload:
                 _upload_to_youtube(

@@ -33,7 +33,11 @@ from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
 from app.core.publishing.vk_publisher import POSTPONED_PREFIX, VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
 from app.core.publishing.weekly_repost import repost_best_post
-from app.core.video.daily_video_repost import publish_due_clips, run_daily_video_repost
+from app.core.video.daily_video_repost import (
+    build_video_description,
+    publish_due_clips,
+    run_daily_video_repost,
+)
 from app.core.scheduler import start_of_today_utc
 from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
@@ -239,6 +243,11 @@ async def _publish_channel_post(
 
     tg_ok = not tg_pending
     vk_ok = not vk_pending
+    # Глобальный include_hashtags: false прячет ПОСЛЕДНЮЮ строку текста, если она из
+    # тегов (`split_hashtags`) — он задумывался против самодеятельности LLM. Но у канала
+    # с SEO эта строка и есть наш продуманный набор тегов, ради которого всё делалось:
+    # без этой развилки они молча не доезжали бы ни в VK, ни в TG.
+    include_hashtags = config.rewrite.include_hashtags or settings.seo_enabled
 
     if tg_pending:
         try:
@@ -247,7 +256,7 @@ async def _publish_channel_post(
                 footer_links=channel_footer, max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval, max_interval_minutes=max_interval,
                 quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
-                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
+                channel_id=channel.id, include_hashtags=include_hashtags,
             )
             tg_ok = tg_result.success
         except Exception:
@@ -261,7 +270,9 @@ async def _publish_channel_post(
                 footer_links=channel_footer, max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval, max_interval_minutes=max_interval,
                 quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
-                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
+                channel_id=channel.id, include_hashtags=include_hashtags,
+                video_as_post=settings.video_as_post,
+                video_description=_post_video_description(repo, channel, settings, post_id),
             )
             vk_ok = result.success
             _record_vk_breaker(breaker, vk_token_env, result)
@@ -281,6 +292,26 @@ async def _publish_channel_post(
             "Пост %d (канал %s): пара не закрыта (tg_ok=%s, vk_ok=%s) — вернём в очередь для дозачистки",
             post_id, channel.name, tg_ok, vk_ok,
         )
+
+
+def _post_video_description(
+    repo: Repository, channel: Channel, settings: ChannelSettings, post_id: int
+) -> str | None:
+    """Большое SEO-описание для ролика, публикуемого без записи на стене.
+
+    None → публикатор возьмёт обычный текст поста. Считаем только когда это реально
+    нужно (SEO включён И ролик не идёт постом), чтобы не трогать БД лишний раз."""
+    if settings.video_as_post or not settings.seo_enabled:
+        return None
+    processed = repo.get_processed_post(post_id)
+    if processed is None:
+        return None
+    return build_video_description(
+        channel, settings,
+        title=processed.headline or "",
+        body=processed.rewritten_text or "",
+        footer_links=None,
+    )
 
 
 def _record_vk_breaker(

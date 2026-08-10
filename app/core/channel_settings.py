@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from app.core.seo.builder import SeoProfile
+
 
 @dataclass(frozen=True)
 class ChannelSettings:
@@ -182,6 +184,57 @@ class ChannelSettings:
     """Ссылка на свою VK-группу для футера TG-поста («Больше контента в нашем VK»).
     None → в футере только TG-ссылка, как раньше."""
 
+    video_as_post: bool = True
+    """Публиковать ли ролик записью на стене.
+
+    False (ТЗ владельца 2026-08-10) → фильм уходит в раздел «Видео», клип — в «Клипы»,
+    записи на стене не создаётся. Стена остаётся под текстовые посты. True → прежнее
+    поведение: ролик + запись с вложением."""
+
+    shuffle_images: bool = False
+    """Перемешивать порядок фото поста случайно (ТЗ 2026-08-10). Источник отдаёт кадры
+    в одном и том же порядке — на дистанции лента выглядит однообразно."""
+
+    max_images_per_post: int | None = None
+    """Потолок числа фото в посте. Кино → 1 («будет 1 фото с текстом»). None → как было
+    (все свои фото до MAX_SOURCE_PHOTOS)."""
+
+    promo_banner_mode: str = "drop"
+    """Что делать с чужой ярко-жёлтой промо-плашкой на кадре:
+    "drop" — кадр не берём совсем (прежнее поведение);
+    "restyle" — плашку переносим вниз кадра и перекрашиваем (фон и буквы), кадр
+    остаётся в посте. Не удалось переоформить — молча падаем в "drop"."""
+
+    seo_enabled: bool = False
+    """Собирать хэштеги/поисковые описания для публикаций канала."""
+
+    seo_hashtag_group: str = ""
+    """Короткое имя сообщества VK для тега `#ключ@имя` (напр. «kinobestfilmss»).
+    Пусто → теги без привязки к сообществу."""
+
+    seo_base_tags: list[str] = field(default_factory=list)
+    """Постоянные теги канала — идут первыми в каждой публикации."""
+
+    seo_search_phrases: list[str] = field(default_factory=list)
+    """Шаблоны поисковых фраз с `{q}` для описаний роликов («{q} смотреть онлайн»)."""
+
+    seo_post_tag_limit: int = 5
+    seo_video_tag_limit: int = 20
+    """Сколько тегов вешать на запись стены и на ролик. У ролика описание свёрнуто,
+    поэтому там теги можно не экономить."""
+
+    def seo_profile(self, links: list[str] | None = None) -> "SeoProfile":
+        """Настройки канала → профиль SEO-сборщика. Ссылки приходят снаружи: футер
+        собирается из tg/vk-полей канала и знать про них SEO-слою незачем."""
+        return SeoProfile(
+            hashtag_group=self.seo_hashtag_group,
+            base_tags=list(self.seo_base_tags),
+            search_phrases=list(self.seo_search_phrases),
+            post_tag_limit=self.seo_post_tag_limit,
+            video_tag_limit=self.seo_video_tag_limit,
+            links=list(links or []),
+        )
+
     @classmethod
     def from_json(cls, raw: str | None) -> "ChannelSettings":
         if not raw:
@@ -226,6 +279,16 @@ class ChannelSettings:
             youtube_upload=data.get("youtube_upload", False),
             stock_fallback=data.get("stock_fallback", True),
             vk_footer_url=data.get("vk_footer_url"),
+            video_as_post=data.get("video_as_post", True),
+            shuffle_images=data.get("shuffle_images", False),
+            max_images_per_post=data.get("max_images_per_post"),
+            promo_banner_mode=data.get("promo_banner_mode", "drop"),
+            seo_enabled=data.get("seo_enabled", False),
+            seo_hashtag_group=data.get("seo_hashtag_group", ""),
+            seo_base_tags=data.get("seo_base_tags", []),
+            seo_search_phrases=data.get("seo_search_phrases", []),
+            seo_post_tag_limit=data.get("seo_post_tag_limit", 5),
+            seo_video_tag_limit=data.get("seo_video_tag_limit", 20),
         )
 
     def to_json(self) -> str:
@@ -304,4 +367,24 @@ class ChannelSettings:
             payload["stock_fallback"] = False
         if self.vk_footer_url is not None:
             payload["vk_footer_url"] = self.vk_footer_url
+        if not self.video_as_post:
+            payload["video_as_post"] = False
+        if self.shuffle_images:
+            payload["shuffle_images"] = True
+        if self.max_images_per_post is not None:
+            payload["max_images_per_post"] = self.max_images_per_post
+        if self.promo_banner_mode != "drop":
+            payload["promo_banner_mode"] = self.promo_banner_mode
+        if self.seo_enabled:
+            payload["seo_enabled"] = True
+        if self.seo_hashtag_group:
+            payload["seo_hashtag_group"] = self.seo_hashtag_group
+        if self.seo_base_tags:
+            payload["seo_base_tags"] = self.seo_base_tags
+        if self.seo_search_phrases:
+            payload["seo_search_phrases"] = self.seo_search_phrases
+        if self.seo_post_tag_limit != 5:
+            payload["seo_post_tag_limit"] = self.seo_post_tag_limit
+        if self.seo_video_tag_limit != 20:
+            payload["seo_video_tag_limit"] = self.seo_video_tag_limit
         return json.dumps(payload, ensure_ascii=False)

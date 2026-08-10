@@ -48,6 +48,10 @@ class VKPublishResult:
     post_id: int | None
     error: str | None
     error_code: int | None = None
+    attachment: str | None = None
+    """«videoOWNER_ID» загруженной видеозаписи. Заполняется публикацией БЕЗ записи на
+    стене (`publish_video_only`) — там post_id нет, а идентификатор видео нужен и для
+    логов, и чтобы при желании прикрепить его позже."""
 
 
 class VKPublisher:
@@ -212,6 +216,83 @@ class VKPublisher:
             error_code=getattr(last_error, "code", None),
         )
 
+    def publish_video_only(
+        self,
+        *,
+        group_id: int,
+        video_path: Path,
+        title: str | None = None,
+        description: str | None = None,
+        as_clip: bool = False,
+    ) -> VKPublishResult:
+        """Залить ролик в раздел сообщества, НЕ создавая запись на стене.
+
+        ТЗ владельца 2026-08-10: «фильмы и клипы можешь не публиковать как посты, пусть
+        фильмы идут в видео, а клипы в клипы». Стена остаётся под текстовые посты, а
+        ролики живут в каталоге сообщества — там у них своё SEO-поле (название +
+        описание), которое поиск индексирует отдельно от записи.
+
+        as_clip=True — попытаться положить ролик в раздел «Клипы» (`shortVideo.create`).
+        Метода нет в публичной схеме VK API, поэтому любая его осечка — не ошибка
+        публикации: молча уходим на обычный `video.save`, где вертикальный короткий
+        ролик всё равно попадает в клипы автоматически."""
+        self._resolve_upload()
+        if self._require_media and not self._has_upload_token():
+            error = "личный токен для загрузки медиа недоступен (все аккаунты пула заняты)"
+            logger.warning("VK: заливка ролика отложена — %s", error)
+            return VKPublishResult(
+                success=False, post_id=None, error=f"{POSTPONED_PREFIX}{error}"
+            )
+
+        if self._cooldown is not None:
+            self._cooldown.wait(self._upload_key)
+
+        try:
+            if as_clip:
+                attachment = self._upload_clip(group_id, video_path, description=description)
+            else:
+                attachment = self._upload_video(
+                    group_id, video_path, title=title, description=description
+                )
+        except Exception as error:
+            logger.error("VK: не удалось залить ролик %s: %s", video_path, error)
+            return VKPublishResult(
+                success=False,
+                post_id=None,
+                error=str(error),
+                error_code=getattr(error, "code", None),
+            )
+
+        logger.info("VK: ролик %s залит в сообщество как %s", video_path.name, attachment)
+        return VKPublishResult(success=True, post_id=None, error=None, attachment=attachment)
+
+    def _upload_clip(
+        self, group_id: int, video_path: Path, *, description: str | None = None
+    ) -> str:
+        """Раздел «Клипы» через `shortVideo.create`; не вышло — обычная видеозапись.
+
+        `shortVideo.*` в публичной схеме VK (VKCOM/vk-api-schema) отсутствует — метод
+        закрытый, его поведение может измениться без предупреждения. Поэтому здесь ровно
+        один осторожный вызов и безусловный фолбэк: клип, уехавший в раздел «Видео»,
+        для канала не потеря, а исключение наружу — потеря."""
+        self._wait_upload()
+        try:
+            created = self._upload_api.shortVideo.create(
+                group_id=abs(group_id),
+                description=description or "",
+                file_size=video_path.stat().st_size,
+            )
+            _post_video_file(created["upload_url"], video_path, field_name="file")
+            return f"video{created['owner_id']}_{created['video_id']}"
+        except Exception as error:
+            logger.warning(
+                "VK: раздел «Клипы» недоступен (%s) — гружу %s обычной видеозаписью",
+                error, video_path.name,
+            )
+        return self._upload_video(
+            group_id, video_path, title=video_path.stem, description=description
+        )
+
     def _build_attachments(
         self,
         group_id: int,
@@ -318,7 +399,7 @@ class VKPublisher:
         return f"video{save_result['owner_id']}_{save_result['video_id']}"
 
 
-def _post_video_file(upload_url: str, video_path: Path) -> None:
+def _post_video_file(upload_url: str, video_path: Path, field_name: str = "video_file") -> None:
     """Загрузить файл видео ПОТОКОМ, не читая его целиком в память.
 
     Критично для VPS (2026-07-28): `requests.post(..., files={...})` строит multipart-тело
@@ -328,7 +409,7 @@ def _post_video_file(upload_url: str, video_path: Path) -> None:
     отдаёт тело генератором, потребление памяти не зависит от размера файла.
     """
     with open(video_path, "rb") as file:
-        encoder = MultipartEncoder(fields={"video_file": (video_path.name, file, "video/mp4")})
+        encoder = MultipartEncoder(fields={field_name: (video_path.name, file, "video/mp4")})
         response = requests.post(
             upload_url,
             data=encoder,

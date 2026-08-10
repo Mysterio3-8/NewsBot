@@ -43,7 +43,10 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(sc_module, "make_engine", lambda: real_make_engine(tmp_path / "test.db"))
     monkeypatch.setattr(sc_module, "load_dotenv", lambda: None)
     monkeypatch.setattr(sc_module, "setup_logging", lambda config: None)
-    monkeypatch.setattr(sc_module, "LLMClient", lambda cfg: object())
+    # **kwargs, а не голый cfg: боевой ServiceController передаёт ещё repo= (правки
+    # шаблонов лежат в БД и разрешаются через него, чекпоинт 2026-08-07). Заглушка
+    # без kwargs роняла запуск сервиса прямо в потоке, и тест падал на ровном месте.
+    monkeypatch.setattr(sc_module, "LLMClient", lambda cfg, **kwargs: object())
 
     ctrl = ServiceController()
     monkeypatch.setattr(ctrl, "_load_config", lambda: _FakeConfig())

@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +35,7 @@ from app.core.images.providers.source_provider import SourceImageProvider
 from app.core.images.resolver import resolve_to_local_file
 from app.core.images.watermark import Watermarker, WatermarkError, crop_out_watermark_regions
 from app.core.images.collage_splitter import split_vertical_collage
-from app.core.images.promo_banner import has_promo_banner
+from app.core.images.promo_banner import has_promo_banner, restyle_promo_banner
 from app.core.images.watermark_detector import image_has_heavy_text, locate_foreign_watermark
 from app.core.llm.classifier import ClassificationError, classify_post
 from app.core.llm.client import LLMClient, LLMUnavailableError
@@ -43,6 +44,8 @@ from app.core.llm.image_query_generator import generate_image_query
 from app.core.llm.movie_query_generator import generate_movie_search_query
 from app.core.llm.rewriter import rewrite_post
 from app.core.monitoring.models import FetchedPost
+from app.core.publishing.text_formatting import split_hashtags
+from app.core.seo.builder import SeoProfile, build_post_seo_tail
 from app.core.video.watermark import VideoWatermarker, VideoWatermarkError
 from app.db.models import ProcessedPost, RejectedPost, Source
 from app.db.repository import Repository
@@ -83,6 +86,11 @@ def process_fetched_post(
     split_collage: bool = False,
     simple_media: bool = False,
     stock_fallback: bool = True,
+    promo_banner_mode: str = "drop",
+    shuffle_images: bool = False,
+    max_images_per_post: int | None = None,
+    seo_profile: SeoProfile | None = None,
+    rng: random.Random | None = None,
 ) -> ProcessingOutcome | None:
     """None означает "пост уже видели раньше — пропускаем без записи в БД".
     filters_enabled=False (кино/мемы) — «лить всё»: пропускаем LLM-гейт новостей и
@@ -192,6 +200,9 @@ def process_fetched_post(
     )
     headline = headlines[0] if headlines else None
 
+    if seo_profile is not None:
+        rewritten_text = _append_seo_tail(rewritten_text, seo_profile)
+
     # Расклейка склеенных кадров (кино): 2 кадра в одном фото → 2 отдельных, ДО
     # фильтрации/вотермарка, чтобы плашка и лого обрабатывались покадрово.
     media_urls = post.media_urls
@@ -202,6 +213,12 @@ def process_fetched_post(
                 "[пост %s] коллажи расклеены: %d фото → %d кадров",
                 post.external_id, len(post.media_urls), len(media_urls),
             )
+
+    # Перемешиваем ДО отбора: источник отдаёт кадры всегда в одном порядке, и при лимите
+    # в одно фото на пост канал раз за разом получал бы один и тот же кадр коллажа.
+    if shuffle_images and len(media_urls) > 1:
+        media_urls = list(media_urls)
+        (rng or random.Random()).shuffle(media_urls)
 
     image_paths = _prepare_images(
         llm_client,
@@ -217,6 +234,8 @@ def process_fetched_post(
         image_search_providers=image_search_providers,
         simple_media=simple_media,
         stock_fallback=stock_fallback,
+        promo_banner_mode=promo_banner_mode,
+        max_images_per_post=max_images_per_post,
     )
     video_path = _prepare_video(
         raw_post_id=raw_post.id,
@@ -265,6 +284,8 @@ def _prepare_images(
     image_search_providers: list[str] | None = None,
     simple_media: bool = False,
     stock_fallback: bool = True,
+    promo_banner_mode: str = "drop",
+    max_images_per_post: int | None = None,
 ) -> list[str] | None:
     """Своё фото поста (SourceImageProvider) в приоритете — если его нет (или все
     отфильтрованы как чужой водяной знак, см. _filter_watermarked_photos), для
@@ -316,7 +337,7 @@ def _prepare_images(
             llm_client, rewritten_text, raw_post_id, images_config, image_providers
         )
 
-    own_photos = _filter_watermarked_photos(llm_client, post_media_urls)
+    own_photos = _filter_watermarked_photos(llm_client, post_media_urls, promo_banner_mode)
     # Подмена на сток выключена (ТЗ 2026-07-28: «оригинал из источника, без замены»).
     # Раньше фото, у которого чужой знак не убирался обрезкой, выбрасывалось и пост
     # получал сток-картинку «по смыслу текста» — она к фильму отношения не имела, отсюда
@@ -342,6 +363,10 @@ def _prepare_images(
     # (лимит медиагруппы TG/VK). Сток-фолбэк (нет своих фото) — только count_per_post
     # (по умолчанию 1, "бери только одно, как в оригинале").
     count = min(len(own_photos), MAX_SOURCE_PHOTOS) if own_photos else images_config.count_per_post
+    if max_images_per_post is not None:
+        # ТЗ 2026-08-10 для Кино: «будет 1 фото с текстом». Потолок канала перекрывает и
+        # «все свои фото», и сток-фолбэк — иначе пост всё равно выйдет медиагруппой.
+        count = min(count, max_images_per_post)
 
     try:
         watermarker = Watermarker(
@@ -554,7 +579,41 @@ def _safe_movie_query(llm_client: LLMClient, rewritten_text: str) -> str:
         return ""
 
 
-def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> list[str]:
+def _append_seo_tail(text: str, profile: SeoProfile) -> str:
+    """Строка хэштегов в конец поста. Пустой хвост ничего не меняет — канал без
+    настроенного SEO-профиля получает ровно прежний текст.
+
+    Хэштеги, которые дописала LLM, сначала СНИМАЮТСЯ: публикатор берёт под теги ровно
+    одну последнюю строку (`split_hashtags`), и если оставить обе, то LLM-строка
+    осталась бы висеть посреди текста, а наша — единственной «настоящей»."""
+    body, _ = split_hashtags(text)
+    tail = build_post_seo_tail(body, profile)
+    return f"{body}\n\n{tail}" if tail else text
+
+
+def _handle_promo_banner(item: str, mode: str) -> str | None:
+    """Кадр с чужой жёлтой плашкой: None — не берём, иначе путь к пригодному кадру.
+
+    В режиме restyle плашка переносится к противоположному краю и перекрашивается
+    (ТЗ 2026-08-10). Не вышло — падаем в прежнее поведение и кадр выбрасываем: владелец
+    формулировал это прямо («если так тяжело сделать, то лучше вообще этот кадр не
+    брать»)."""
+    if not has_promo_banner(item):
+        return item
+    if mode == "restyle":
+        restyled = restyle_promo_banner(item)
+        if restyled is not None:
+            logger.info("Фото %s: промо-плашка перенесена и перекрашена → %s", item, restyled)
+            return str(restyled)
+        logger.info("Фото %s: плашку переоформить не удалось — кадр не берём", item)
+        return None
+    logger.info("Фото %s: промо-плашка — кадр не берём", item)
+    return None
+
+
+def _filter_watermarked_photos(
+    llm_client: LLMClient, media_urls: list[str], promo_banner_mode: str = "drop"
+) -> list[str]:
     """Держится за ОРИГИНАЛЬНОЕ фото поста, а не подменяет его сток-фото, когда
     это возможно (запрос пользователя 2026-07-05: "находить оригинальное фото,
     только без чужого монтажа и вотермарков"). Если чужой знак — у верхнего и/или
@@ -571,12 +630,10 @@ def _filter_watermarked_photos(llm_client: LLMClient, media_urls: list[str]) -> 
             continue
 
         # Ярко-жёлтая промо-плашка ("ищи в комментариях") — детектим по цвету
-        # детерминированно (без vision). Запрос пользователя 2026-07-18: кадр с плашкой
-        # (целой или обрезанным куском после расклейки коллажа) НЕ брать вообще —
-        # раньше пытались спасти обрезкой до «чистой половины», и кусок плашки иногда
-        # оставался в итоговой картинке.
-        if has_promo_banner(item):
-            logger.info("Фото %s: промо-плашка — кадр не берём", item)
+        # детерминированно (без vision). Режим канала решает, выбросить кадр целиком
+        # (drop, поведение с 2026-07-18) или переоформить плашку (restyle, ТЗ 2026-08-10).
+        item = _handle_promo_banner(item, promo_banner_mode)
+        if item is None:
             continue
 
         regions = locate_foreign_watermark(llm_client, Path(item))
