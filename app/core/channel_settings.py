@@ -218,6 +218,10 @@ class ChannelSettings:
     seo_search_phrases: list[str] = field(default_factory=list)
     """Шаблоны поисковых фраз с `{q}` для описаний роликов («{q} смотреть онлайн»)."""
 
+    seo_channel_phrases: list[str] = field(default_factory=list)
+    """Постоянные запросы сообщества («фильмы смотреть онлайн», «новости сегодня») —
+    идут в описании КАЖДОГО ролика независимо от текста поста (ТЗ 2026-08-11)."""
+
     seo_post_tag_limit: int = 5
     seo_video_tag_limit: int = 20
     """Сколько тегов вешать на запись стены и на ролик. У ролика описание свёрнуто,
@@ -230,6 +234,7 @@ class ChannelSettings:
             hashtag_group=self.seo_hashtag_group,
             base_tags=list(self.seo_base_tags),
             search_phrases=list(self.seo_search_phrases),
+            channel_phrases=list(self.seo_channel_phrases),
             post_tag_limit=self.seo_post_tag_limit,
             video_tag_limit=self.seo_video_tag_limit,
             links=list(links or []),
@@ -287,6 +292,7 @@ class ChannelSettings:
             seo_hashtag_group=data.get("seo_hashtag_group", ""),
             seo_base_tags=data.get("seo_base_tags", []),
             seo_search_phrases=data.get("seo_search_phrases", []),
+            seo_channel_phrases=data.get("seo_channel_phrases", []),
             seo_post_tag_limit=data.get("seo_post_tag_limit", 5),
             seo_video_tag_limit=data.get("seo_video_tag_limit", 20),
         )
@@ -383,6 +389,8 @@ class ChannelSettings:
             payload["seo_base_tags"] = self.seo_base_tags
         if self.seo_search_phrases:
             payload["seo_search_phrases"] = self.seo_search_phrases
+        if self.seo_channel_phrases:
+            payload["seo_channel_phrases"] = self.seo_channel_phrases
         if self.seo_post_tag_limit != 5:
             payload["seo_post_tag_limit"] = self.seo_post_tag_limit
         if self.seo_video_tag_limit != 20:

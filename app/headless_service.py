@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import random
 
@@ -43,6 +44,7 @@ from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository
 from app.paths import OUTPUT_DIR
 from app.factories import (
+    build_channel_token_pool,
     build_image_providers,
     build_telegram_fetcher,
     build_telegram_publisher_for_channel,
@@ -224,6 +226,19 @@ async def _publish_channel_post(
         )
         return
 
+    # ЖЁСТКАЯ ПАРА, вторая половина: занятый пул личных токенов — тоже «VK недоступен».
+    # Жалоба владельца 2026-08-11: «в тг больше постов про кино, а в вк меньше, и за эту
+    # ночь в вк не было публикаций». Механика ровно эта: пост с медиа при занятом
+    # аккаунте VK откладывает (require_media), TG к тому моменту уже опубликован — и
+    # каждая такая отложка уводила TG на пост вперёд. Breaker тут не срабатывает: занятый
+    # пул — не ошибка VK, а штатное состояние, пока рабочий аккаунт один.
+    if tg_pending and vk_pending and _vk_upload_unavailable(repo, channel, settings, post_id):
+        logger.info(
+            "Пост %d (канал %s) отложен: личный токен VK занят — TG вперёд не пускаем",
+            post_id, channel.name,
+        )
+        return
+
     # Антиспам-гейт нового релиза — ОДИН раз на пост (интервал/лимит/ночная пауза), чтобы
     # решение «публиковать сейчас» было общим для обеих сетей и они не расходились.
     if not already_published:
@@ -247,7 +262,13 @@ async def _publish_channel_post(
     # тегов (`split_hashtags`) — он задумывался против самодеятельности LLM. Но у канала
     # с SEO эта строка и есть наш продуманный набор тегов, ради которого всё делалось:
     # без этой развилки они молча не доезжали бы ни в VK, ни в TG.
-    include_hashtags = config.rewrite.include_hashtags or settings.seo_enabled
+    #
+    # ТЗ владельца 2026-08-11: «а в тг, сео не надо, только в вк». И это не каприз:
+    # поиск Telegram не индексирует ТЕКСТ постов вообще (только имя и описание канала),
+    # поэтому строка тегов там не даёт ничего, а место в подписи к фото занимает —
+    # лимит 1024 знака и так режет длинные посты. В VK та же строка работает витриной
+    # сообщества (`#ключ@группа`). Поэтому теги разведены по сетям, а не по каналу.
+    seo_hashtags = config.rewrite.include_hashtags or settings.seo_enabled
 
     if tg_pending:
         try:
@@ -256,7 +277,7 @@ async def _publish_channel_post(
                 footer_links=channel_footer, max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval, max_interval_minutes=max_interval,
                 quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
-                channel_id=channel.id, include_hashtags=include_hashtags,
+                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
             )
             tg_ok = tg_result.success
         except Exception:
@@ -270,7 +291,7 @@ async def _publish_channel_post(
                 footer_links=channel_footer, max_posts_per_day=max_per_day,
                 min_interval_minutes=min_interval, max_interval_minutes=max_interval,
                 quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
-                channel_id=channel.id, include_hashtags=include_hashtags,
+                channel_id=channel.id, include_hashtags=seo_hashtags,
                 video_as_post=settings.video_as_post,
                 video_description=_post_video_description(repo, channel, settings, post_id),
             )
@@ -292,6 +313,36 @@ async def _publish_channel_post(
             "Пост %d (канал %s): пара не закрыта (tg_ok=%s, vk_ok=%s) — вернём в очередь для дозачистки",
             post_id, channel.name, tg_ok, vk_ok,
         )
+
+
+def _vk_upload_unavailable(
+    repo: Repository, channel: Channel, settings: ChannelSettings, post_id: int
+) -> bool:
+    """Уйдёт ли пост в VK в отложенные из-за занятого пула личных токенов.
+
+    Проверка нужна ТОЛЬКО чтобы не выпустить TG в одиночку, поэтому она:
+
+    * дешёвая — читает счётчики пула, слот не занимает (`has_free_account`);
+    * применяется лишь к постам С МЕДИА: пост без вложений публикуется групповым
+      токеном и пул не трогает вовсе (ленивая выдача, фикс 2026-08-04);
+    * не абсолютная — между проверкой и загрузкой слот может уйти другому софту. Это
+      осознанно: гонка стоит одного разошедшегося поста, а её закрытие — блокировки
+      общего для всех софтов пула.
+
+    Канал без `require_media` сюда не попадает: там пост с медиа штатно выходит текстом,
+    то есть VK не отстанет и разводить сети не от чего."""
+    if not settings.require_media:
+        return False
+    pool = build_channel_token_pool(channel)
+    if pool is None:
+        return False
+    processed = repo.get_processed_post(post_id)
+    if processed is None:
+        return False
+    has_media = bool(processed.video_path) or bool(
+        processed.image_paths and json.loads(processed.image_paths)
+    )
+    return has_media and not pool.has_free_account()
 
 
 def _post_video_description(
