@@ -17,7 +17,9 @@ SERVICE="news-rewriter-bot.service"
 # срабатывал (обнаружено 2026-08-11). Передаём конфиг явно, если он существует.
 SSH=(ssh)
 if [ -f "$HOME/.ssh/config" ]; then
-  SSH=(ssh -F "$HOME/.ssh/config")
+  # known_hosts указываем тем же явным путём: иначе ssh ищет его по ненайденному
+  # домашнему каталогу, не находит запись сервера и падает «Host key verification failed».
+  SSH=(ssh -F "$HOME/.ssh/config" -o "UserKnownHostsFile=$HOME/.ssh/known_hosts")
 fi
 ssh() { command "${SSH[@]}" "$@"; }
 
