@@ -21,7 +21,13 @@ from app.config.loader import AppConfig
 from app.core.channel_settings import ChannelSettings
 from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
-from app.core.maintenance.cleanup import cleanup_output
+from app.core.maintenance.alerts import check_disk_and_alert
+from app.core.maintenance.cleanup import (
+    DISK_WARN_PERCENT,
+    cleanup_output,
+    disk_status,
+    emergency_cleanup,
+)
 from app.core.monitoring.telegram_fetcher import TelegramFetcher
 from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.circuit_breaker import CircuitBreaker
@@ -538,13 +544,29 @@ def build_daily_video_job(
     return daily_video_job
 
 
-def build_cleanup_job():
+def build_cleanup_job(repo: Repository):
     """Уборка временных медиа раз в час. Без неё диск VPS забился до 94% и уронил
     публикацию (2026-07-28): скачанные исходники постов не удалялись никогда, а фильмы
-    оставались от процессов, убитых OOM (их `finally` при SIGKILL не выполняется)."""
+    оставались от процессов, убитых OOM (их `finally` при SIGKILL не выполняется).
+
+    Три ступени, и каждая нужна:
+    1. уборка по срокам хранения — обычный режим;
+    2. аварийная уборка по НЕХВАТКЕ МЕСТА — потому что фильм на 650 МБ приезжает за
+       минуты, а трогать его «рано» ещё шесть часов: диск успевает забиться файлами,
+       которые первая ступень удалять не имеет права;
+    3. тревога владельцу — если после обеих уборок места всё равно мало, значит его ест
+       не наш `output/`, и починить это можно только руками."""
+
+    def sweep() -> None:
+        result = cleanup_output(OUTPUT_DIR)
+        emergency = emergency_cleanup(OUTPUT_DIR)
+        status = disk_status(OUTPUT_DIR)
+        if status.used_percent >= DISK_WARN_PERCENT:
+            logger.warning("Диск: %s", status)
+        check_disk_and_alert(repo, status, result.freed_mb + emergency.freed_mb)
 
     async def cleanup_job() -> None:
-        await asyncio.to_thread(cleanup_output, OUTPUT_DIR)
+        await asyncio.to_thread(sweep)
 
     return cleanup_job
 
@@ -644,7 +666,7 @@ async def run_forever(
     # Уборка диска — каждый час, первый прогон сразу при старте (диск мог забиться,
     # пока сервис лежал).
     scheduler.add_job(
-        build_cleanup_job(),
+        build_cleanup_job(repo),
         IntervalTrigger(hours=1),
         next_run_time=datetime.datetime.now(),
     )

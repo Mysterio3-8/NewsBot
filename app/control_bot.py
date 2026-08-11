@@ -26,7 +26,13 @@ from app.config.loader import (
     update_schedule_config,
 )
 from app.core.channel_settings import ChannelSettings
-from app.core.maintenance.cleanup import cleanup_output, format_disk_report
+from app.core.maintenance.cleanup import (
+    DISK_WARN_PERCENT,
+    cleanup_output,
+    disk_status,
+    emergency_cleanup,
+    format_disk_report,
+)
 from app.core.manual_post import MAX_BUTTONS, PostButton, parse_button_input
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
@@ -643,14 +649,24 @@ def reset_prompt(repo: Repository, name: str) -> str:
 
 
 def render_disk() -> str:
-    """Сводка по временным файлам + ручная уборка. Добавлено после инцидента
-    2026-07-28: диск дошёл до 94% и публикация встала, а увидеть это можно было
-    только по ssh."""
+    """Место на диске + сводка по временным файлам + ручная уборка. Добавлено после
+    инцидента 2026-07-28: диск дошёл до 94% и публикация встала, а увидеть это можно
+    было только по ssh.
+
+    Занятость РАЗДЕЛА идёт первой строкой: временные файлы — лишь часть картины, а
+    останавливает публикации именно забитый раздел, чем бы он ни был забит. Когда
+    2026-08-11 сервер перестал пускать по SSH, эта строка была бы единственным
+    способом узнать, в диске ли дело."""
     freed = cleanup_output(OUTPUT_DIR)
-    report = format_disk_report(OUTPUT_DIR)
+    emergency = emergency_cleanup(OUTPUT_DIR)
+    status = disk_status(OUTPUT_DIR)
+    mark = "🔴" if status.used_percent >= DISK_WARN_PERCENT else "🟢"
+    total_freed = freed.freed_mb + emergency.freed_mb
     return (
-        f"💾 Временные файлы:\n{report}\n\n"
-        f"Уборка: удалено {freed.removed_files}, освобождено {freed.freed_mb:.0f} МБ"
+        f"{mark} Диск: {status}\n\n"
+        f"💾 Временные файлы:\n{format_disk_report(OUTPUT_DIR)}\n\n"
+        f"Уборка: удалено {freed.removed_files + emergency.removed_files}, "
+        f"освобождено {total_freed:.0f} МБ"
     )
 
 

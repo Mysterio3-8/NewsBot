@@ -34,6 +34,12 @@ from app.core.publishing.youtube_description import (
     build_youtube_description,
     build_youtube_title,
 )
+from app.core.maintenance.cleanup import (
+    FILM_REQUIRED_FREE_MB,
+    disk_status,
+    emergency_cleanup,
+    has_free_space,
+)
 from app.core.publishing.youtube_publisher import YouTubePublisher
 from app.core.seo.builder import build_video_seo_description
 from app.core.video.clip_cutter import cut_clips
@@ -162,6 +168,19 @@ def run_daily_video_repost(
         logger.info(
             "Видео-репост [%s]: личный токен занят — фильм не трогаем, вернёмся позже",
             channel.name,
+        )
+        return
+
+    # Место проверяется ДО отметки в БД и до скачивания. Фильм — самый прожорливый шаг
+    # всего сервера (500–650 МБ плюс нарезка клипов), и качать его в упор значит получить
+    # недокачанный файл, забитый диск и вставшие вместе с ним ВСЕ четыре софта: медиа в
+    # VK грузится через диск. Аварийная уборка сначала пробует освободить место сама.
+    if not has_free_space(DAILY_VIDEO_DIR, FILM_REQUIRED_FREE_MB):
+        emergency_cleanup(OUTPUT_DIR)
+    if not has_free_space(DAILY_VIDEO_DIR, FILM_REQUIRED_FREE_MB):
+        logger.error(
+            "Видео-репост [%s]: мало места на диске (%s) — фильм не качаем",
+            channel.name, disk_status(DAILY_VIDEO_DIR),
         )
         return
 

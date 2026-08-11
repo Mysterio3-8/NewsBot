@@ -14,11 +14,30 @@ from __future__ import annotations
 
 import datetime
 import logging
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger("app")
+
+DISK_WARN_PERCENT = 85
+"""Порог, после которого владельцу уходит предупреждение.
+
+Между 85% и «всё встало» остаётся примерно один фильм — то есть время среагировать."""
+
+DISK_CRITICAL_PERCENT = 92
+"""Порог аварийной уборки: чистим невзирая на сроки хранения.
+
+Уборка по возрасту одна диск не спасает. Фильм весит 500–650 МБ и качается за минуты,
+а порог `daily_video` — 6 часов: диск успевает забиться файлами, которые уборке ещё
+«рано» трогать. Ровно так он и дошёл до 94% в июле."""
+
+FILM_REQUIRED_FREE_MB = 2500
+"""Сколько места требовать ПЕРЕД скачиванием фильма.
+
+Фильм 650 МБ + нарезка клипов + запас на временные файлы ffmpeg. Скачивать в упор —
+это гарантированно недокачанный файл и мусор, который потом ещё и убирать."""
 
 # Каталоги временных медиа и срок жизни в часах. Скачанные исходники постов живут
 # сутки (пост публикуется в тот же день), фильмы — 6 часов (репост идёт сразу после
@@ -95,6 +114,107 @@ def cleanup_output(output_dir: Path, *, now: float | None = None) -> CleanupResu
             result.removed_files, result.freed_mb,
         )
     return result
+
+
+@dataclass(frozen=True)
+class DiskStatus:
+    """Состояние раздела, на котором лежат временные файлы."""
+
+    total_bytes: int
+    free_bytes: int
+
+    @property
+    def used_percent(self) -> float:
+        if self.total_bytes <= 0:
+            return 0.0
+        return (self.total_bytes - self.free_bytes) / self.total_bytes * 100
+
+    @property
+    def free_mb(self) -> float:
+        return self.free_bytes / (1024 * 1024)
+
+    def __str__(self) -> str:
+        return f"{self.used_percent:.0f}% занято, свободно {self.free_mb:.0f} МБ"
+
+
+def disk_status(path: Path) -> DiskStatus:
+    """Сколько места на разделе. Путь недоступен → «всё свободно».
+
+    Fail-open осознанно: эта функция стоит гейтом перед скачиванием фильма, и ошибка
+    статистики не повод останавливать публикации — реальную нехватку места поймает
+    сама запись файла."""
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError as error:
+        logger.warning("Не удалось прочитать статистику диска %s: %s", path, error)
+        return DiskStatus(total_bytes=0, free_bytes=0)
+    return DiskStatus(total_bytes=usage.total, free_bytes=usage.free)
+
+
+def has_free_space(path: Path, required_mb: float) -> bool:
+    """Хватит ли места под задачу. Статистика недоступна → считаем, что хватит."""
+    status = disk_status(path)
+    if status.total_bytes == 0:
+        return True
+    return status.free_mb >= required_mb
+
+
+def emergency_cleanup(
+    output_dir: Path, *, target_percent: float = DISK_CRITICAL_PERCENT
+) -> CleanupResult:
+    """Чистка ПО НЕХВАТКЕ МЕСТА: сносим самые старые временные файлы, игнорируя сроки.
+
+    Обычная уборка смотрит только на возраст, и этого мало: фильм на 650 МБ приезжает
+    за минуты, а трогать его «рано» ещё шесть часов. Здесь сортируем всё временное по
+    времени изменения и удаляем с самого старого, пока не опустимся ниже порога.
+
+    Удаляем только из каталогов `MEDIA_RETENTION_HOURS` — это заведомо промежуточные
+    файлы. Ни БД, ни логи, ни ассеты сюда не попадают: аварийная уборка не должна уметь
+    удалить то, что восстановить нельзя."""
+    if disk_status(output_dir).used_percent < target_percent:
+        return CleanupResult(removed_files=0, freed_bytes=0)
+
+    candidates: list[Path] = []
+    for name in MEDIA_RETENTION_HOURS:
+        directory = output_dir / name
+        if directory.exists():
+            candidates.extend(path for path in directory.rglob("*") if path.is_file())
+
+    removed = 0
+    freed = 0
+    for path in sorted(candidates, key=_mtime_or_zero):
+        if disk_status(output_dir).used_percent < target_percent:
+            break
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError as error:
+            logger.warning("Аварийная уборка: не удалось удалить %s: %s", path, error)
+            continue
+        removed += 1
+        freed += size
+
+    for name in MEDIA_RETENTION_HOURS:
+        directory = output_dir / name
+        if directory.exists():
+            _remove_empty_dirs(directory)
+
+    result = CleanupResult(removed_files=removed, freed_bytes=freed)
+    if removed:
+        logger.warning(
+            "Аварийная уборка диска: удалено %d файлов, освобождено %.0f МБ (%s)",
+            removed, result.freed_mb, disk_status(output_dir),
+        )
+    return result
+
+
+def _mtime_or_zero(path: Path) -> float:
+    """Файл, исчезнувший между листингом и сортировкой, считаем самым старым —
+    попытка его удалить всё равно отработает безопасно."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _remove_empty_dirs(directory: Path) -> None:
