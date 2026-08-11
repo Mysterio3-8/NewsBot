@@ -22,6 +22,7 @@ from app.core.channel_settings import ChannelSettings
 from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
 from app.core.maintenance.alerts import check_disk_and_alert
+from app.core.maintenance.workload import MediaWorkGuard
 from app.core.maintenance.cleanup import (
     DISK_WARN_PERCENT,
     cleanup_output,
@@ -72,6 +73,7 @@ def build_cycle_job(
     vk_fetcher: VKFetcher | None,
     vk_token_bucket: TokenBucket | None = None,
     vk_cooldown_bucket: TokenBucket | None = None,
+    guard: MediaWorkGuard | None = None,
 ):
     """Один автономный цикл: собрать свежие посты всех источников → опубликовать посты
     КАЖДОГО канала в его собственные таргеты (мультиканальность). Читалка (fetcher) общая
@@ -109,6 +111,14 @@ def build_cycle_job(
         return vk_pub_cache[channel.vk_token_env]
 
     async def cycle_job() -> None:
+        # Слот тяжёлой работы: цикл тянет LLM, Pillow и загрузку медиа в VK, и наложение
+        # на скачивание фильма переполняет 961 МБ физической памяти (см. workload.py).
+        with (guard or MediaWorkGuard()).slot("цикл публикации") as taken:
+            if not taken:
+                return
+            await _run_cycle()
+
+    async def _run_cycle() -> None:
         await run_check_cycle(
             repo,
             config,
@@ -481,6 +491,7 @@ def build_daily_video_job(
     *,
     vk_token_bucket: TokenBucket | None = None,
     vk_cooldown_bucket: TokenBucket | None = None,
+    guard: MediaWorkGuard | None = None,
 ):
     """Раз в день: для каналов с daily_video_youtube_channels (основной источник) и/или
     daily_video_group (резервный, VK — троттлится для датацентр-IP, см. video_source.py)
@@ -498,6 +509,15 @@ def build_daily_video_job(
     youtube_publisher = build_youtube_publisher()
 
     async def daily_video_job() -> None:
+        # Самый тяжёлый джоб на сервере: yt-dlp тянет сотни мегабайт, дальше ffmpeg
+        # режет клипы. Наложение на цикл публикации и есть тот перерасход памяти,
+        # который загнал машину в своп (см. workload.py).
+        with (guard or MediaWorkGuard()).slot("фильм") as taken:
+            if not taken:
+                return
+            await _run_daily_video()
+
+    async def _run_daily_video() -> None:
         for channel in repo.list_channels(enabled_only=True):
             settings = ChannelSettings.from_json(channel.settings_json)
             if not settings.daily_video_youtube_channels and settings.daily_video_group is None:
@@ -576,12 +596,21 @@ def build_clip_publish_job(
     *,
     vk_token_bucket: TokenBucket | None = None,
     vk_cooldown_bucket: TokenBucket | None = None,
+    guard: MediaWorkGuard | None = None,
 ):
     """Каждые 10 минут: опубликовать клипы, чьё запланированное время пришло. План — в
     БД (clip_segments), поэтому рестарт сервиса не теряет расписание клипов."""
     youtube_publisher = build_youtube_publisher()
 
     async def clip_publish_job() -> None:
+        # Клип — это ещё один ffmpeg и ещё одна заливка видео. Ходит каждые 10 минут,
+        # то есть накладывается на фильм чаще всех остальных.
+        with (guard or MediaWorkGuard()).slot("клипы") as taken:
+            if not taken:
+                return
+            await _run_clip_publish()
+
+    async def _run_clip_publish() -> None:
         def publisher_for(channel: Channel):
             return build_vk_publisher_for_channel(
                 channel, token_bucket=vk_token_bucket, cooldown_bucket=vk_cooldown_bucket,
@@ -624,6 +653,12 @@ async def run_forever(
         logger.warning("Нет ни одного включённого канала — автопубликация недоступна")
 
     scheduler = AsyncIOScheduler()
+    # ОДИН слот на всю тяжёлую работу с медиа, общий для трёх расписаний. Замер на проде
+    # 2026-08-11: 961 МБ памяти при 1.25 ГБ в свопе — машина колотилась, и sshd перестал
+    # пускать на аутентификации. Причина — наложение джобов: фильм (yt-dlp + ffmpeg),
+    # клипы (ffmpeg) и цикл публикации (LLM + Pillow) ходили по своим расписаниям, и
+    # пересекаться им ничто не мешало. Подробности — app/core/maintenance/workload.py.
+    media_guard = MediaWorkGuard()
     # jitter — случайный разброс момента запуска (±jitter_minutes), чтобы публикации
     # не выходили робото-ровно в HH:00 и меньше походили на бота (антибан).
     jitter_seconds = config.publishing.schedule.jitter_minutes * 60
@@ -636,6 +671,7 @@ async def run_forever(
             vk_fetcher=vk_fetcher,
             vk_token_bucket=vk_token_bucket,
             vk_cooldown_bucket=vk_cooldown_bucket,
+            guard=media_guard,
         ),
         IntervalTrigger(minutes=config.monitoring.check_interval_minutes, jitter=jitter_seconds),
         # Без next_run_time IntervalTrigger ждёт первый полный интервал (до 4 часов)
@@ -658,6 +694,7 @@ async def run_forever(
         build_daily_video_job(
             repo, config, llm_client, vk_fetcher,
             vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket,
+            guard=media_guard,
         ),
         IntervalTrigger(minutes=15),
         next_run_time=datetime.datetime.now(),
@@ -672,7 +709,8 @@ async def run_forever(
     )
     scheduler.add_job(
         build_clip_publish_job(
-            repo, vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket
+            repo, vk_token_bucket=vk_token_bucket, vk_cooldown_bucket=vk_cooldown_bucket,
+            guard=media_guard,
         ),
         IntervalTrigger(minutes=10),
     )

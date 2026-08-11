@@ -1,9 +1,12 @@
 """Настройка логирования с ротацией (раздел 17 SPEC.md)."""
 from __future__ import annotations
 
+import gzip
 import logging
+import shutil
 import time
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from app.config.loader import LoggingConfig
 from app.paths import LOGS_DIR
@@ -19,6 +22,35 @@ LOG_FILES = {
 }
 
 
+def _gz_name(name: str) -> str:
+    """Имя ротированного файла: `app.log.1` → `app.log.1.gz`.
+
+    Задавать namer ОБЯЗАТЕЛЬНО вместе с rotator: сдвиг бэкапов (`.1`→`.2`→…) и удаление
+    самого старого идут по именам, которые вернул namer. Сожми мы файл, не сказав об
+    этом обработчику, он искал бы несжатые `.1`, не находил — и архивы копились бы вечно,
+    то есть «сжатие» обернулось бы утечкой диска."""
+    return f"{name}.gz"
+
+
+def _compress_rotated(source: str, dest: str) -> None:
+    """Ротация со сжатием.
+
+    ТЗ владельца 2026-08-11: «если что-то надо хранить придумай сжатие». Логи как раз
+    тот случай — удалять их нельзя (по ним разбираются поломки), но текст жмётся более
+    чем в десять раз: при backupCount=5 и файле в 10 МБ это 50 МБ против ~4 МБ.
+
+    Сжимается уже ЗАКРЫТЫЙ хвост, активный файл не трогается — запись в лог не прерывается.
+    Сжать не вышло → просто переносим: несжатый лог лучше потерянного."""
+    try:
+        with open(source, "rb") as raw, gzip.open(dest, "wb") as packed:
+            shutil.copyfileobj(raw, packed)
+    except OSError:
+        Path(dest).unlink(missing_ok=True)
+        shutil.move(source, dest)
+        return
+    Path(source).unlink(missing_ok=True)
+
+
 def _make_handler(filename: str, config: LoggingConfig, level: int) -> RotatingFileHandler:
     handler = RotatingFileHandler(
         LOGS_DIR / filename,
@@ -26,6 +58,8 @@ def _make_handler(filename: str, config: LoggingConfig, level: int) -> RotatingF
         backupCount=config.backup_count,
         encoding="utf-8",
     )
+    handler.namer = _gz_name
+    handler.rotator = _compress_rotated
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     return handler
