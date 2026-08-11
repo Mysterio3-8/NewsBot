@@ -10,6 +10,17 @@ HOST="news-rewriter-vps"
 REMOTE_DIR="/opt/news-rewriter"
 SERVICE="news-rewriter-bot.service"
 
+# ⚠️ ssh из Git Bash НЕ читает ~/.ssh/config, если имя пользователя Windows написано
+# кириллицей: msys-сборка OpenSSH не находит домашний каталог, читает только
+# /etc/ssh/ssh_config и падает с «Could not resolve hostname news-rewriter-vps».
+# Хук post-commit работает именно в этой оболочке, поэтому «коммит = деплой» молча не
+# срабатывал (обнаружено 2026-08-11). Передаём конфиг явно, если он существует.
+SSH=(ssh)
+if [ -f "$HOME/.ssh/config" ]; then
+  SSH=(ssh -F "$HOME/.ssh/config")
+fi
+ssh() { command "${SSH[@]}" "$@"; }
+
 echo "==> Синхронизация app/ и prompts/ на $HOST..."
 tar -czf - --exclude='__pycache__' --exclude='*.pyc' app prompts \
   | ssh "$HOST" "tar -xzf - -C $REMOTE_DIR"
