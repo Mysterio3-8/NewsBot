@@ -100,6 +100,28 @@ for unit in tg-sc-publisher.timer tg-yt-playlists.timer; do
     systemctl restart "$unit" 2>/dev/null || true
 done
 
+# ------------------------------------------------------------ Проверка cookies
+# 🔴 YouTube отвечает «Sign in to confirm you're not a bot» на серверных IP. Без cookies
+# падает КАЖДЫЙ трек сборника и КАЖДЫЙ фильм Кино, а внешне это выглядит как «софт
+# молчит»: очередь полна, таймер тикает, публикаций нет (инцидент 2026-08-11/12).
+# Файл машинно-специфичный, в git его нет — проверяем и говорим вслух.
+echo
+echo "==> Cookies YouTube:"
+COOKIES="${YT_COOKIES_FILE:-/root/yt-vk/cookies.txt}"
+if [ -f "$COOKIES" ]; then
+    echo "    файл на месте: $COOKIES"
+    for env_file in /opt/news-rewriter/.env /opt/yt-vk-publisher/.env; do
+        if grep -q '^YT_COOKIES_FILE=' "$env_file" 2>/dev/null; then
+            echo "    $env_file — прописан"
+        else
+            echo "    !! $env_file — НЕ прописан. Выполни:"
+            echo "       echo 'YT_COOKIES_FILE=$COOKIES' >> $env_file"
+        fi
+    done
+else
+    echo "    !! Файла $COOKIES нет. Без него YouTube не отдаст ни фильмы, ни сборники."
+fi
+
 # ------------------------------------------------------------------------ Итог
 echo
 echo "==> Готово. Состояние:"
