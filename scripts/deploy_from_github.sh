@@ -70,9 +70,17 @@ systemctl restart yt-vk-autopost.service
 
 # ---------------------------------------------------------------------- Музыка
 fetch "Mysterio3-8/softthmusic" "main" "$WORK/music"
-echo "==> Музыка: обновляю app/, assets/ и config.yaml"
-cp -r "$WORK/music/app" "$WORK/music/assets" /opt/yt-vk-publisher/
+echo "==> Музыка: обновляю app/, assets/, deploy/ и config.yaml"
+cp -r "$WORK/music/app" "$WORK/music/assets" "$WORK/music/deploy" /opt/yt-vk-publisher/
 cp "$WORK/music/deploy/config.prod.yaml" /opt/yt-vk-publisher/config.yaml
+# Файлы юнитов тоже обновляем: без этого правка расписания в репозитории на прод
+# не доезжает никогда, и таймер живёт с настройками месячной давности.
+for unit in tg-sc-publisher.service tg-sc-publisher.timer \
+            tg-yt-playlists.service tg-yt-playlists.timer; do
+    [ -f "/opt/yt-vk-publisher/deploy/$unit" ] && \
+        cp "/opt/yt-vk-publisher/deploy/$unit" /etc/systemd/system/
+done
+systemctl daemon-reload
 
 echo "==> Музыка: проверка импортов и конфига"
 cd /opt/yt-vk-publisher && venv/bin/python -c '
@@ -84,11 +92,21 @@ print("треков/сутки:", cfg.soundcloud.max_posts_per_day,
       "| сборников:", cfg.youtube_playlists.max_posts_per_day)
 ' || { echo "!! Музыка: импорты или конфиг сломаны — таймер не трогаем"; exit 1; }
 
-systemctl restart tg-sc-publisher.timer 2>/dev/null || true
+# ⚠️ У Музыки ДВА таймера, а не один: треки и сборники — независимые потоки со своими
+# юнитами. Раньше перезапускался только первый, из-за чего сборники могли месяцами
+# стоять незамеченными: код обновляется, а поток, который их публикует, не работает.
+for unit in tg-sc-publisher.timer tg-yt-playlists.timer; do
+    systemctl enable --now "$unit" 2>/dev/null || echo "!! Юнит $unit не найден — проверь вручную"
+    systemctl restart "$unit" 2>/dev/null || true
+done
 
 # ------------------------------------------------------------------------ Итог
 echo
 echo "==> Готово. Состояние:"
 df -h / | tail -1
 free -m | head -2
-systemctl is-active news-rewriter-bot yt-vk-autopost.service tg-sc-publisher.timer
+echo "--- юниты ---"
+systemctl is-active news-rewriter-bot yt-vk-autopost.service \
+    tg-sc-publisher.timer tg-yt-playlists.timer
+echo "--- очередь сборников ---"
+cd /opt/yt-vk-publisher && venv/bin/python app/yt_playlists_cli.py status 2>&1 | tail -2

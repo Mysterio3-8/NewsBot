@@ -59,6 +59,49 @@ def test_skipped_job_does_not_hold_the_slot():
         assert guard.busy_with == "фильм"
 
 
+def test_stuck_job_does_not_block_publishing_forever():
+    """Слот, введённый против перерасхода памяти, не должен сам стать причиной простоя:
+    джоб, повисший на сетевом вызове без таймаута, держал бы его вечно."""
+    import datetime
+
+    guard = MediaWorkGuard()
+    started = datetime.datetime(2026, 8, 12, 10, 0)
+
+    with guard.slot("фильм", now=started) as taken:
+        assert taken is True
+        much_later = started + datetime.timedelta(minutes=91)
+        with guard.slot("цикл публикации", now=much_later) as second:
+            assert second is True, "слот у зависшего джоба не отобран"
+
+
+def test_slot_is_not_stolen_before_the_limit():
+    """Честный фильм качается и режется около часа — отбирать у него слот нельзя."""
+    import datetime
+
+    guard = MediaWorkGuard()
+    started = datetime.datetime(2026, 8, 12, 10, 0)
+
+    with guard.slot("фильм", now=started):
+        with guard.slot("клипы", now=started + datetime.timedelta(minutes=50)) as second:
+            assert second is False
+
+
+def test_stolen_slot_is_not_released_by_the_old_owner():
+    """У отобранного джоба свой finally отработает позже — он не должен снять чужой слот."""
+    import datetime
+
+    guard = MediaWorkGuard()
+    started = datetime.datetime(2026, 8, 12, 10, 0)
+    late = started + datetime.timedelta(minutes=91)
+
+    with guard.slot("фильм", now=started):
+        with guard.slot("цикл публикации", now=late):
+            pass  # «цикл» отобрал слот и вернул его сам
+        assert guard.busy_with is None
+    # выход из блока «фильма» не должен ничего ломать
+    assert guard.busy_with is None
+
+
 def test_rotated_log_is_stored_compressed(tmp_path):
     source = tmp_path / "app.log.1"
     source.write_text("строка лога\n" * 100, encoding="utf-8")
