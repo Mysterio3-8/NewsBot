@@ -13,11 +13,33 @@ from app.db.models import Channel
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository, init_db, make_engine
 
 
+def normalize_destination(value: str | None) -> str:
+    """«club240120678», «-240120678», « 240120678 » → «240120678».
+
+    Сравнивать приёмники как есть нельзя. Один и тот же VK-приёмник записывается
+    по-разному: числом, с префиксом `club`/`public`, с минусом (owner_id стены) или с
+    случайным пробелом от ручной правки через бота. Разойдись запись хоть на символ —
+    и `_ensure_channel` не узнает существующий канал, заведёт ВТОРОЙ и обновит настройки
+    ему, а рабочий останется со старыми. Снаружи это выглядит как «сид прогнали, а
+    настройки не применились»: ровно такое подозрение возникло 2026-08-12, когда у
+    Новостей SEO-теги появились, а у Кино нет."""
+    text = (value or "").strip().lstrip("-")
+    for prefix in ("club", "public", "event"):
+        if text.startswith(prefix) and text[len(prefix):].isdigit():
+            return text[len(prefix):]
+    return text
+
+
 def _ensure_channel(repo: Repository, name: str, *, vk_destination: str, **fields) -> Channel:
     """Идемпотентность по vk_destination (уникальный приёмник), не по имени — чтобы
-    переименование канала не плодило дубликат. Имя при этом обновляется."""
+    переименование канала не плодило дубликат. Имя при этом обновляется.
+
+    Сравнение идёт по НОРМАЛИЗОВАННОМУ приёмнику (см. normalize_destination): иначе
+    любая разница в записи одного и того же сообщества плодит канал-двойник."""
+    wanted = normalize_destination(vk_destination)
     existing = next(
-        (c for c in repo.list_channels() if c.vk_destination == vk_destination), None
+        (c for c in repo.list_channels() if normalize_destination(c.vk_destination) == wanted),
+        None,
     )
     if existing is not None:
         # Обновляем имя/таргеты существующего канала, но НЕ enabled (чтобы seed не

@@ -91,6 +91,7 @@ HELP_TEXT = (
     "/freshness <часов> — окно свежести/бэклога\n"
     "/maxposts <n> — лимит постов в день\n"
     "/disk — занятое место и уборка временных файлов\n"
+    "/diag — что реально применено у каналов в прод-БД (SEO, лимиты, видео)\n"
     "\nУправление VK Nature Bot (отдельный процесс, свой репозиторий):\n"
     "/nature_run — запустить\n"
     "/nature_stop — остановить\n"
@@ -670,6 +671,39 @@ def render_disk() -> str:
     )
 
 
+def render_channels_diag(repo: Repository) -> str:
+    """Слепок настроек ВСЕХ каналов из прод-БД — для разбора «почему канал ведёт себя не так».
+
+    Зачем команда вообще нужна. Настройки каналов живут в БД (`settings_json`), а не в
+    файлах, поэтому по коду в репозитории нельзя понять, что реально применено на проде:
+    сид мог не прогоняться, значение могли поменять из бота, а `_ensure_channel` ищет
+    канал по `vk_destination` — разойдись оно хоть пробелом, и сид молча заведёт ВТОРОЙ
+    канал, обновляя настройки не тому. Ровно это и подозревается в истории «у Новостей
+    SEO-теги есть, а у Кино нет» (2026-08-12).
+
+    До сих пор посмотреть это можно было только по SSH, а он с 2026-08-11 недоступен.
+    Команда закрывает дыру: диагностика прода не должна зависеть от одного канала связи."""
+    lines = []
+    for channel in repo.list_channels():
+        settings = ChannelSettings.from_json(channel.settings_json)
+        state = "🟢" if channel.enabled else "⚪"
+        lines.append(
+            f"{state} #{channel.id} «{channel.name}»\n"
+            f"   VK: {channel.vk_destination or '—'} | TG: {channel.tg_destination or '—'}\n"
+            f"   SEO: {'вкл' if settings.seo_enabled else '⛔ ВЫКЛ'}, "
+            f"тегов канала {len(settings.seo_base_tags)}, "
+            f"фраз {len(settings.seo_channel_phrases)}\n"
+            f"   постов/сутки: {settings.max_posts_per_day or '—'}, "
+            f"интервал {settings.min_interval_minutes or '—'}–{settings.max_interval_minutes or '—'}\n"
+            f"   видео постом: {'да' if settings.video_as_post else 'нет'}, "
+            f"фильмов {settings.daily_video_count}, клипов {settings.daily_clip_count}\n"
+            f"   футер TG: {settings.tg_footer_url or '—'}"
+        )
+    if not lines:
+        return "Каналов в БД нет."
+    return "🔧 Каналы в прод-БД:\n\n" + "\n\n".join(lines)
+
+
 def render_settings(config: AppConfig) -> str:
     """Текущие настройки темпа публикации — для /settings."""
     schedule = config.publishing.schedule
@@ -804,6 +838,11 @@ def build_dispatcher(
     async def on_disk(message: Message) -> None:
         if await guard(message):
             await message.answer(render_disk())
+
+    @dp.message(Command("diag"))
+    async def on_diag(message: Message) -> None:
+        if await guard(message):
+            await message.answer(render_channels_diag(repo))
 
     @dp.message(Command("publish"))
     async def on_publish(message: Message) -> None:

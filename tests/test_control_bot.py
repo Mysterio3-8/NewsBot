@@ -112,8 +112,9 @@ def test_build_dispatcher_registers_media_handler():
     # +1 команда /disk (уборка и сводка по диску, ТЗ 2026-07-28) = 42;
     # +1 message (FSM ввода ссылки SoundCloud для альбомного потока Музыки) = 43;
     # +1 message (FSM ввода текста шаблона — редактор промптов из бота) = 44;
-    # +1 message (FSM ввода лимита внешнего софта через контракт) = 45
-    assert len(dp.message.handlers) == 45
+    # +1 message (FSM ввода лимита внешнего софта через контракт) = 45;
+    # +1 команда /diag (слепок настроек каналов из прод-БД, 2026-08-12) = 46
+    assert len(dp.message.handlers) == 46
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток
