@@ -25,6 +25,7 @@ OWNER_SETTING_KEY = "control_bot_owner_id"
 OWNER_ENV = "CONTROL_BOT_OWNER_ID"
 
 LAST_DISK_ALERT_KEY = "last_disk_alert_at"
+LAST_SILENCE_ALERT_KEY = "last_silence_alert_at"
 ALERT_COOLDOWN_HOURS = 6
 """Пауза между повторами одной и той же тревоги.
 
@@ -102,6 +103,21 @@ def build_disk_alert(status: DiskStatus, freed_mb: float) -> str:
         "Проверить: /disk в боте, дальше — журналы systemd и каталоги других софтов."
     )
     return "\n".join(lines)
+
+
+def alert_once(repo: Repository, text: str, key: str, now: datetime.datetime | None = None) -> bool:
+    """Отправить тревогу не чаще, чем раз в `ALERT_COOLDOWN_HOURS`.
+
+    Пауза обязательна: сторожевые джобы ходят по расписанию, а поломка сама не
+    рассасывается — без паузы владелец получал бы одно и то же сообщение каждый час и
+    перестал бы их читать вовсе, что хуже, чем не слать их совсем."""
+    now = now or datetime.datetime.utcnow()
+    if not should_alert(repo, now, key):
+        return False
+    if not send_alert(repo, text):
+        return False
+    mark_alerted(repo, now, key)
+    return True
 
 
 def check_disk_and_alert(

@@ -12,6 +12,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import random
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -21,7 +22,12 @@ from app.config.loader import AppConfig
 from app.core.channel_settings import ChannelSettings
 from app.core.check_cycle import run_check_cycle
 from app.core.llm.client import LLMClient
-from app.core.maintenance.alerts import check_disk_and_alert
+from app.core.maintenance.alerts import (
+    LAST_SILENCE_ALERT_KEY,
+    alert_once,
+    check_disk_and_alert,
+)
+from app.core.maintenance.heartbeat import build_silence_alert, find_silent_communities
 from app.core.maintenance.workload import MediaWorkGuard
 from app.core.maintenance.cleanup import (
     DISK_WARN_PERCENT,
@@ -591,6 +597,33 @@ def build_cleanup_job(repo: Repository):
     return cleanup_job
 
 
+def build_heartbeat_job(repo: Repository):
+    """Раз в час: не молчит ли какое-то сообщество дольше нормы (ТЗ 2026-08-12
+    «чтобы софты без перебоя работали всегда»).
+
+    Смотрит стены через VK API, а не свои журналы: у четырёх софтов разные БД и разные
+    репозитории, а стена — одна и та же сущность у всех. И проверяет РЕЗУЛЬТАТ: софт
+    может считать, что опубликовал, а записи в сообществе не быть.
+
+    Токен читающий (`VK_USER_TOKEN`), групповой на `wall.get` отдаёт `[27]`. Нет
+    токена — сторож молча спит, роняя только строчку в лог: без него всё работает
+    как раньше."""
+
+    def watch() -> None:
+        token = os.environ.get("VK_USER_TOKEN", "").strip()
+        if not token:
+            logger.info("Сторож тишины: VK_USER_TOKEN не задан — пропускаю")
+            return
+        stale = find_silent_communities(token)
+        if stale:
+            alert_once(repo, build_silence_alert(stale), LAST_SILENCE_ALERT_KEY)
+
+    async def heartbeat_job() -> None:
+        await asyncio.to_thread(watch)
+
+    return heartbeat_job
+
+
 def build_clip_publish_job(
     repo: Repository,
     *,
@@ -706,6 +739,14 @@ async def run_forever(
         build_cleanup_job(repo),
         IntervalTrigger(hours=1),
         next_run_time=datetime.datetime.now(),
+    )
+    # Сторож тишины: раз в час смотрит стены всех четырёх сообществ. Первый прогон не
+    # сразу — даём сервису подняться и опубликовать, иначе рестарт после долгой паузы
+    # тут же выдал бы тревогу о простое, который сам же и лечит.
+    scheduler.add_job(
+        build_heartbeat_job(repo),
+        IntervalTrigger(hours=1),
+        next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=20),
     )
     scheduler.add_job(
         build_clip_publish_job(
