@@ -1,5 +1,7 @@
 """Сид канала «Новости» (ТЗ 2026-07-26): включить VK+TG, оставить один источник
 «прямой эфир», выставить консервативный антибан. Идемпотентно."""
+import json
+
 from app.core.channel_settings import ChannelSettings
 from app.db.repository import DEFAULT_CHANNEL_NAME, Repository, init_db, make_engine
 from app.seed_channels import NEWS_SOURCE_URL, seed_news
@@ -53,17 +55,46 @@ def test_seed_news_sets_conservative_antiban(tmp_path):
     assert settings.max_posts_per_day * settings.min_interval_minutes >= 20 * 60
 
 
-def test_seed_news_adds_telegram_footer_link(tmp_path):
+def test_seed_news_removes_telegram_footer_link(tmp_path):
+    """ТЗ владельца 2026-08-12: «убери ссылку, которая ведёт на телеграм».
+
+    Проверяем именно ПЕРЕЗАПИСЬ уже засеянного значения: merge_channel_settings только
+    дописывает ключи, поэтому убрать настройку можно лишь явным None — просто выкинуть
+    её из сида недостаточно, в прод-БД она осталась бы жить."""
     engine = make_engine(tmp_path / "footer.db")
     init_db(engine)
     repo = Repository(engine)
-    _seed_default_channel(repo)
+    channel = _seed_default_channel(repo)
+    repo.update_channel(
+        channel.id,
+        settings_json=json.dumps({"tg_footer_url": "https://t.me/NewsThreeWord",
+                                  "tg_footer_signature": "🔢 Новости в трёх словах"}),
+    )
 
     seed_news(repo)
 
     settings = ChannelSettings.from_json(_news_channel(repo).settings_json)
-    assert settings.tg_footer_url == "https://t.me/NewsThreeWord"
-    assert settings.tg_footer_signature is not None
+    assert settings.tg_footer_url is None
+    assert settings.tg_footer_signature is None
+
+
+def test_cinema_plan_matches_the_owners_order():
+    """ТЗ владельца 2026-08-12: «1 фильм — 2 клипа и 4 поста», фильм и клипы снова
+    записями на стене.
+
+    Раздел «Видео» пробовали с 2026-08-10 и откатили: ролик, ушедший в каталог
+    сообщества, в ленте не виден вообще, и канал выглядел полупустым («в кино мало
+    публикаций, нет фильмов и клипов»)."""
+    from app.seed_channels import DAILY_PLAN
+
+    assert DAILY_PLAN["daily_video_count"] == 1
+    assert DAILY_PLAN["daily_clip_count"] == 2
+    assert DAILY_PLAN["max_posts_per_day"] == 4
+    assert DAILY_PLAN["video_as_post"] is True
+    # 1440 / 4 поста = 360 мин — потолок среднего интервала, иначе четвёртый пост
+    # не влезет в сутки.
+    average = (DAILY_PLAN["min_interval_minutes"] + DAILY_PLAN["max_interval_minutes"]) / 2
+    assert average <= 360
 
 
 def test_seed_news_enables_simple_media(tmp_path):
