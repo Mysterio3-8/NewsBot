@@ -197,8 +197,8 @@ def test_unreadable_sources_alert_owner(tmp_path):
     assert repo.count_reposted_videos_since(channel.id, _today()) == 0
 
 
-def test_empty_source_does_not_alert(tmp_path):
-    """Штатная тишина источника тревогой не считается — иначе владелец их читать перестанет."""
+def test_exhausted_source_asks_for_a_new_one(tmp_path):
+    """«Новых видео нет» больше не молчит: владелец должен узнать, что нужен источник."""
     repo = _repo(tmp_path)
     settings = ChannelSettings(
         daily_video_youtube_channels=["https://www.youtube.com/@kino"], daily_clip_count=0
@@ -217,7 +217,50 @@ def test_empty_source_does_not_alert(tmp_path):
             llm_client=None, footer_links=None, rng=random.Random(1),
         )
 
+    assert len(alerts) == 1
+    assert "Нужен новый источник" in alerts[0][1]
+
+
+def test_channel_without_video_sources_stays_silent(tmp_path):
+    """У канала без видео-источников фильмов и не ждут — тревожить не о чем."""
+    repo = _repo(tmp_path)
+    channel = repo.create_channel(
+        name="Новости", vk_destination="233689032",
+        settings_json=ChannelSettings().to_json(),
+    )
+    alerts: list[tuple[str, str]] = []
+
+    with patch("app.core.video.daily_video_repost.alert_once",
+               side_effect=lambda repo_, text, key, **kw: alerts.append((key, text)) or True):
+        run_daily_video_repost(
+            repo, channel,
+            vk_fetcher=None, vk_publisher=FakePublisher(),
+            llm_client=None, footer_links=None, rng=random.Random(1),
+        )
+
     assert alerts == []
+
+
+def test_lookback_window_is_passed_to_the_source(tmp_path):
+    """Окно 20 было потолком всего софта: канал на тысячу фильмов выбирался за три недели."""
+    repo = _repo(tmp_path)
+    settings = ChannelSettings(
+        daily_video_youtube_channels=["https://www.youtube.com/@kino"], daily_clip_count=0
+    )
+    channel = repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+
+    with patch("app.core.video.daily_video_repost.pick_unreposted_youtube",
+               return_value=None) as pick, \
+         patch("app.core.video.daily_video_repost.alert_once", return_value=True):
+        run_daily_video_repost(
+            repo, channel,
+            vk_fetcher=None, vk_publisher=FakePublisher(),
+            llm_client=None, footer_links=None, rng=random.Random(1),
+        )
+
+    assert pick.call_args.kwargs["count"] == 200
 
 
 def test_kino_diag_separates_taken_from_published(tmp_path):

@@ -127,14 +127,19 @@ def _pick_video(
     """YouTube-каналы проверяются по порядку первыми (основной источник); VK-группа —
     только если ни один YouTube-канал не настроен (резервный путь).
 
-    Отказ ВСЕХ источников — не то же самое, что «новых видео нет»: первое означает
-    поломку (YouTube требует подтверждения «я не бот» с серверных IP, канал переехал),
-    второе — штатную тишину. Первое уходит владельцу тревогой, второе молчит."""
+    Пустой результат бывает по ДВУМ разным причинам, и владельцу нужны разные действия:
+    источники не читаются (поломка — YouTube требует подтверждения «я не бот», канал
+    переехал) либо все ролики в окне просмотра уже публиковались (нужен новый источник).
+    Обе уходят тревогой с разным текстом; молча возвращать None нельзя — именно так
+    Кино и простояло двое суток, честно печатая «новых видео нет» в журнал, который
+    никто не читал."""
     reposted = repo.list_reposted_video_refs(channel.id)
     failures: list[str] = []
     for channel_url in settings.daily_video_youtube_channels:
         try:
-            video = pick_unreposted_youtube(channel_url, reposted)
+            video = pick_unreposted_youtube(
+                channel_url, reposted, count=settings.daily_video_lookback
+            )
         except Exception as error:  # noqa: BLE001 — граница сети, причина уходит владельцу
             logger.exception("Видео-репост [%s]: YouTube-канал %s недоступен", channel.name, channel_url)
             failures.append(f"{channel_url}: {error}")
@@ -142,18 +147,27 @@ def _pick_video(
         if video is not None:
             return video
 
-    if failures and len(failures) == len(settings.daily_video_youtube_channels):
-        _alert_video_failure(
-            repo, channel.name, "фильм",
-            "источники не читаются — " + "; ".join(failures[:3]),
-        )
-
     if settings.daily_video_group is not None and vk_fetcher is not None:
         videos = [
             source_video_from_item(item)
             for item in vk_fetcher.fetch_group_videos(settings.daily_video_group)
         ]
-        return pick_unreposted(videos, reposted)
+        video = pick_unreposted(videos, reposted)
+        if video is not None:
+            return video
+
+    if failures:
+        _alert_video_failure(
+            repo, channel.name, "фильм",
+            "источники не читаются — " + "; ".join(failures[:3]),
+        )
+    elif settings.daily_video_youtube_channels or settings.daily_video_group is not None:
+        _alert_video_failure(
+            repo, channel.name, "фильм",
+            f"все ролики источников уже публиковались (просмотрено по "
+            f"{settings.daily_video_lookback} последних на канал, взято всего "
+            f"{len(reposted)}). Нужен новый источник.",
+        )
     return None
 
 

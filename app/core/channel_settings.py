@@ -94,6 +94,18 @@ class ChannelSettings:
     ещё не публиковавшееся видео самого свежего из них. Пусто → YouTube-путь не
     используется (тогда фолбэк на daily_video_group, если задан)."""
 
+    daily_video_lookback: int = 200
+    """Сколько ПОСЛЕДНИХ роликов канала-источника просматривать в поисках неопубликованного.
+
+    Было 20 — и это оказалось потолком всего софта, а не мелкой настройкой: канал отдаёт
+    ролики новыми вперёд, поэтому 20 верхних выбираются за три недели, после чего джоб
+    честно пишет «новых видео в источнике нет» и стоит, хотя на канале лежит тысяча
+    фильмов (проверено 2026-08-13: в окне 20 свободных 25, в окне 200 — 422).
+
+    Стоимость окна — один «плоский» запрос без скачивания метаданных каждого ролика,
+    поэтому 200 не дороже 20 по существу. Выше не берём: список приходит одним ответом,
+    и очень большие окна начнут заметно тормозить тик."""
+
     daily_clip_count: int = 3
     """Сколько вертикальных клипов нарезать из ежедневного видео."""
 
@@ -264,6 +276,7 @@ class ChannelSettings:
             weekly_repost=data.get("weekly_repost", False),
             daily_video_group=data.get("daily_video_group"),
             daily_video_youtube_channels=data.get("daily_video_youtube_channels", []),
+            daily_video_lookback=data.get("daily_video_lookback", 200),
             daily_clip_count=data.get("daily_clip_count", 3),
             daily_clip_seconds=data.get("daily_clip_seconds", 35),
             daily_clip_min_gap_seconds=data.get("daily_clip_min_gap_seconds", 120),
@@ -333,6 +346,8 @@ class ChannelSettings:
             payload["daily_video_group"] = self.daily_video_group
         if self.daily_video_youtube_channels:
             payload["daily_video_youtube_channels"] = self.daily_video_youtube_channels
+        if self.daily_video_lookback != 200:
+            payload["daily_video_lookback"] = self.daily_video_lookback
         if self.daily_clip_count != 3:
             payload["daily_clip_count"] = self.daily_clip_count
         if self.daily_clip_seconds != 35:

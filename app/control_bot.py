@@ -61,6 +61,19 @@ SHORTS_BASE_URL_ENV = "SHORTS_BASE_URL"
 SHORTS_DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 LLM_PROVIDERS = {"groq", "openrouter", "gemini", "ollama"}
 UNIQUIFY_VARIANTS = 5
+UNIQUIFY_MAX_BYTES = 20 * 1024 * 1024
+"""Потолок СКАЧИВАНИЯ у Bot API. Файл крупнее бот забрать не может физически, поэтому
+проверяем размер до `bot.download`, а не ловим его падение: иначе на каждый большой файл
+владелец получал «Ошибка обработки» без объяснения."""
+
+DELIVERY_CAPTION_MARKER = "#сборник"
+"""Метка доставки от соседнего софта, а не просьбы уникализировать.
+
+Музыка отдаёт готовый сборник (120–150 МБ) MTProto-сессией владельца В ЧАТ С ЭТИМ БОТОМ —
+чтобы файл лежал рядом с текстом про него же. Для бота это выглядит как присланное
+владельцем видео, то есть как заказ на уникализацию. Метка в подписи разводит эти два
+случая; разойдись она с текстом Музыки — сработает проверка размера выше, и владелец
+получит одно честное сообщение вместо пяти перекодировок."""
 UNIQUIFY_INPUT_DIR = OUTPUT_DIR / "uniquify" / "input"
 UNIQUIFY_OUTPUT_DIR = OUTPUT_DIR / "uniquify" / "output"
 SHORTS_OUTPUT_DIR = OUTPUT_DIR / "shorts"
@@ -2018,9 +2031,20 @@ async def _handle_uniquify(bot, message) -> None:
     (документами — чтобы Telegram не пережимал и качество сохранилось)."""
     from aiogram.types import FSInputFile
 
+    if is_soft_delivery(getattr(message, "caption", None)):
+        return  # файл принёс соседний софт, уникализировать его не просили
+
     file_id, filename = _extract_media(message)
     if file_id is None:
         await message.answer("Пришли видео или фото файлом (до 20 МБ).")
+        return
+
+    size = getattr(file_id, "file_size", None) or 0
+    if size > UNIQUIFY_MAX_BYTES:
+        await message.answer(
+            f"Файл {size / 1e6:.0f} МБ — Telegram не отдаёт ботам больше 20 МБ. "
+            "Уникализировать его отсюда нельзя."
+        )
         return
 
     UNIQUIFY_INPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -2040,6 +2064,11 @@ async def _handle_uniquify(bot, message) -> None:
     for path in variants:
         await message.answer_document(FSInputFile(path))
     await message.answer(f"Готово — {len(variants)} уникальных версий.")
+
+
+def is_soft_delivery(caption: str | None) -> bool:
+    """Подпись помечена как доставка готового файла от соседнего софта."""
+    return DELIVERY_CAPTION_MARKER in (caption or "")
 
 
 def _extract_media(message) -> tuple[object | None, str]:
