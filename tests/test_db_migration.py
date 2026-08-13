@@ -1,6 +1,8 @@
 """Регрессия: реальный data/app.db был создан до добавления content_hash
 в RawPost, из-за чего get_recent_content_hashes падал с 'no such column'.
 """
+import datetime
+
 from sqlalchemy import create_engine, text
 
 from app.db.repository import Repository, init_db, make_engine
@@ -107,6 +109,43 @@ def test_init_db_adds_per_network_published_columns_to_existing_table(tmp_path):
 
     assert repo.get_published_network_at(processed.id, "tg") is not None
     assert repo.get_published_network_at(processed.id, "vk") is None
+
+
+def test_init_db_marks_old_reposted_videos_as_published(tmp_path):
+    """Прод-БД жила без reposted_videos.published_at. Пустая колонка обнулила бы дневной
+    счётчик фильмов задним числом — в день релиза Кино получило бы лишний фильм."""
+    db_path = tmp_path / "pre_published_at.db"
+    old_engine = create_engine(f"sqlite:///{db_path}")
+    with old_engine.connect() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE reposted_videos ("
+                "id INTEGER PRIMARY KEY, channel_id INTEGER, video_ref VARCHAR(100), "
+                "title TEXT, created_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO reposted_videos (channel_id, video_ref, title, created_at) "
+                "VALUES (1, 'yt_old', 'Старый фильм', '2026-08-13 09:00:00')"
+            )
+        )
+        connection.commit()
+    old_engine.dispose()
+
+    engine = make_engine(db_path)
+    init_db(engine)
+
+    repo = Repository(engine)
+    channel = repo.create_channel(name="Кино", vk_destination="240120678")
+    assert channel.id == 1
+    since = datetime.datetime(2026, 8, 13)
+    assert repo.count_reposted_videos_since(1, since) == 1
+
+    # Повторный прогон ничего не переписывает: колонка уже есть, разметка одноразовая.
+    repo.add_reposted_video(channel_id=1, video_ref="yt_new", title="Новый")
+    init_db(engine)
+    assert repo.count_reposted_videos_since(1, since) == 1
 
 
 def test_init_db_is_idempotent_on_fresh_db(tmp_path):

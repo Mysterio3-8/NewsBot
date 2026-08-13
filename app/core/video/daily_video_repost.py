@@ -34,6 +34,12 @@ from app.core.publishing.youtube_description import (
     build_youtube_description,
     build_youtube_title,
 )
+from app.core.maintenance.alerts import (
+    LAST_CLIP_ALERT_KEY,
+    LAST_FILM_ALERT_KEY,
+    alert_once,
+    build_video_failure_alert,
+)
 from app.core.maintenance.cleanup import (
     FILM_REQUIRED_FREE_MB,
     disk_status,
@@ -101,20 +107,46 @@ def plan_clip_times(
     return times
 
 
+def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason: str) -> None:
+    """Сказать владельцу, что тяжёлая часть дня не вышла. Никогда не поднимает исключение
+    и никогда не заменяет собой запись в журнале: тревога — способ УЗНАТЬ о поломке, а
+    разбираться всё равно по журналу."""
+    try:
+        alert_once(
+            repo,
+            build_video_failure_alert(channel_name, stage, reason),
+            LAST_FILM_ALERT_KEY if stage == "фильм" else LAST_CLIP_ALERT_KEY,
+        )
+    except Exception:  # noqa: BLE001 — сбой уведомления не должен ронять видео-джоб
+        logger.exception("Тревога о видео не отправлена")
+
+
 def _pick_video(
     repo: Repository, channel: Channel, settings: ChannelSettings, vk_fetcher: VKFetcher | None
 ) -> SourceVideo | None:
     """YouTube-каналы проверяются по порядку первыми (основной источник); VK-группа —
-    только если ни один YouTube-канал не настроен (резервный путь)."""
+    только если ни один YouTube-канал не настроен (резервный путь).
+
+    Отказ ВСЕХ источников — не то же самое, что «новых видео нет»: первое означает
+    поломку (YouTube требует подтверждения «я не бот» с серверных IP, канал переехал),
+    второе — штатную тишину. Первое уходит владельцу тревогой, второе молчит."""
     reposted = repo.list_reposted_video_refs(channel.id)
+    failures: list[str] = []
     for channel_url in settings.daily_video_youtube_channels:
         try:
             video = pick_unreposted_youtube(channel_url, reposted)
-        except Exception:
+        except Exception as error:  # noqa: BLE001 — граница сети, причина уходит владельцу
             logger.exception("Видео-репост [%s]: YouTube-канал %s недоступен", channel.name, channel_url)
+            failures.append(f"{channel_url}: {error}")
             continue
         if video is not None:
             return video
+
+    if failures and len(failures) == len(settings.daily_video_youtube_channels):
+        _alert_video_failure(
+            repo, channel.name, "фильм",
+            "источники не читаются — " + "; ".join(failures[:3]),
+        )
 
     if settings.daily_video_group is not None and vk_fetcher is not None:
         videos = [
@@ -193,7 +225,16 @@ def run_daily_video_repost(
     # цикл качал его заново по кругу. Цена — при разовом сбое это видео пропускается,
     # что несравнимо дешевле бесконечного цикла.
     repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
-    local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
+    # Скачивание — самый частый обрыв (YouTube требует подтверждения «я не бот» с
+    # серверных IP, сеть рвётся на сотнях мегабайт). Ловим здесь, а не выше: наверху это
+    # была бы просто строка в журнале, а сутки уже потрачены. Видео остаётся помеченным
+    # (в цикл перекачки не уходим), но день НЕ закрыт — джоб возьмёт следующее по зазору.
+    try:
+        local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
+    except Exception as error:  # noqa: BLE001 — граница сети/диска, причина уходит владельцу
+        logger.exception("Видео-репост [%s]: фильм %s не скачался", channel.name, video.ref)
+        _alert_video_failure(repo, channel.name, "фильм", f"не скачался — {error}")
+        return
     try:
         body = "\n\n".join(part for part in (title, description) if part.strip())
         result = _publish_film(
@@ -202,7 +243,9 @@ def run_daily_video_repost(
         )
         if not result.success:
             logger.error("Видео-репост [%s]: публикация не удалась: %s", channel.name, result.error)
+            _alert_video_failure(repo, channel.name, "фильм", f"не опубликовался — {result.error}")
             return
+        repo.mark_video_published(channel_id=channel.id, video_ref=video.ref)
         logger.info("Видео-репост [%s]: опубликовано %s (%s)", channel.name, video.ref, title)
 
         # TG-заливка идёт ПОСЛЕ отметки в БД: если она упадёт, день всё равно считается
@@ -369,8 +412,9 @@ def _cut_and_schedule_clips(
             logo_path=logo_path,
             rng=rng,
         )
-    except Exception:
+    except Exception as error:  # noqa: BLE001 — граница ffmpeg, причина уходит владельцу
         logger.exception("Видео-репост [%s]: нарезка клипов упала", channel.name)
+        _alert_video_failure(repo, channel.name, "клипы", f"нарезка упала — {error}")
         return
 
     clip_text = _build_vk_publish_text(None, title, footer_links, False)
@@ -438,9 +482,13 @@ def publish_due_clips(
         expired = now - clip.scheduled_at > datetime.timedelta(hours=CLIP_EXPIRE_HOURS)
         file_missing = clip_path is None or not clip_path.exists()
         if expired or file_missing or channel is None or not channel.vk_destination:
-            logger.warning(
-                "Клип %d снят с плана (%s)", clip.id,
-                "протух" if expired else "файл/канал недоступен",
+            cause = "протух" if expired else "файл/канал недоступен"
+            logger.warning("Клип %d снят с плана (%s)", clip.id, cause)
+            # Снятый клип — это ровно та жалоба «клипов нет», которую нечем было увидеть:
+            # он тихо исчезал из плана, а стена жила текстовыми постами.
+            _alert_video_failure(
+                repo, channel.name if channel is not None else "Кино", "клипы",
+                f"клип {clip.id} снят с плана — {cause}",
             )
             repo.mark_clip_published(clip.id)
             if clip_path is not None:

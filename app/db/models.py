@@ -151,8 +151,13 @@ class RejectedPost(Base):
 
 
 class RepostedVideo(Base):
-    """Видео из группы-источника, уже опубликованное в наш канал ежедневным
-    видео-джобом (защита от повторной публикации). video_ref = "owner_id_video_id"."""
+    """Видео из группы-источника, взятое ежедневным видео-джобом (защита от повторной
+    публикации). video_ref = "owner_id_video_id".
+
+    Запись создаётся ДО скачивания (защита от бесконечной перекачки, см.
+    daily_video_repost), поэтому «взято» и «вышло на стену» — разные вещи:
+    `published_at` заполняется только после успешной публикации. Дневной лимит считается
+    по нему, иначе один провал скачивания съедал бы сутки без единого фильма."""
 
     __tablename__ = "reposted_videos"
 
@@ -160,6 +165,7 @@ class RepostedVideo(Base):
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
     video_ref: Mapped[str] = mapped_column(String(100))
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )

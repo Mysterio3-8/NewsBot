@@ -26,6 +26,8 @@ OWNER_ENV = "CONTROL_BOT_OWNER_ID"
 
 LAST_DISK_ALERT_KEY = "last_disk_alert_at"
 LAST_SILENCE_ALERT_KEY = "last_silence_alert_at"
+LAST_FILM_ALERT_KEY = "last_film_alert_at"
+LAST_CLIP_ALERT_KEY = "last_clip_alert_at"
 ALERT_COOLDOWN_HOURS = 6
 """Пауза между повторами одной и той же тревоги.
 
@@ -103,6 +105,21 @@ def build_disk_alert(status: DiskStatus, freed_mb: float) -> str:
         "Проверить: /disk в боте, дальше — журналы systemd и каталоги других софтов."
     )
     return "\n".join(lines)
+
+
+def build_video_failure_alert(channel_name: str, stage: str, reason: str) -> str:
+    """Текст тревоги о невышедшем фильме/клипе.
+
+    Сторож тишины (heartbeat) этот случай не ловит принципиально: стена жива, текстовые
+    посты идут — молчит только тяжёлая часть. Отсюда и жалобы владельца вида «в кино
+    только посты»: поломка была видна лишь глазами и лишь через сутки. Причина пишется
+    в текст целиком — чтобы не лезть за ней в журнал на сервер, куда сейчас нет SSH."""
+    return (
+        f"🎬 {channel_name}: {stage} не вышел.\n"
+        f"Причина: {reason}\n"
+        "Сутки не закрыты — софт возьмёт следующее видео по зазору. "
+        "Если повторяется, смотреть journalctl -u news-rewriter-bot."
+    )
 
 
 def alert_once(repo: Repository, text: str, key: str, now: datetime.datetime | None = None) -> bool:

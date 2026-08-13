@@ -53,7 +53,7 @@ def init_db(engine) -> None:
     миграция без Alembic, т.к. схема пока меняется нечасто).
     """
     Base.metadata.create_all(engine)
-    _add_missing_columns(engine)
+    _backfill_new_columns(engine, _add_missing_columns(engine))
     _ensure_default_channel(engine)
 
 
@@ -82,9 +82,12 @@ def _ensure_default_channel(engine) -> None:
         session.commit()
 
 
-def _add_missing_columns(engine) -> None:
+def _add_missing_columns(engine) -> set[tuple[str, str]]:
+    """Долить недостающие колонки. Возвращает пары (таблица, колонка), которых в БД не
+    было, — по ним видно, что новую колонку надо ещё и заполнить (см. _backfill_new_columns)."""
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
+    added: set[tuple[str, str]] = set()
 
     with engine.connect() as connection:
         for table in Base.metadata.sorted_tables:
@@ -98,6 +101,25 @@ def _add_missing_columns(engine) -> None:
                 connection.execute(
                     text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {column_type}")
                 )
+                added.add((table.name, column.name))
+        connection.commit()
+    return added
+
+
+def _backfill_new_columns(engine, added: set[tuple[str, str]]) -> None:
+    """Разово заполнить колонки, добавленные к УЖЕ существующим строкам.
+
+    `reposted_videos.published_at` появилась позже самой таблицы. Строки, лежавшие в
+    проде до неё, считаем вышедшими: подавляющее большинство фильмов публиковалось
+    штатно, а пустая колонка обнулила бы дневной счётчик задним числом — канал получил бы
+    лишний фильм в день релиза. Выполняется ровно один раз: на втором запуске колонка уже
+    есть и в `added` не попадает."""
+    if ("reposted_videos", "published_at") not in added:
+        return
+    with engine.connect() as connection:
+        connection.execute(
+            text("UPDATE reposted_videos SET published_at = created_at WHERE published_at IS NULL")
+        )
         connection.commit()
 
 
@@ -230,16 +252,33 @@ class Repository:
                 .scalar()
             )
 
+    def mark_video_published(self, *, channel_id: int, video_ref: str) -> None:
+        """Отметить, что видео реально вышло на стену. До этого запись существует, но
+        днём не считается — см. RepostedVideo."""
+        with self._session_factory() as session:
+            session.query(RepostedVideo).filter(
+                RepostedVideo.channel_id == channel_id,
+                RepostedVideo.video_ref == video_ref,
+                RepostedVideo.published_at.is_(None),
+            ).update({RepostedVideo.published_at: datetime.datetime.utcnow()})
+            session.commit()
+
     def count_reposted_videos_since(
         self, channel_id: int, since: datetime.datetime
     ) -> int:
-        """Сколько видео канал опубликовал с момента `since` — дневной лимит видео."""
+        """Сколько видео канал ОПУБЛИКОВАЛ с момента `since` — дневной лимит видео.
+
+        Считаются только вышедшие: взятая, но не доехавшая до стены запись (не скачался
+        фильм, отказал VK) не должна закрывать сутки. Иначе любая осечка на тяжёлом шаге
+        оставляла канал без фильма до завтра, и заметить это было нечем — текстовые посты
+        продолжали идти, сторож тишины молчал."""
         with self._session_factory() as session:
             return (
                 session.query(func.count(RepostedVideo.id))
                 .filter(
                     RepostedVideo.channel_id == channel_id,
                     RepostedVideo.created_at >= since,
+                    RepostedVideo.published_at.is_not(None),
                 )
                 .scalar()
                 or 0
