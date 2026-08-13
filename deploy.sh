@@ -10,16 +10,26 @@ HOST="news-rewriter-vps"
 REMOTE_DIR="/opt/news-rewriter"
 SERVICE="news-rewriter-bot.service"
 
-# ⚠️ ssh из Git Bash НЕ читает ~/.ssh/config, если имя пользователя Windows написано
-# кириллицей: msys-сборка OpenSSH не находит домашний каталог, читает только
-# /etc/ssh/ssh_config и падает с «Could not resolve hostname news-rewriter-vps».
-# Хук post-commit работает именно в этой оболочке, поэтому «коммит = деплой» молча не
-# срабатывал (обнаружено 2026-08-11). Передаём конфиг явно, если он существует.
-SSH=(ssh)
-if [ -f "$HOME/.ssh/config" ]; then
+# ⚠️ ssh из Git Bash не работает, когда имя пользователя Windows написано КИРИЛЛИЦЕЙ.
+# msys-сборка OpenSSH не находит домашний каталог: сначала это выглядело как «Could not
+# resolve hostname» (не читается ~/.ssh/config), потом — «Host key verification failed»
+# (не читается known_hosts), а после явных -F/-o упёрлось в ключ: путь к нему msys
+# отдаёт в своей кодировке (`/c/Users/\310\353\374\377/.ssh/id_ed25519`), и файла по
+# такому пути нет. Хук post-commit крутится именно в этой оболочке — отсюда и «коммит =
+# деплой» не работал ВООБЩЕ (2026-08-11 … 2026-08-13).
+#
+# Решение: звать ВИНДОВЫЙ ssh.exe, если он есть. Он читает те же ~/.ssh/config и
+# known_hosts, но домашний каталог берёт из Windows и кириллицу переваривает.
+# Git Bash остаётся запасным путём — на машине без OpenSSH ничего не ломается.
+WIN_SSH="/c/Windows/System32/OpenSSH/ssh.exe"
+if [ -x "$WIN_SSH" ]; then
+  SSH=("$WIN_SSH")
+elif [ -f "$HOME/.ssh/config" ]; then
   # known_hosts указываем тем же явным путём: иначе ssh ищет его по ненайденному
   # домашнему каталогу, не находит запись сервера и падает «Host key verification failed».
   SSH=(ssh -F "$HOME/.ssh/config" -o "UserKnownHostsFile=$HOME/.ssh/known_hosts")
+else
+  SSH=(ssh)
 fi
 ssh() { command "${SSH[@]}" "$@"; }
 

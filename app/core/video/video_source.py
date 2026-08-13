@@ -80,7 +80,19 @@ def source_video_from_item(item: dict[str, Any]) -> SourceVideo:
     )
 
 
-def list_youtube_channel_videos(channel_url: str, *, count: int = 20) -> list[dict[str, str]]:
+CHANNEL_LOOKBACK = 200
+"""Сколько последних видео канала просматривать в поиске неопубликованного.
+
+Было 20 — и этого хватило, чтобы Кино встало на трое суток при источнике на тысячу
+фильмов (13.08.2026). Каждая неудачная попытка помечает видео взятым, окно в 20 записей
+выгорает за пару недель, и дальше софт честно пишет «новых видео в источнике нет», хотя
+на канале их сотни. Плоское извлечение — один запрос независимо от глубины, поэтому
+цена окна почти нулевая, а запас — месяцы."""
+
+
+def list_youtube_channel_videos(
+    channel_url: str, *, count: int = CHANNEL_LOOKBACK
+) -> list[dict[str, str]]:
     """Список видео канала (новые первыми, "плоское" извлечение — без скачивания и без
     полных метаданных каждого видео, быстрый один запрос). Возвращает
     [{"id", "title", "url"}, ...]."""
@@ -122,7 +134,7 @@ def fetch_youtube_video_details(video_id: str) -> SourceVideo:
 
 
 def pick_unreposted_youtube(
-    channel_url: str, reposted_refs: set[str], *, count: int = 20
+    channel_url: str, reposted_refs: set[str], *, count: int = CHANNEL_LOOKBACK
 ) -> SourceVideo | None:
     """Самое свежее видео канала, которое ещё не публиковалось. Полные метаданные
     запрашиваются только для кандидата (не для всего списка — экономия запросов)."""
