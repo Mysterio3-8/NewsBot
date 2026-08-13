@@ -220,6 +220,23 @@ def test_empty_source_does_not_alert(tmp_path):
     assert alerts == []
 
 
+def test_kino_diag_separates_taken_from_published(tmp_path):
+    """/kino — SSH-свободный ответ на «почему нет фильмов»: видно взятые, но не вышедшие."""
+    from app.control_bot import render_video_diag
+
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    repo.add_reposted_video(channel_id=channel.id, video_ref="yt_ok", title="Вышедший")
+    repo.mark_video_published(channel_id=channel.id, video_ref="yt_ok")
+    repo.add_reposted_video(channel_id=channel.id, video_ref="yt_fail", title="Застрявший")
+
+    text = render_video_diag(repo)
+
+    assert "✅ вышел — Вышедший" in text
+    assert "⛔ взят, но НЕ вышел — Застрявший" in text
+    assert "ни один клип не ждёт публикации" in text
+
+
 def test_alert_failure_does_not_break_the_job(tmp_path):
     """Тревога — способ УЗНАТЬ о поломке, а не ещё одна причина уронить джоб."""
     repo = _repo(tmp_path)

@@ -114,7 +114,8 @@ def test_build_dispatcher_registers_media_handler():
     # +1 message (FSM ввода текста шаблона — редактор промптов из бота) = 44;
     # +1 message (FSM ввода лимита внешнего софта через контракт) = 45;
     # +1 команда /diag (слепок настроек каналов из прод-БД, 2026-08-12) = 46
-    assert len(dp.message.handlers) == 46
+    # +1 команда /kino (что взято/вышло/застряло по фильмам и клипам, 2026-08-13) = 47
+    assert len(dp.message.handlers) == 47
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток

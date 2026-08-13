@@ -321,6 +321,28 @@ class Repository:
             session.refresh(clip)
             return clip
 
+    def list_recent_reposted_videos(self, limit: int = 10) -> list[RepostedVideo]:
+        """Последние взятые видео всех каналов — для диагностики «почему нет фильмов».
+        Взятое без `published_at` и есть невышедший фильм."""
+        with self._session_factory() as session:
+            return (
+                session.query(RepostedVideo)
+                .order_by(RepostedVideo.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+    def list_pending_clips(self, limit: int = 10) -> list[ClipSegment]:
+        """Клипы, ждущие своего времени (или зависшие в плане)."""
+        with self._session_factory() as session:
+            return (
+                session.query(ClipSegment)
+                .filter(ClipSegment.published_at.is_(None))
+                .order_by(ClipSegment.scheduled_at)
+                .limit(limit)
+                .all()
+            )
+
     def list_due_clips(self, now: datetime.datetime) -> list[ClipSegment]:
         """Клипы, чьё запланированное время публикации наступило, но ещё не опубликованы."""
         with self._session_factory() as session:

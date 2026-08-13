@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import json
 import logging
 import os
@@ -92,6 +93,7 @@ HELP_TEXT = (
     "/maxposts <n> — лимит постов в день\n"
     "/disk — занятое место и уборка временных файлов\n"
     "/diag — что реально применено у каналов в прод-БД (SEO, лимиты, видео)\n"
+    "/kino — фильмы и клипы: что взято, что вышло, что застряло\n"
     "\nУправление VK Nature Bot (отдельный процесс, свой репозиторий):\n"
     "/nature_run — запустить\n"
     "/nature_stop — остановить\n"
@@ -704,6 +706,40 @@ def render_channels_diag(repo: Repository) -> str:
     return "🔧 Каналы в прод-БД:\n\n" + "\n\n".join(lines)
 
 
+def render_video_diag(repo: Repository, *, now: datetime.datetime | None = None) -> str:
+    """Что произошло с фильмами и клипами — без SSH и без журналов.
+
+    Отвечает ровно на жалобу «в кино только посты, фильмов и клипов нет». Ключевая
+    строка — «взят, но НЕ вышел»: видео помечается взятым до скачивания, поэтому такая
+    запись означает обрыв на тяжёлом шаге (чаще всего YouTube требует подтверждения
+    «я не бот» с серверного IP), а не отсутствие контента в источнике."""
+    now = now or datetime.datetime.utcnow()
+    videos = repo.list_recent_reposted_videos(limit=8)
+    lines = ["🎬 Фильмы (последние взятые):"]
+    if not videos:
+        lines.append("   пусто — ни одного видео не бралось")
+    for video in videos:
+        mark = "✅ вышел" if video.published_at else "⛔ взят, но НЕ вышел"
+        lines.append(f"   {video.created_at:%d.%m %H:%M} {mark} — {video.title or video.video_ref}")
+
+    clips = repo.list_pending_clips(limit=8)
+    lines.append("")
+    lines.append("✂️ Клипы в плане:")
+    if not clips:
+        lines.append("   пусто — ни один клип не ждёт публикации")
+    for clip in clips:
+        when = f"{clip.scheduled_at:%d.%m %H:%M}" if clip.scheduled_at else "без времени"
+        overdue = (
+            " (время прошло)"
+            if clip.scheduled_at is not None and clip.scheduled_at <= now
+            else ""
+        )
+        lines.append(f"   #{clip.id} на {when} UTC{overdue}")
+    lines.append("")
+    lines.append("Время в UTC. «Взят, но НЕ вышел» — обрыв на скачивании или публикации.")
+    return "\n".join(lines)
+
+
 def render_settings(config: AppConfig) -> str:
     """Текущие настройки темпа публикации — для /settings."""
     schedule = config.publishing.schedule
@@ -843,6 +879,11 @@ def build_dispatcher(
     async def on_diag(message: Message) -> None:
         if await guard(message):
             await message.answer(render_channels_diag(repo))
+
+    @dp.message(Command("kino"))
+    async def on_kino(message: Message) -> None:
+        if await guard(message):
+            await message.answer(render_video_diag(repo))
 
     @dp.message(Command("publish"))
     async def on_publish(message: Message) -> None:
