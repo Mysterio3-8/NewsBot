@@ -106,6 +106,25 @@ done
 # молчит»: очередь полна, таймер тикает, публикаций нет (инцидент 2026-08-11/12).
 # Файл машинно-специфичный, в git его нет — проверяем и говорим вслух.
 echo
+echo "==> PO-token провайдер (без него YouTube отдаёт одни раскадровки):"
+POT="${YT_POT_SCRIPT:-/opt/bgutil-pot/server/build/generate_once.js}"
+if [ -f "$POT" ]; then
+    echo "    скрипт на месте: $POT"
+    for venv in /opt/news-rewriter/venv /opt/yt-vk-publisher/venv; do
+        if "$venv/bin/pip" show yt-dlp-ejs >/dev/null 2>&1; then
+            echo "    $venv — yt-dlp-ejs есть"
+        else
+            echo "    !! $venv — НЕТ yt-dlp-ejs. Выполни: $venv/bin/pip install yt-dlp-ejs"
+        fi
+    done
+else
+    echo "    !! Скрипта $POT нет. Без него ни фильмы, ни треки не скачаются. Ставится так:"
+    echo "       git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil-pot"
+    echo "       cd /opt/bgutil-pot/server && npm install && npx tsc"
+    echo "       <venv>/bin/pip install bgutil-ytdlp-pot-provider yt-dlp-ejs"
+fi
+
+echo
 echo "==> Cookies YouTube:"
 COOKIES="${YT_COOKIES_FILE:-/root/yt-vk/cookies.txt}"
 if [ -f "$COOKIES" ]; then
