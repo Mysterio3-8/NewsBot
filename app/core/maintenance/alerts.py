@@ -75,7 +75,13 @@ def send_alert(repo: Repository, text: str) -> bool:
     return True
 
 
-def should_alert(repo: Repository, now: datetime.datetime, key: str = LAST_DISK_ALERT_KEY) -> bool:
+def should_alert(
+    repo: Repository,
+    now: datetime.datetime,
+    key: str = LAST_DISK_ALERT_KEY,
+    *,
+    cooldown_hours: float = ALERT_COOLDOWN_HOURS,
+) -> bool:
     """Прошла ли пауза с прошлой такой же тревоги. Метка битая → шлём."""
     raw = repo.get_setting(key)
     if not raw:
@@ -84,7 +90,7 @@ def should_alert(repo: Repository, now: datetime.datetime, key: str = LAST_DISK_
         last = datetime.datetime.fromisoformat(raw)
     except ValueError:
         return True
-    return (now - last) >= datetime.timedelta(hours=ALERT_COOLDOWN_HOURS)
+    return (now - last) >= datetime.timedelta(hours=cooldown_hours)
 
 
 def mark_alerted(repo: Repository, now: datetime.datetime, key: str = LAST_DISK_ALERT_KEY) -> None:
@@ -122,14 +128,21 @@ def build_video_failure_alert(channel_name: str, stage: str, reason: str) -> str
     )
 
 
-def alert_once(repo: Repository, text: str, key: str, now: datetime.datetime | None = None) -> bool:
+def alert_once(
+    repo: Repository,
+    text: str,
+    key: str,
+    now: datetime.datetime | None = None,
+    *,
+    cooldown_hours: float = ALERT_COOLDOWN_HOURS,
+) -> bool:
     """Отправить тревогу не чаще, чем раз в `ALERT_COOLDOWN_HOURS`.
 
     Пауза обязательна: сторожевые джобы ходят по расписанию, а поломка сама не
     рассасывается — без паузы владелец получал бы одно и то же сообщение каждый час и
     перестал бы их читать вовсе, что хуже, чем не слать их совсем."""
     now = now or datetime.datetime.utcnow()
-    if not should_alert(repo, now, key):
+    if not should_alert(repo, now, key, cooldown_hours=cooldown_hours):
         return False
     if not send_alert(repo, text):
         return False

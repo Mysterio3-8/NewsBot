@@ -84,9 +84,14 @@ DAILY_VIDEO_YOUTUBE_CHANNELS = [
     "https://www.youtube.com/@mmalive1830",
     "https://www.youtube.com/@KINOTEKA-2030",
     "https://www.youtube.com/@%D0%9A%D0%B8%D0%BD%D0%BE%D0%BA%D0%BE%D1%82-%D1%818%D0%BF",
-    # Добавлен 2026-08-14 владельцем, когда прежние четыре канала выработались: каждая
+    # Добавлены 2026-08-14 владельцем, когда прежние четыре канала выработались: каждая
     # неудачная попытка помечает ролик взятым, и за две недели окно поиска выгорело.
+    # Все пять проверены живым запросом с сервера — списки роликов читаются.
     "https://www.youtube.com/@Pomidorrro",
+    "https://www.youtube.com/@KINO_PORT",
+    "https://www.youtube.com/@%D0%9E%D0%91%D0%97%D0%9E%D0%A0%D0%A1%D0%95%D0%A0%D0%98%D0%90%D0%9B%D0%9E%D0%92%D0%98%D0%A4%D0%98%D0%9B%D0%AC%D0%9C%D0%9E%D0%92-%D0%BB6%D1%8C",
+    "https://www.youtube.com/@topseriestop",
+    "https://www.youtube.com/@watchaction",
 ]
 
 # Логотип в правом верхнем углу вертикальных клипов (ТЗ 2026-07-21) — тот же кино-логотип,

@@ -35,7 +35,6 @@ from app.core.publishing.youtube_description import (
     build_youtube_title,
 )
 from app.core.maintenance.alerts import (
-    LAST_CLIP_ALERT_KEY,
     LAST_FILM_ALERT_KEY,
     alert_once,
     build_video_failure_alert,
@@ -87,6 +86,11 @@ CLIP_MAX_SPACING_MINUTES = 1170
 # Клип, который не удалось опубликовать сутки, считаем протухшим — не долбим VK вечно.
 CLIP_EXPIRE_HOURS = 24
 
+VIDEO_ALERT_COOLDOWN_HOURS = 24
+"""Пауза между тревогами о фильме. Сутки, а не шесть часов: фильм ровно один в день,
+и вторая тревога за те же сутки говорила бы о той же поломке (ТЗ 2026-08-14 «много
+тревог не надо»)."""
+
 
 def plan_clip_times(
     now: datetime.datetime,
@@ -108,14 +112,22 @@ def plan_clip_times(
 
 
 def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason: str) -> None:
-    """Сказать владельцу, что тяжёлая часть дня не вышла. Никогда не поднимает исключение
-    и никогда не заменяет собой запись в журнале: тревога — способ УЗНАТЬ о поломке, а
-    разбираться всё равно по журналу."""
+    """Сказать владельцу, что фильм не вышел. Никогда не поднимает исключение и никогда
+    не заменяет собой запись в журнале: тревога — способ УЗНАТЬ о поломке, а разбираться
+    всё равно по журналу.
+
+    ТЗ владельца 2026-08-14: «много тревог не надо». Поэтому ходит ОДНА тревога — про
+    фильм, и не чаще раза в сутки (`VIDEO_ALERT_COOLDOWN_HOURS`). Клипы своей тревоги не
+    имеют: без фильма их не бывает по построению, значит сообщение о них всегда было бы
+    вторым про одну и ту же поломку."""
+    if stage != "фильм":
+        return
     try:
         alert_once(
             repo,
             build_video_failure_alert(channel_name, stage, reason),
-            LAST_FILM_ALERT_KEY if stage == "фильм" else LAST_CLIP_ALERT_KEY,
+            LAST_FILM_ALERT_KEY,
+            cooldown_hours=VIDEO_ALERT_COOLDOWN_HOURS,
         )
     except Exception:  # noqa: BLE001 — сбой уведомления не должен ронять видео-джоб
         logger.exception("Тревога о видео не отправлена")

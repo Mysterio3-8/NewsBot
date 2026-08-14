@@ -2017,12 +2017,11 @@ def build_dispatcher(
         await _show_soft(cb, soft, header=render_soft_contract(manager_repo, soft_id))
         await cb.answer()
 
-    @dp.message(F.video | F.photo | F.document)
-    async def on_media(message: Message) -> None:
-        if not await guard(message):
-            return
-        await _handle_uniquify(message.bot, message)
-
+    # Автоуникализация присланного медиа ОТКЛЮЧЕНА (ТЗ владельца 2026-08-14:
+    # «уникализатор не нужен»). Хендлер снят целиком, а не спрятан за проверками:
+    # именно он перехватывал сборник, который Музыка кладёт в этот же чат, и пытался
+    # скачать 130 МБ через Bot API с потолком 20 МБ. Функции `uniquify_media_file` и
+    # `_handle_uniquify` оставлены — их зовёт прод-пайплайн и ручные сценарии.
     return dp
 
 

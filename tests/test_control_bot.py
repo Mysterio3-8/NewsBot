@@ -103,7 +103,7 @@ def test_uniquify_media_file_delegates_with_default_count(tmp_path, monkeypatch)
     assert captured["count"] == bot.UNIQUIFY_VARIANTS
 
 
-def test_build_dispatcher_registers_media_handler():
+def test_build_dispatcher_registers_expected_handlers():
     from unittest.mock import Mock
 
     dp = bot.build_dispatcher(Mock(), Mock(), "config.yaml")
@@ -115,7 +115,9 @@ def test_build_dispatcher_registers_media_handler():
     # +1 message (FSM ввода лимита внешнего софта через контракт) = 45;
     # +1 команда /diag (слепок настроек каналов из прод-БД, 2026-08-12) = 46
     # +1 команда /kino (что взято/вышло/застряло по фильмам и клипам, 2026-08-13) = 47
-    assert len(dp.message.handlers) == 47
+    # −1 хендлер автоуникализации присланного медиа (ТЗ 2026-08-14 «уникализатор
+    # не нужен»; он же перехватывал сборник Музыки, приходящий в этот чат) = 46
+    assert len(dp.message.handlers) == 46
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток

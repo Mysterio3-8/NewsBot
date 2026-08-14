@@ -136,8 +136,11 @@ def test_failed_publish_does_not_close_the_day(tmp_path):
     assert "[214]" in alerts[0][1]
 
 
-def test_clip_cutting_failure_alerts_owner(tmp_path):
-    """Фильм вышел, клипы — нет. День закрыт (фильм-то на стене), но владелец узнаёт."""
+def test_clip_failure_does_not_alert(tmp_path):
+    """ТЗ 2026-08-14 «много тревог не надо»: про клипы отдельной тревоги нет.
+
+    Без фильма клипов не бывает по построению, поэтому сообщение о них всегда было бы
+    вторым про одну и ту же поломку. День при этом закрыт — фильм-то на стене."""
     repo = _repo(tmp_path)
     channel = _kino_channel(repo, clips=2)
 
@@ -147,11 +150,10 @@ def test_clip_cutting_failure_alerts_owner(tmp_path):
     alerts = _run(repo, channel, FakePublisher(), tmp_path, cut=boom)
 
     assert repo.count_reposted_videos_since(channel.id, _today()) == 1
-    assert len(alerts) == 1
-    assert "ffmpeg упал" in alerts[0][1]
+    assert alerts == []
 
 
-def test_expired_clip_alerts_owner(tmp_path):
+def test_expired_clip_does_not_alert(tmp_path):
     repo = _repo(tmp_path)
     channel = _kino_channel(repo, clips=1)
     now = datetime.datetime.utcnow()
@@ -167,8 +169,14 @@ def test_expired_clip_alerts_owner(tmp_path):
                side_effect=lambda repo_, text, key, **kw: alerts.append((key, text)) or True):
         publish_due_clips(repo, vk_publisher_for=lambda channel_: FakePublisher(), now=now)
 
-    assert len(alerts) == 1
-    assert "снят с плана" in alerts[0][1]
+    assert alerts == []
+
+
+def test_film_alert_waits_a_full_day(tmp_path):
+    """Фильм ровно один в сутки — вторая тревога за те же сутки была бы про ту же поломку."""
+    from app.core.video.daily_video_repost import VIDEO_ALERT_COOLDOWN_HOURS
+
+    assert VIDEO_ALERT_COOLDOWN_HOURS == 24
 
 
 def test_unreadable_sources_alert_owner(tmp_path):
