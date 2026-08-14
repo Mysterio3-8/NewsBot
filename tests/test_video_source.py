@@ -162,3 +162,46 @@ def test_pick_unreposted_youtube_skips_video_when_details_fetch_fails():
 
     assert video is not None
     assert video.ref == "youtube_ok"
+
+
+def test_metadata_failures_stop_the_scan(monkeypatch):
+    """Перебор не должен превращаться во всплеск: три отказа подряд — стоп.
+
+    14.08.2026 именно перебор захлебнулся на прокси — сотни запросов подряд закрыли
+    выход, хотя минутой позже те же ролики отдавались."""
+    from app.core.video import video_source
+
+    entries = [{"id": f"vid{i}", "title": "", "url": ""} for i in range(50)]
+    monkeypatch.setattr(video_source, "list_youtube_channel_videos", lambda *a, **kw: entries)
+    calls = []
+
+    def always_fails(video_id):
+        calls.append(video_id)
+        raise RuntimeError("Sign in to confirm you're not a bot")
+
+    monkeypatch.setattr(video_source, "fetch_youtube_video_details", always_fails)
+
+    assert video_source.pick_unreposted_youtube("https://youtube.com/@x", set()) is None
+    assert len(calls) == video_source.MAX_CONSECUTIVE_METADATA_FAILURES
+
+
+def test_single_failure_does_not_stop_the_scan(monkeypatch):
+    """Один битый ролик — не повод бросать канал: счётчик сбрасывается на успехе."""
+    from app.core.video import video_source
+    from app.core.video.video_source import SourceVideo
+
+    entries = [{"id": "плохой", "title": "", "url": ""}, {"id": "хороший", "title": "", "url": ""}]
+    monkeypatch.setattr(video_source, "list_youtube_channel_videos", lambda *a, **kw: entries)
+
+    def fetch(video_id):
+        if video_id == "плохой":
+            raise RuntimeError("возрастное ограничение")
+        return SourceVideo(
+            ref="youtube_хороший", title="Фильм", description="", duration_seconds=3600,
+            direct_urls={}, page_url="https://youtube.com/watch?v=хороший",
+        )
+
+    monkeypatch.setattr(video_source, "fetch_youtube_video_details", fetch)
+
+    picked = video_source.pick_unreposted_youtube("https://youtube.com/@x", set())
+    assert picked is not None and picked.ref == "youtube_хороший"

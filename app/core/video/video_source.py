@@ -185,7 +185,7 @@ def list_youtube_channel_videos(
     import yt_dlp
 
     videos_url = channel_url.rstrip("/") + "/videos"
-    options = ytdlp_options(extract_flat="in_playlist", playlistend=count)
+    options = ytdlp_options(extract_flat="in_playlist", playlistend=count, **METADATA_THROTTLE)
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(videos_url, download=False)
     entries = info.get("entries") or [] if info else []
@@ -206,7 +206,7 @@ def fetch_youtube_video_details(video_id: str) -> SourceVideo:
     import yt_dlp
 
     url = f"https://www.youtube.com/watch?v={video_id}"
-    options = ytdlp_options(skip_download=True)
+    options = ytdlp_options(skip_download=True, **METADATA_THROTTLE)
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
     return SourceVideo(
@@ -219,11 +219,32 @@ def fetch_youtube_video_details(video_id: str) -> SourceVideo:
     )
 
 
+METADATA_THROTTLE = {"sleep_interval_requests": 2}
+"""Пауза между запросами МЕТАДАННЫХ. Ровно там, где раньше был всплеск: перечисление
+канала и опрос кандидатов идут подряд десятками, а скачивание фильма — одно в сутки.
+
+⚠️ В опции скачивания это не ставится специально: фильм тянется восемьсот с лишним
+фрагментов, и пауза в 2 секунды на каждый растянула бы полтора часа вместо трёх минут."""
+
+MAX_CONSECUTIVE_METADATA_FAILURES = 3
+"""Сколько подряд идущих отказов терпим, прежде чем бросить канал.
+
+Без этого предохранителя перебор кандидатов превращался во ВСПЛЕСК: при окне в 1000
+роликов один отказ вёл к следующему запросу, и так сотни раз подряд. Ровно этим 14.08
+захлебнулся первый прогон через прокси — YouTube временно закрыл выход, хотя минутой
+позже те же ролики отдавались нормально. То есть перебор сам создавал ту поломку, от
+которой пытался уйти.
+
+Три отказа подряд — это уже не «попался неудачный ролик», а «источник или выход не
+отдаёт»; продолжать бессмысленно и вредно."""
+
+
 def pick_unreposted_youtube(
     channel_url: str, reposted_refs: set[str], *, count: int = CHANNEL_LOOKBACK
 ) -> SourceVideo | None:
     """Самое свежее видео канала, которое ещё не публиковалось. Полные метаданные
     запрашиваются только для кандидата (не для всего списка — экономия запросов)."""
+    failures = 0
     for entry in list_youtube_channel_videos(channel_url, count=count):
         ref = f"youtube_{entry['id']}"
         if ref in reposted_refs:
@@ -231,8 +252,17 @@ def pick_unreposted_youtube(
         try:
             video = fetch_youtube_video_details(entry["id"])
         except Exception as error:
+            failures += 1
             logger.warning("YouTube-видео %s: не удалось получить метаданные: %s", ref, error)
+            if failures >= MAX_CONSECUTIVE_METADATA_FAILURES:
+                logger.error(
+                    "YouTube-канал %s: %d отказа подряд — прекращаем перебор, чтобы не"
+                    " добить выход всплеском запросов",
+                    channel_url, failures,
+                )
+                return None
             continue
+        failures = 0  # ролик отдался — счётчик подряд идущих отказов сбрасывается
         if video.duration_seconds <= 0:
             continue
         return video
