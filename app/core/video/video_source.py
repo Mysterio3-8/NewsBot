@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,12 +30,42 @@ class VideoDownloadError(Exception):
     """Видео не удалось скачать ни прямой ссылкой, ни через yt-dlp."""
 
 
+COOKIES_MASTER_ENV = "YT_COOKIES_MASTER"
+"""Эталонный файл куки. yt-dlp ПЕРЕЗАПИСЫВАЕТ тот cookiefile, который ему дали: после
+сессии он выгружает туда свою банку. Так эталон и худеет — замерено на проде 2026-08-14:
+17 879 байт и 119 записей превратились в 3 654 и 25. Тем же путём умер предыдущий файл,
+от которого остались 13 записей без `SID` и `LOGIN_INFO`, и это выглядело как «владелец
+прислал плохие куки». Поэтому yt-dlp получает КОПИЮ, а эталон лежит нетронутым.
+
+Переменная не задана — работаем по-старому, прямо с `YT_COOKIES_FILE`."""
+
 POT_SCRIPT_ENV = "YT_POT_SCRIPT"
 DEFAULT_POT_SCRIPT = "/opt/bgutil-pot/server/build/generate_once.js"
 JS_RUNTIMES = {"node": {}, "deno": {}}
 """Движки для решения n-challenge. По умолчанию yt-dlp ищет только Deno, а на сервере
 стоит Node — отсюда и брались «форматы отсутствуют» при живых куках. Перечисляем оба:
 yt-dlp берёт тот, что найдёт, и молча живёт дальше, если нет ни одного."""
+
+
+def _prepare_cookiefile() -> str | None:
+    """Путь к файлу куки для yt-dlp. None — идём анонимно.
+
+    Есть эталон (`YT_COOKIES_MASTER`) — копируем его поверх рабочего файла перед каждым
+    вызовом: пусть yt-dlp портит копию. Копия дешёвая (десятки килобайт), а расплата за
+    испорченный эталон — сутки без фильмов и час на поиск причины."""
+    working = os.environ.get("YT_COOKIES_FILE")
+    if not working:
+        return None
+    master = os.environ.get(COOKIES_MASTER_ENV)
+    if master and Path(master).exists():
+        try:
+            shutil.copyfile(master, working)
+        except OSError as error:  # копия не удалась — работаем тем, что есть
+            logger.warning("Не удалось обновить куки из эталона %s: %s", master, error)
+    if Path(working).exists():
+        return working
+    logger.warning("YT_COOKIES_FILE указывает на несуществующий файл: %s", working)
+    return None
 
 
 def ytdlp_options(**overrides) -> dict[str, Any]:
@@ -57,11 +88,9 @@ def ytdlp_options(**overrides) -> dict[str, Any]:
     Любой из трёх отсутствует — ходим как раньше: опция просто не выставляется, код не
     падает. Это важно для дев-машины, где ни провайдера, ни node может не быть."""
     options: dict[str, Any] = {"quiet": True, "no_warnings": True, "js_runtimes": JS_RUNTIMES}
-    cookies_path = os.environ.get("YT_COOKIES_FILE")
-    if cookies_path and Path(cookies_path).exists():
+    cookies_path = _prepare_cookiefile()
+    if cookies_path:
         options["cookiefile"] = cookies_path
-    elif cookies_path:
-        logger.warning("YT_COOKIES_FILE указывает на несуществующий файл: %s", cookies_path)
 
     pot_script = os.environ.get(POT_SCRIPT_ENV, DEFAULT_POT_SCRIPT)
     if pot_script and Path(pot_script).exists():

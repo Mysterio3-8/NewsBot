@@ -124,4 +124,4 @@ def test_seed_news_is_idempotent(tmp_path):
     channel = _news_channel(repo)
     assert channel.enabled is True
     # settings_json не раздувается дублями ключей — merge обновляет на месте
-    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 10
+    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 5

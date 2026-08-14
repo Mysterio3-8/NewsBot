@@ -63,3 +63,36 @@ def test_missing_pot_script_does_not_break_options(tmp_path, monkeypatch):
     monkeypatch.setenv(POT_SCRIPT_ENV, str(tmp_path / "нет-такого.js"))
 
     assert "extractor_args" not in ytdlp_options()
+
+
+def test_master_cookies_are_restored_before_each_call(tmp_path, monkeypatch):
+    """yt-dlp пишет свою банку обратно в cookiefile и так съедает эталон: на проде
+    17 879 байт превратились в 3 654 за одну сессию. Эталон обязан пережить это."""
+    from app.core.video.video_source import COOKIES_MASTER_ENV, ytdlp_options
+
+    master = tmp_path / "эталон.txt"
+    master.write_text("# Netscape HTTP Cookie File\nполный набор\n", encoding="utf-8")
+    working = tmp_path / "рабочая.txt"
+    working.write_text("огрызок\n", encoding="utf-8")
+    monkeypatch.setenv("YT_COOKIES_FILE", str(working))
+    monkeypatch.setenv(COOKIES_MASTER_ENV, str(master))
+
+    assert ytdlp_options()["cookiefile"] == str(working)
+    assert working.read_text(encoding="utf-8") == master.read_text(encoding="utf-8")
+
+    # yt-dlp испортил рабочую копию — следующий вызов восстанавливает её из эталона
+    working.write_text("испорчено\n", encoding="utf-8")
+    ytdlp_options()
+    assert "полный набор" in working.read_text(encoding="utf-8")
+
+
+def test_without_master_working_file_is_used_as_is(tmp_path, monkeypatch):
+    from app.core.video.video_source import COOKIES_MASTER_ENV, ytdlp_options
+
+    working = tmp_path / "куки.txt"
+    working.write_text("что есть\n", encoding="utf-8")
+    monkeypatch.setenv("YT_COOKIES_FILE", str(working))
+    monkeypatch.delenv(COOKIES_MASTER_ENV, raising=False)
+
+    assert ytdlp_options()["cookiefile"] == str(working)
+    assert working.read_text(encoding="utf-8") == "что есть\n"
