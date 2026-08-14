@@ -38,3 +38,28 @@ def test_overrides_win_over_defaults():
 
     assert options["skip_download"] is True
     assert options["quiet"] is False
+
+
+def test_pot_script_is_wired_when_present(tmp_path, monkeypatch):
+    """Без PO-token YouTube отдаёт одни раскадровки — проверено живыми вызовами
+    2026-08-14. Скрипт есть → опция выставлена."""
+    from app.core.video.video_source import POT_SCRIPT_ENV, ytdlp_options
+
+    script = tmp_path / "generate_once.js"
+    script.write_text("// заглушка", encoding="utf-8")
+    monkeypatch.setenv(POT_SCRIPT_ENV, str(script))
+
+    options = ytdlp_options()
+
+    assert options["extractor_args"]["youtubepot-bgutilscript"]["script_path"] == [str(script)]
+    # n-challenge решается внешним движком; yt-dlp по умолчанию ищет только Deno.
+    assert "node" in options["js_runtimes"]
+
+
+def test_missing_pot_script_does_not_break_options(tmp_path, monkeypatch):
+    """На дев-машине провайдера нет — опции просто не появляются, код не падает."""
+    from app.core.video.video_source import POT_SCRIPT_ENV, ytdlp_options
+
+    monkeypatch.setenv(POT_SCRIPT_ENV, str(tmp_path / "нет-такого.js"))
+
+    assert "extractor_args" not in ytdlp_options()
