@@ -50,18 +50,25 @@ yt-dlp берёт тот, что найдёт, и молча живёт даль
 def _prepare_cookiefile() -> str | None:
     """Путь к файлу куки для yt-dlp. None — идём анонимно.
 
-    Есть эталон (`YT_COOKIES_MASTER`) — копируем его поверх рабочего файла перед каждым
-    вызовом: пусть yt-dlp портит копию. Копия дешёвая (десятки килобайт), а расплата за
-    испорченный эталон — сутки без фильмов и час на поиск причины."""
+    Эталон (`YT_COOKIES_MASTER`) разворачивается ТОЛЬКО когда рабочего файла нет.
+
+    ⚠️ Именно «только когда нет», а не перед каждым вызовом — это проверено дорого.
+    yt-dlp переписывает выданный ему cookiefile своей банкой, и сперва казалось, что он
+    портит куки: файл худел с 17 879 байт до 3 654. На деле он их ОБНОВЛЯЕТ — YouTube
+    ротирует `__Secure-1PSIDTS`, и жить продолжает именно свежая банка. Возврат эталона
+    перед каждым вызовом откатывал ротацию, и авторизация отваливалась: живой перебор
+    показал, что ни одна из пяти сессий исходного файла в одиночку уже не проходит.
+    Эталон нужен для ПЕРВОГО запуска и как аварийная копия, а не как источник правды."""
     working = os.environ.get("YT_COOKIES_FILE")
     if not working:
         return None
     master = os.environ.get(COOKIES_MASTER_ENV)
-    if master and Path(master).exists():
+    if master and Path(master).exists() and not Path(working).exists():
         try:
             shutil.copyfile(master, working)
+            logger.info("Куки восстановлены из эталона %s", master)
         except OSError as error:  # копия не удалась — работаем тем, что есть
-            logger.warning("Не удалось обновить куки из эталона %s: %s", master, error)
+            logger.warning("Не удалось восстановить куки из эталона %s: %s", master, error)
     if Path(working).exists():
         return working
     logger.warning("YT_COOKIES_FILE указывает на несуществующий файл: %s", working)

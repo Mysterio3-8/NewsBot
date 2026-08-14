@@ -65,9 +65,12 @@ def test_missing_pot_script_does_not_break_options(tmp_path, monkeypatch):
     assert "extractor_args" not in ytdlp_options()
 
 
-def test_master_cookies_are_restored_before_each_call(tmp_path, monkeypatch):
-    """yt-dlp пишет свою банку обратно в cookiefile и так съедает эталон: на проде
-    17 879 байт превратились в 3 654 за одну сессию. Эталон обязан пережить это."""
+def test_master_seeds_cookies_only_when_working_file_is_missing(tmp_path, monkeypatch):
+    """Эталон — это семя первого запуска, а не источник правды.
+
+    yt-dlp переписывает cookiefile не портя его, а ОБНОВЛЯЯ: YouTube ротирует
+    `__Secure-1PSIDTS`. Возврат эталона перед каждым вызовом откатывал ротацию и ронял
+    авторизацию — проверено живьём 2026-08-14."""
     from app.core.video.video_source import COOKIES_MASTER_ENV, ytdlp_options
 
     master = tmp_path / "эталон.txt"
@@ -77,11 +80,12 @@ def test_master_cookies_are_restored_before_each_call(tmp_path, monkeypatch):
     monkeypatch.setenv("YT_COOKIES_FILE", str(working))
     monkeypatch.setenv(COOKIES_MASTER_ENV, str(master))
 
+    # рабочий файл на месте — не трогаем: там свежая ротация от yt-dlp
     assert ytdlp_options()["cookiefile"] == str(working)
-    assert working.read_text(encoding="utf-8") == master.read_text(encoding="utf-8")
+    assert working.read_text(encoding="utf-8") == "огрызок\n"
 
-    # yt-dlp испортил рабочую копию — следующий вызов восстанавливает её из эталона
-    working.write_text("испорчено\n", encoding="utf-8")
+    # рабочего файла нет — разворачиваем эталон
+    working.unlink()
     ytdlp_options()
     assert "полный набор" in working.read_text(encoding="utf-8")
 
