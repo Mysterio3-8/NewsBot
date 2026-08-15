@@ -277,10 +277,6 @@ NEWS_ANTIBAN = {
     # получается «час >= 9», ровно нужное.
     "quiet_start_hour": 9,
     "quiet_end_hour": 0,
-    # Ночная пауза снята по решению владельца («не надо ночную паузу, просто интервал»).
-    # Равные часы = окно выключено (rate_guard.is_quiet_now).
-    "quiet_start_hour": 0,
-    "quiet_end_hour": 0,
     "vk_upload_token_envs": NEWS_UPLOAD_POOL,
     "vk_token_daily_cap": VK_TOKEN_DAILY_CAP,
 }
