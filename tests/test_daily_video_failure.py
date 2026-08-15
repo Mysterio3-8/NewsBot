@@ -381,3 +381,29 @@ def test_broken_video_does_not_cost_the_day(tmp_path):
     assert repo.count_reposted_videos_since(channel.id, _today()) == 1
     assert repo.list_reposted_video_refs(channel.id) == {"youtube_битый", "youtube_живой"}
     assert alerts == []
+
+
+def test_clip_waits_for_the_channel_window(tmp_path):
+    """Клипы обязаны жить в окне суток канала. Раньше они его не знали вовсе: план
+    строится от момента выхода фильма, и первый клип 15.08 пришёлся на 06:34 МСК —
+    внутрь тишины Кино (00:00–09:00)."""
+    repo = _repo(tmp_path)
+    settings = ChannelSettings(daily_video_group=223779047, quiet_start_hour=0, quiet_end_hour=9)
+    channel = repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+    clip_file = tmp_path / "clip.mp4"
+    clip_file.write_bytes(b"clip")
+    night = datetime.datetime(2026, 8, 15, 3, 0)  # 06:00 МСК — тишина
+    repo.create_clip_segment(
+        channel_id=channel.id, video_ref="yt_1", start_seconds=0.0, end_seconds=35.0,
+        clip_path=str(clip_file), text="Текст", scheduled_at=night - datetime.timedelta(hours=1),
+    )
+    publisher = FakePublisher()
+
+    publish_due_clips(repo, vk_publisher_for=lambda channel_: publisher, now=night)
+    assert publisher.calls == []  # ждёт окна, но из плана не снят
+
+    day = datetime.datetime(2026, 8, 15, 9, 0)  # 12:00 МСК — окно открыто
+    publish_due_clips(repo, vk_publisher_for=lambda channel_: publisher, now=day)
+    assert len(publisher.calls) == 1

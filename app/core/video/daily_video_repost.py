@@ -28,6 +28,7 @@ from app.core.monitoring.vk_fetcher import VKFetcher
 from app.core.publishing.footer import FooterLinks, build_markdown_footer
 from app.core.publishing.telethon_video_publisher import TelethonVideoPublisher
 from app.core.publishing.vk_publisher import VKPublisher, VKPublishResult
+from app.core.publishing.rate_guard import is_quiet_now
 from app.core.publishing.vk_queue_service import _build_vk_publish_text
 from app.core.publishing.vk_token_pool import DEFAULT_DAILY_CAP, VkTokenPool
 from app.core.publishing.youtube_description import (
@@ -626,11 +627,21 @@ def publish_due_clips(
                 clip_path.unlink(missing_ok=True)
             continue
 
+        # Клипы обязаны жить в том же окне суток, что и остальные публикации канала.
+        # Раньше они его не знали вовсе: план строится от момента выхода фильма
+        # (`plan_clip_times`), и первый клип вышедшего 15.08 фильма пришёлся на 06:46 МСК —
+        # внутрь тишины Кино (00:00–09:00). Клип не теряется: он остаётся в плане и выйдет,
+        # как только окно откроется. Протухание (CLIP_EXPIRE_HOURS = 24 ч) это переживает —
+        # самое длинное ожидание при окне 9:00–24:00 составляет девять часов.
+        settings = ChannelSettings.from_json(channel.settings_json)
+        if is_quiet_now(now, settings.quiet_start_hour, settings.quiet_end_hour):
+            logger.info("Клип %d ждёт окна канала %s", clip.id, channel.name)
+            continue
+
         publisher = vk_publisher_for(channel)
         if publisher is None:
             logger.warning("Клип %d: publisher канала %s недоступен", clip.id, channel.name)
             continue
-        settings = ChannelSettings.from_json(channel.settings_json)
         if settings.video_as_post:
             result = publisher.publish(
                 group_id=int(channel.vk_destination),
