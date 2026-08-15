@@ -309,3 +309,27 @@ def test_alert_failure_does_not_break_the_job(tmp_path):
         )
 
     assert repo.count_reposted_videos_since(channel.id, _today()) == 0
+
+
+def test_postponed_film_is_returned_to_the_queue(tmp_path):
+    """Занятый VK-токен — не вина ролика. Фильм скачан зря, но не потерян."""
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+    publisher = FakePublisher(success=False, error="postponed: личный токен занят")
+
+    alerts = _run(repo, channel, publisher, tmp_path)
+
+    assert repo.list_reposted_video_refs(channel.id) == set()  # отметка снята
+    assert repo.count_reposted_videos_since(channel.id, _today()) == 0
+    assert alerts == []  # штатное состояние при одном аккаунте на четыре софта
+
+
+def test_rejected_film_keeps_its_mark(tmp_path):
+    """А вот отказ VK по содержимому отметку сохраняет — иначе качали бы по кругу."""
+    repo = _repo(tmp_path)
+    channel = _kino_channel(repo)
+
+    alerts = _run(repo, channel, FakePublisher(success=False, error="[214] доступ закрыт"), tmp_path)
+
+    assert repo.list_reposted_video_refs(channel.id) == {"-223779047_10"}
+    assert len(alerts) == 1

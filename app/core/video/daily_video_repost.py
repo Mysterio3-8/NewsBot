@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import random
 import re
 from pathlib import Path
@@ -48,6 +49,7 @@ from app.core.maintenance.cleanup import (
 from app.core.publishing.youtube_publisher import YouTubePublisher
 from app.core.seo.builder import build_video_seo_description
 from app.core.video.clip_cutter import cut_clips
+from app.core.video.proxy_rotation import pick_working_proxy
 from app.core.video.film_prep import prepare_film
 from app.core.video.watermark import probe_dimensions
 from app.core.video.video_source import (
@@ -109,6 +111,22 @@ def plan_clip_times(
         times.append(moment)
         moment += datetime.timedelta(minutes=rng.uniform(min_spacing_minutes, max_spacing_minutes))
     return times
+
+
+def ensure_working_proxy(repo: Repository) -> None:
+    """Перед тяжёлой работой убедиться, что выход прокси проходит барьер YouTube.
+
+    Ставит найденный адрес в `YT_PROXY` — дальше его подхватывает `ytdlp_options`, и
+    остальной код о ротации не знает вовсе. Проверка стоит один дешёвый запрос в сутки
+    (джоб фильма и так ходит раз в день), а спасает от простоя, который иначе чинился бы
+    руками через сутки после того, как владелец увидит пустую стену."""
+    try:
+        proxy = pick_working_proxy(repo)
+    except Exception:  # noqa: BLE001 — ротация не должна ронять день
+        logger.exception("Подбор прокси упал — идём с текущими настройками")
+        return
+    if proxy:
+        os.environ["YT_PROXY"] = proxy
 
 
 def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason: str) -> None:
@@ -202,6 +220,7 @@ def run_daily_video_repost(
     if not has_source or not channel.vk_destination:
         return
 
+    ensure_working_proxy(repo)
     video = _pick_video(repo, channel, settings, vk_fetcher)
     if video is None:
         logger.info("Видео-репост [%s]: новых видео в источнике нет", channel.name)
@@ -269,6 +288,18 @@ def run_daily_video_repost(
         )
         if not result.success:
             logger.error("Видео-репост [%s]: публикация не удалась: %s", channel.name, result.error)
+            # «postponed» — это занятый личный токен VK, а не проблема ролика. Пул
+            # проверяется ДО скачивания, но между проверкой и заливкой проходят минуты,
+            # и слот успевает уйти другому софту. Снимаем отметку: фильм скачан зря, но
+            # хотя бы не потерян — следующий заход возьмёт его снова. Тревогу тут не шлём,
+            # это штатное состояние при одном аккаунте на четыре софта.
+            if (result.error or "").startswith("postponed"):
+                repo.forget_reposted_video(channel_id=channel.id, video_ref=video.ref)
+                logger.info(
+                    "Видео-репост [%s]: %s возвращён в очередь — токен был занят",
+                    channel.name, video.ref,
+                )
+                return
             _alert_video_failure(repo, channel.name, "фильм", f"не опубликовался — {result.error}")
             return
         repo.mark_video_published(channel_id=channel.id, video_ref=video.ref)

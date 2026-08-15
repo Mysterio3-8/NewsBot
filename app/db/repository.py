@@ -233,6 +233,20 @@ class Repository:
             session.add(RepostedVideo(channel_id=channel_id, video_ref=video_ref, title=title))
             session.commit()
 
+    def forget_reposted_video(self, *, channel_id: int, video_ref: str) -> None:
+        """Снять отметку с невышедшего видео — чтобы его взяли снова.
+
+        Только для отказов, не связанных с самим роликом (занят VK-токен). Ролик,
+        который не скачался или отвергнут VK по содержимому, отметку СОХРАНЯЕТ: иначе
+        софт будет качать его по кругу, а это уже случалось (7 перезаливок за ночь)."""
+        with self._session_factory() as session:
+            session.query(RepostedVideo).filter(
+                RepostedVideo.channel_id == channel_id,
+                RepostedVideo.video_ref == video_ref,
+                RepostedVideo.published_at.is_(None),
+            ).delete()
+            session.commit()
+
     def list_reposted_video_refs(self, channel_id: int) -> set[str]:
         with self._session_factory() as session:
             rows = (
