@@ -28,6 +28,14 @@ class SoftContract:
     max_interval_minutes: int | None = None
     quiet_start_hour: int | None = None
     quiet_end_hour: int | None = None
+    sources_primary: tuple[str, ...] = ()
+    """Источники основного потока софта.
+
+    ⚠️ Имя нарочно НЕЙТРАЛЬНОЕ, а не «каналы YouTube» или «запросы SoundCloud»: менеджер
+    не знает и не должен знать внутреннюю схему софта — в этом весь смысл контракта.
+    Сопоставление делает сам софт (у Музыки primary → треки, secondary → сборники;
+    у Минусов primary → YouTube-канал, secondary не используется)."""
+    sources_secondary: tuple[str, ...] = ()
 
     @classmethod
     def from_config_json(cls, raw: str | None) -> "SoftContract":
@@ -38,24 +46,74 @@ class SoftContract:
         except json.JSONDecodeError:
             return cls()
         limits = data.get("limits", {}) if isinstance(data, dict) else {}
+        sources = data.get("sources", {}) if isinstance(data, dict) else {}
         return cls(
             max_posts_per_day=limits.get("max_posts_per_day"),
             min_interval_minutes=limits.get("min_interval_minutes"),
             max_interval_minutes=limits.get("max_interval_minutes"),
             quiet_start_hour=limits.get("quiet_start_hour"),
             quiet_end_hour=limits.get("quiet_end_hour"),
+            sources_primary=tuple(sources.get("primary") or ()),
+            sources_secondary=tuple(sources.get("secondary") or ()),
         )
 
+    LIMIT_FIELDS = (
+        "max_posts_per_day",
+        "min_interval_minutes",
+        "max_interval_minutes",
+        "quiet_start_hour",
+        "quiet_end_hour",
+    )
+
     def to_config_dict(self) -> dict:
-        """Только заданные поля — чтобы не забивать реестр None'ами."""
-        limits = {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
-        return {"limits": limits} if limits else {}
+        """Только заданные поля — чтобы не забивать реестр None'ами и пустыми списками."""
+        limits = {
+            name: getattr(self, name)
+            for name in self.LIMIT_FIELDS
+            if getattr(self, name) is not None
+        }
+        sources = {
+            key: list(value)
+            for key, value in (
+                ("primary", self.sources_primary),
+                ("secondary", self.sources_secondary),
+            )
+            if value
+        }
+        result: dict = {}
+        if limits:
+            result["limits"] = limits
+        if sources:
+            result["sources"] = sources
+        return result
 
     def to_config_json(self) -> str:
         return json.dumps(self.to_config_dict(), ensure_ascii=False)
 
     def is_empty(self) -> bool:
         return self.to_config_dict() == {}
+
+    def with_source(self, url: str, *, secondary: bool = False) -> "SoftContract":
+        """Копия контракта с добавленным источником. Дубликат не добавляется дважды."""
+        field = "sources_secondary" if secondary else "sources_primary"
+        current = getattr(self, field)
+        if url in current:
+            return self
+        return dataclasses.replace(self, **{field: current + (url,)})
+
+    def without_source(self, url: str, *, secondary: bool = False) -> "SoftContract":
+        """Копия контракта без источника.
+
+        ⚠️ ПОСЛЕДНИЙ источник не удаляется: пустой список означает «источников нет», и
+        софт молча перестанет находить контент. Ошибка была бы тихой — владелец увидел бы
+        её только через сутки по пустой стене."""
+        field = "sources_secondary" if secondary else "sources_primary"
+        current = getattr(self, field)
+        if url not in current or len(current) <= 1:
+            return self
+        return dataclasses.replace(
+            self, **{field: tuple(item for item in current if item != url)}
+        )
 
     def render_yaml(self) -> str:
         """Содержимое manager_contract.yaml для каталога софта."""
@@ -64,7 +122,7 @@ class SoftContract:
             "# файл перезаписывается. Софт читает limits и применяет к своему расписанию.\n"
         )
         body = yaml.safe_dump(
-            self.to_config_dict() or {"limits": {}},
+            self.to_config_dict() or {"limits": {}, "sources": {}},
             allow_unicode=True,
             sort_keys=False,
             default_flow_style=False,
@@ -85,6 +143,10 @@ class SoftContract:
             lines.append(f"⏱ Интервал: {interval} мин")
         if self.quiet_start_hour is not None and self.quiet_end_hour is not None:
             lines.append(f"🌙 Ночная пауза: {self.quiet_start_hour}:00–{self.quiet_end_hour}:00 МСК")
+        if self.sources_primary:
+            lines.append(f"📥 Источников: {len(self.sources_primary)}")
+        if self.sources_secondary:
+            lines.append(f"📥 Второй поток: {len(self.sources_secondary)}")
         return "\n".join(lines)
 
 

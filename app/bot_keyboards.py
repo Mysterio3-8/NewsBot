@@ -109,10 +109,61 @@ def soft_menu(
                     text=f"🌙 Ночная пауза: {quiet}", callback_data=f"soft:lim:{soft_id}:quiet"
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    text=f"📥 Источники: {_contract_sources_count(contract)}",
+                    callback_data=f"soft:src:{soft_id}",
+                ),
+            ],
             [InlineKeyboardButton(text="📄 Показать контракт", callback_data=f"soft:cfg:{soft_id}")],
         ]
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="soft:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _contract_sources_count(contract) -> str:
+    """Сколько источников задано контрактом. «—» значит «софт работает по своему
+    config.yaml»: это разные состояния, и путать их нельзя — пустой список источников
+    означал бы, что софту негде брать контент."""
+    if contract is None:
+        return "—"
+    total = len(getattr(contract, "sources_primary", ())) + len(
+        getattr(contract, "sources_secondary", ())
+    )
+    return str(total) if total else "—"
+
+
+def soft_sources_menu(soft_id: str, sources, *, secondary=()) -> InlineKeyboardMarkup:
+    """Список источников софта: тап по источнику — удаление (с подтверждением).
+
+    Индекс, а не сам URL в callback_data: у Telegram лимит 64 байта на callback, а
+    ссылки бывают длиннее — обрезанный URL удалил бы не то."""
+    rows = []
+    for index, url in enumerate(sources):
+        rows.append([InlineKeyboardButton(
+            text=f"🗑 {url[:45]}", callback_data=f"soft:srcdel:{soft_id}:p:{index}"
+        )])
+    for index, url in enumerate(secondary):
+        rows.append([InlineKeyboardButton(
+            text=f"🗑 (2) {url[:41]}", callback_data=f"soft:srcdel:{soft_id}:s:{index}"
+        )])
+    rows.append([
+        InlineKeyboardButton(text="➕ Добавить", callback_data=f"soft:srcadd:{soft_id}:p"),
+        InlineKeyboardButton(text="➕ Во второй поток", callback_data=f"soft:srcadd:{soft_id}:s"),
+    ])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=f"soft:open:{soft_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def confirm_source_delete(soft_id: str, kind: str, index: int) -> InlineKeyboardMarkup:
+    """Подтверждение удаления. Источник удаляется НЕ мгновенно намеренно: контракт
+    перетирается целиком, и случайный тап стоил бы владельцу источника контента."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🗑 Удалить", callback_data=f"soft:srcdel!:{soft_id}:{kind}:{index}"
+        ),
+        InlineKeyboardButton(text="Отмена", callback_data=f"soft:src:{soft_id}"),
+    ]])
 
 
 def channels_menu(channels) -> InlineKeyboardMarkup:

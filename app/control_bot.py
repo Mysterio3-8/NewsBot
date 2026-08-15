@@ -540,6 +540,74 @@ def save_soft_limit(manager_repo, soft_id: str, field: str, raw: str) -> str:
     return f"✅ Сохранено.{note}"
 
 
+
+def _persist_contract(manager_repo, soft_id: str, contract: SoftContract) -> str:
+    """Сохранить контракт в реестр и в файл софта. Возвращает заметку для владельца.
+
+    Секции перезаписываются ЦЕЛИКОМ, а не мержатся: снятая настройка (удалённый источник,
+    выключенная пауза) должна исчезнуть, а merge оставил бы её жить."""
+    record = manager_repo.get_soft(soft_id)
+    if record is None:
+        return "Софт не найден в реестре."
+    config = json.loads(record.config_json or "{}") if record.config_json else {}
+    if not isinstance(config, dict):
+        config = {}
+    payload = contract.to_config_dict()
+    config["limits"] = payload.get("limits", {})
+    config["sources"] = payload.get("sources", {})
+    manager_repo.update_config(soft_id, config)
+    if not record.project_path:
+        return "✅ Сохранено (путь к софту не задан — файл контракта не пишется)."
+    try:
+        path = write_contract_file(record.project_path, contract)
+    except OSError as error:  # каталог недоступен — настройка всё равно сохранена
+        return f"✅ Сохранено.\n⚠️ Файл контракта не записан: {error}"
+    return (
+        f"✅ Сохранено.\nКонтракт записан: {path}\n"
+        "⚠️ Софт подхватит настройку при следующем перезапуске."
+    )
+
+
+def soft_contract_of(manager_repo, soft_id: str) -> SoftContract | None:
+    if manager_repo is None:
+        return None
+    record = manager_repo.get_soft(soft_id)
+    return SoftContract.from_config_json(record.config_json) if record else None
+
+
+def add_soft_source(manager_repo, soft_id: str, raw: str, *, secondary: bool) -> str:
+    """Добавить источник софту. Ссылку не валидируем строго: у Музыки источником может
+    быть и произвольный ПОИСКОВЫЙ ЗАПРОС, а не только URL — проверка «должен быть http»
+    отрезала бы половину нужного."""
+    value = (raw or "").strip()
+    if not value:
+        return "Пустая строка — источник не добавлен."
+    contract = soft_contract_of(manager_repo, soft_id)
+    if contract is None:
+        return "Софт не найден в реестре."
+    updated = contract.with_source(value, secondary=secondary)
+    if updated is contract:
+        return f"Такой источник уже есть: {value}"
+    return _persist_contract(manager_repo, soft_id, updated)
+
+
+def delete_soft_source(manager_repo, soft_id: str, kind: str, index: int) -> str:
+    """Удалить источник по индексу. Последний не удаляем: пустой список означал бы, что
+    софту негде брать контент, и поломка была бы тихой."""
+    contract = soft_contract_of(manager_repo, soft_id)
+    if contract is None:
+        return "Софт не найден в реестре."
+    secondary = kind == "s"
+    current = contract.sources_secondary if secondary else contract.sources_primary
+    if index < 0 or index >= len(current):
+        return "Источник не найден — список изменился."
+    url = current[index]
+    updated = contract.without_source(url, secondary=secondary)
+    if updated is contract:
+        return "Это последний источник — удалять нельзя, иначе софту негде брать контент."
+    return _persist_contract(manager_repo, soft_id, updated) + f"\nУдалён: {url}"
+
+
 def _apply_limit(contract: SoftContract, field: str, raw: str) -> SoftContract:
     """Разбор введённого значения. Бросает ValueError с человеческим текстом."""
     if field == "maxposts":
@@ -1196,6 +1264,9 @@ def build_dispatcher(
     class SoftLimitInput(StatesGroup):
         waiting_value = State()  # ждём значение лимита внешнего софта (контракт)
 
+    class SoftSourceInput(StatesGroup):
+        waiting_value = State()  # ждём источник внешнего софта (контракт)
+
     class PromptInput(StatesGroup):
         waiting_text = State()  # ждём новый текст шаблона
 
@@ -1444,6 +1515,25 @@ def build_dispatcher(
                 running=_soft_running(soft) if soft else False,
                 soundcloud=_soundcloud_path(soft_id) is not None,
                 contract=_soft_contract(soft_id),
+            ),
+        )
+
+    @dp.message(StateFilter(SoftSourceInput.waiting_value))
+    async def on_soft_source_value(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        soft_id, kind = data.get("soft_id"), data.get("source_kind")
+        await state.clear()
+        result = add_soft_source(
+            manager_repo, soft_id, message.text or "", secondary=(kind == "s")
+        )
+        contract = soft_contract_of(manager_repo, soft_id)
+        await _edit_menu_message(
+            message,
+            result,
+            soft_sources_menu(
+                soft_id,
+                contract.sources_primary if contract else (),
+                secondary=contract.sources_secondary if contract else (),
             ),
         )
 
@@ -2012,6 +2102,74 @@ def build_dispatcher(
         await state.set_state(SoftLimitInput.waiting_value)
         await state.update_data(soft_id=soft_id, limit_field=field)
         await _edit_current(cb, SOFT_LIMIT_PROMPTS[field], None)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:src:"))
+    async def on_soft_sources(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        contract = soft_contract_of(manager_repo, soft_id)
+        if contract is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        header = "📥 Источники софта. Тап по источнику — удалить."
+        if not contract.sources_primary and not contract.sources_secondary:
+            header = (
+                "📥 Источников в контракте нет — софт работает по своему config.yaml.\n"
+                "Добавишь первый — контракт начнёт перекрывать конфиг."
+            )
+        await _edit_current(
+            cb, header,
+            soft_sources_menu(
+                soft_id, contract.sources_primary, secondary=contract.sources_secondary
+            ),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:srcadd:"))
+    async def on_soft_source_add(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, kind = cb.data.split(":")
+        await state.set_state(SoftSourceInput.waiting_value)
+        await state.update_data(soft_id=soft_id, source_kind=kind)
+        await _edit_current(
+            cb,
+            "Пришли источник одним сообщением.\n"
+            "Это может быть ссылка (канал YouTube, плейлист) ИЛИ поисковый запрос — "
+            "у Музыки источником бывает и то, и другое.",
+            None,
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:srcdel:"))
+    async def on_soft_source_delete_ask(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, kind, index = cb.data.split(":")
+        # Спрашиваем подтверждение: контракт перетирается целиком, и случайный тап
+        # стоил бы владельцу источника контента.
+        await _edit_current(
+            cb, "Удалить этот источник?", confirm_source_delete(soft_id, kind, int(index))
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:srcdel!:"))
+    async def on_soft_source_delete(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, kind, index = cb.data.split(":")
+        answer = delete_soft_source(manager_repo, soft_id, kind, int(index))
+        contract = soft_contract_of(manager_repo, soft_id)
+        await _edit_current(
+            cb, answer,
+            soft_sources_menu(
+                soft_id,
+                contract.sources_primary if contract else (),
+                secondary=contract.sources_secondary if contract else (),
+            ),
+        )
         await cb.answer()
 
     @dp.callback_query(F.data.startswith("soft:cfg:"))
