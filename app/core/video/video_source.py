@@ -219,6 +219,13 @@ def fetch_youtube_video_details(video_id: str) -> SourceVideo:
     )
 
 
+DOWNLOAD_THROTTLE = {"ratelimit": 8 * 1024 * 1024}
+"""Потолок скорости скачивания, 8 МБ/с.
+
+Не про экономию канала: фильм на 500 МБ, влетающий на полной скорости, — заметный
+всплеск с одного IP, а нам этот IP беречь. При 8 МБ/с фильм приезжает за минуту-полторы,
+то есть на расписание не влияет вовсе."""
+
 METADATA_THROTTLE = {"sleep_interval_requests": 2}
 """Пауза между запросами МЕТАДАННЫХ. Ровно там, где раньше был всплеск: перечисление
 канала и опрос кандидатов идут подряд десятками, а скачивание фильма — одно в сутки.
@@ -319,9 +326,24 @@ def _download_with_ytdlp(video: SourceVideo, dest: Path, *, max_height: int) -> 
             f"Нет прямых ссылок на {video.ref}, а yt-dlp не установлен"
         ) from error
 
+    # Раздельные дорожки (DASH) со склейкой ffmpeg — ПЕРВЫМИ, и это не про качество.
+    # `best[...]` берёт progressive-формат, а именно он у YouTube чаще всего отдаёт
+    # `403 Forbidden` на данных: ссылка привязана к сессии жёстче, чем фрагменты DASH.
+    # 15.08 на этом падало Кино, тогда как Минусы с той же машины качали штатно — у них
+    # формат-строка ровно такая, `bestvideo+bestaudio`. Progressive остаётся хвостом
+    # фолбэка: у части роликов раздельных дорожек просто нет.
     options = ytdlp_options(
-        format=f"best[height<={max_height}][ext=mp4]/best[height<={max_height}]/best",
+        format=(
+            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={max_height}]+bestaudio/"
+            f"best[height<={max_height}][ext=mp4]/best[height<={max_height}]/best"
+        ),
+        merge_output_format="mp4",
         outtmpl=str(dest.with_suffix("")) + ".%(ext)s",
+        # Обрыв одного фрагмента не должен стоить всего фильма: их у ролика сотни.
+        retries=5,
+        fragment_retries=10,
+        **DOWNLOAD_THROTTLE,
     )
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
