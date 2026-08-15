@@ -337,6 +337,43 @@ async def _publish_channel_post(
         )
 
 
+def film_has_priority(
+    repo: Repository, channel: Channel, settings: ChannelSettings,
+    now: datetime.datetime | None = None,
+) -> bool:
+    """Ждёт ли канал сегодняшний фильм — и значит ли это, что пост с медиа подождёт.
+
+    ТЗ владельца 2026-08-14: «самое главное, чтобы были фильмы». А главной угрозой
+    фильмам после починки YouTube стала не сеть, а ОЧЕРЕДЬ: единственный личный
+    VK-аккаунт делят четыре софта, зазор между загрузками 60 минут, и слот достаётся
+    тому, кто попросил первым. Текстовых постов много и они идут весь день, фильм —
+    один; в честной гонке фильм проигрывает раз за разом (14.08 проиграл трижды подряд).
+
+    Приоритет односторонний и узкий: пост с медиа уступает слот, только пока фильм за
+    сегодня не вышел. Пост при этом не теряется — он вернётся в очередь и выйдет
+    следующим циклом; фильм же, пропустив сутки, не догоняется ничем.
+
+    ⚠️ И ОБЯЗАТЕЛЬНО ограничен по времени (`FILM_PRIORITY_HOURS`). Бессрочный приоритет
+    был бы хуже болезни: сломайся фильм по любой причине — и канал замолчал бы ЦЕЛИКОМ,
+    вместо «только посты» получилось бы «вообще ничего». Окна в несколько часов хватает
+    на четыре слота подряд, дальше посты идут как обычно."""
+    if not settings.daily_video_youtube_channels and settings.daily_video_group is None:
+        return False
+    if settings.daily_video_count <= 0:
+        return False
+    now = now or datetime.datetime.utcnow()
+    start_hour = (
+        settings.daily_video_start_hour_utc
+        if settings.daily_video_start_hour_utc is not None
+        else DAILY_VIDEO_START_HOUR_UTC
+    )
+    window_start = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if not window_start <= now < window_start + datetime.timedelta(hours=FILM_PRIORITY_HOURS):
+        return False
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return repo.count_reposted_videos_since(channel.id, midnight) < settings.daily_video_count
+
+
 def _vk_upload_unavailable(
     repo: Repository, channel: Channel, settings: ChannelSettings, post_id: int
 ) -> bool:
@@ -364,7 +401,15 @@ def _vk_upload_unavailable(
     has_media = bool(processed.video_path) or bool(
         processed.image_paths and json.loads(processed.image_paths)
     )
-    return has_media and not pool.has_free_account()
+    if not has_media:
+        return False
+    if film_has_priority(repo, channel, settings):
+        logger.info(
+            "Пост %d (канал %s) уступает слот фильму — он за сегодня ещё не вышел",
+            post_id, channel.name,
+        )
+        return True
+    return not pool.has_free_account()
 
 
 def _post_video_description(
@@ -453,6 +498,13 @@ def build_weekly_repost_job(repo: Repository, config: AppConfig, vk_fetcher: VKF
 
 DAILY_VIDEO_START_HOUR_UTC = 8
 DAILY_VIDEO_WINDOW_MINUTES = 120
+
+FILM_PRIORITY_HOURS = 6
+"""Сколько часов после старта окна фильм имеет преимущество на загрузку медиа.
+
+Шесть часов при зазоре 60 минут — это шесть слотов подряд; фильму хватает с запасом даже
+если пара из них уйдёт соседним софтам. Дальше приоритет снимается, и посты идут обычным
+порядком: канал не должен молчать из-за поломки в одной ветке."""
 
 
 def should_run_daily_video(
