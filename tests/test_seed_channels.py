@@ -47,9 +47,11 @@ def test_seed_news_sets_conservative_antiban(tmp_path):
     assert settings.min_interval_minutes is not None
     assert settings.max_interval_minutes is not None
     assert settings.min_interval_minutes < settings.max_interval_minutes
-    # Ночная пауза снята осознанно (ТЗ 2026-08-03) — вместо неё антибан держат объём,
-    # широкий интервал и пул личных токенов, размазывающий загрузки по аккаунтам.
-    assert settings.quiet_start_hour == settings.quiet_end_hour
+    # ТЗ владельца 2026-08-15: Новости работают 00:00–09:00 МСК, тишина 09:00–24:00.
+    # Смысл окна не антибанный, а очередной: личный VK-аккаунт один на четыре софта,
+    # зазор между загрузками медиа 60 минут, и днём посты отбирали слот у фильмов Кино.
+    assert settings.quiet_start_hour == 9
+    assert settings.quiet_end_hour == 0
     # Пул может состоять из ОДНОГО аккаунта: 2026-08-14 второй оказался забанен и был
     # убран. Требовать двух нельзя — тогда тест толкал бы обратно к тому, чтобы держать
     # в ротации заведомо мёртвый токен. Важно, что пул не пуст: пустой означает возврат
