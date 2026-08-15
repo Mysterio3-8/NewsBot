@@ -284,7 +284,8 @@ def _pick_video(
             repo, channel.name, "фильм",
             f"все ролики источников уже публиковались (просмотрено по "
             f"{settings.daily_video_lookback} последних на канал, взято всего "
-            f"{len(reposted)}). Нужен новый источник.",
+            f"{len(reposted)}). Нужен новый источник — пришли ссылку командой "
+            f"/source https://www.youtube.com/@ИмяКанала",
         )
     return None
 

@@ -35,6 +35,7 @@ from app.core.maintenance.cleanup import (
     format_disk_report,
 )
 from app.core.manual_post import MAX_BUTTONS, PostButton, parse_button_input
+from app.core.video.source_registry import add_video_source
 from app.core.media.uniquifier import MediaUniquifyError, uniquify_media
 from app.core.publishing.footer import build_footer_links_from_config
 from app.core.publishing.queue_service import publish_queued_post
@@ -897,6 +898,14 @@ def build_dispatcher(
     async def on_kino(message: Message) -> None:
         if await guard(message):
             await message.answer(render_video_diag(repo))
+
+    @dp.message(Command("source"))
+    async def on_source(message: Message) -> None:
+        # Тревога «источники кончились» присылает эту же команду — владелец отвечает на
+        # неё ссылкой, и простой лечится за один тап, без деплоя и без меня.
+        if await guard(message):
+            argument = (message.text or "").partition(" ")[2]
+            await message.answer(add_video_source(repo, argument))
 
     @dp.message(Command("publish"))
     async def on_publish(message: Message) -> None:
