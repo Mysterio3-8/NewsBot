@@ -129,6 +129,30 @@ def ensure_working_proxy(repo: Repository) -> None:
         os.environ["YT_PROXY"] = proxy
 
 
+def _download_with_retry(repo: Repository, video: SourceVideo) -> Path:
+    """Скачать фильм, при отказе сменив выход прокси и попробовав ещё раз.
+
+    Метаданные и сами данные YouTube отдаёт РАЗНЫМИ путями: плеер может ответить, а CDN
+    следом дать `403 Forbidden` — ровно это случилось 15.08 на выходе, который проверку
+    прошёл. Поэтому проверять выход заранее мало, нужен повтор по факту отказа.
+
+    Попытка ровно одна: фильм — это сотни мегабайт и минуты работы, а бесконечные
+    повторы на 1-ядерном VPS съели бы и слот, и память."""
+    try:
+        return download_video(video, DAILY_VIDEO_DIR)
+    except Exception as first_error:  # noqa: BLE001 — граница сети, решаем сменой выхода
+        current = os.environ.get("YT_PROXY", "").strip() or None
+        logger.warning(
+            "Фильм %s не скачался через %s (%s) — меняю выход и пробую ещё раз",
+            video.ref, current or "прямой путь", str(first_error)[:80],
+        )
+        other = pick_working_proxy(repo, exclude=current)
+        if other is None or other == current:
+            raise
+        os.environ["YT_PROXY"] = other
+        return download_video(video, DAILY_VIDEO_DIR)
+
+
 def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason: str) -> None:
     """Сказать владельцу, что фильм не вышел. Никогда не поднимает исключение и никогда
     не заменяет собой запись в журнале: тревога — способ УЗНАТЬ о поломке, а разбираться
@@ -275,7 +299,7 @@ def run_daily_video_repost(
     # была бы просто строка в журнале, а сутки уже потрачены. Видео остаётся помеченным
     # (в цикл перекачки не уходим), но день НЕ закрыт — джоб возьмёт следующее по зазору.
     try:
-        local_file = _prepare_local_file(download_video(video, DAILY_VIDEO_DIR), settings)
+        local_file = _prepare_local_file(_download_with_retry(repo, video), settings)
     except Exception as error:  # noqa: BLE001 — граница сети/диска, причина уходит владельцу
         logger.exception("Видео-репост [%s]: фильм %s не скачался", channel.name, video.ref)
         _alert_video_failure(repo, channel.name, "фильм", f"не скачался — {error}")

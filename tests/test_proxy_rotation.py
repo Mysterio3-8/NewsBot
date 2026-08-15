@@ -72,3 +72,29 @@ def test_working_exit_is_not_rewritten(tmp_path, monkeypatch):
 
     assert pick_working_proxy(repo, probe=lambda proxy: True) == "socks5://127.0.0.1:10813"
     assert repo.get_setting(LAST_GOOD_PROXY_KEY) == "socks5://127.0.0.1:10813"
+
+
+def test_failed_exit_is_skipped_on_retry(tmp_path, monkeypatch):
+    """Выход, подведший на СКАЧИВАНИИ, пропускается — даже если метаданные он отдаёт.
+
+    CDN отвечает `403 Forbidden` отдельно от плеера: 15.08 выход прошёл проверку и всё
+    равно не отдал данные. Без пропуска повтор упирался бы в тот же выход."""
+    repo = _repo(tmp_path)
+    monkeypatch.setenv(PROXY_PORTS_ENV, "10813,10811")
+    repo.set_setting(LAST_GOOD_PROXY_KEY, "socks5://127.0.0.1:10813")
+
+    picked = pick_working_proxy(
+        repo, probe=lambda proxy: True, exclude="socks5://127.0.0.1:10813"
+    )
+
+    assert picked == "socks5://127.0.0.1:10811"
+
+
+def test_single_exit_leaves_nothing_to_retry_with(tmp_path, monkeypatch):
+    """Запасного выхода нет — честно None, чтобы вызывающий не повторял впустую."""
+    repo = _repo(tmp_path)
+    monkeypatch.setenv(PROXY_PORTS_ENV, "10813")
+
+    assert pick_working_proxy(
+        repo, probe=lambda proxy: True, exclude="socks5://127.0.0.1:10813"
+    ) is None

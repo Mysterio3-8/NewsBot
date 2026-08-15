@@ -78,14 +78,20 @@ def probe_proxy(proxy: str | None, *, video_id: str = PROBE_VIDEO_ID) -> bool:
     return True
 
 
-def pick_working_proxy(repo, *, probe=probe_proxy) -> str | None:
+def pick_working_proxy(repo, *, probe=probe_proxy, exclude: str | None = None) -> str | None:
     """Найти рабочий выход и запомнить его. None — идём напрямую.
+
+    `exclude` — выход, который только что подвёл на СКАЧИВАНИИ. Его пропускаем, даже если
+    метаданные через него отдаются: CDN отвечает `403 Forbidden` отдельно от плеера, и
+    выход, прошедший проверку, всё равно может не отдать сами данные (случилось 15.08).
+    Без этого повтор упирался бы в тот же самый выход и был бы бесполезен.
 
     `probe` инжектируется, чтобы тесты не ходили в сеть."""
     last_good = repo.get_setting(LAST_GOOD_PROXY_KEY)
-    candidates = proxy_candidates(last_good)
+    candidates = [item for item in proxy_candidates(last_good) if item != exclude]
     if not candidates:
-        return os.environ.get("YT_PROXY", "").strip() or None
+        fallback = os.environ.get("YT_PROXY", "").strip() or None
+        return None if fallback == exclude else fallback
 
     for proxy in candidates:
         if probe(proxy):
