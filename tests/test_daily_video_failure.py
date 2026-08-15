@@ -333,3 +333,51 @@ def test_rejected_film_keeps_its_mark(tmp_path):
 
     assert repo.list_reposted_video_refs(channel.id) == {"-223779047_10"}
     assert len(alerts) == 1
+
+
+def test_broken_video_does_not_cost_the_day(tmp_path):
+    """Отказ бывает привязан к КОНКРЕТНОМУ ролику: 15.08 один отдавал 403 на данных,
+    а соседние того же канала качались. Раньше это стоило суток без кино."""
+    from app.core.video.video_source import SourceVideo
+
+    repo = _repo(tmp_path)
+    settings = ChannelSettings(
+        daily_video_youtube_channels=["https://www.youtube.com/@kino"], daily_clip_count=0
+    )
+    channel = repo.create_channel(
+        name="Кино", vk_destination="240120678", settings_json=settings.to_json()
+    )
+    candidates = iter([
+        SourceVideo(ref="youtube_битый", title="Битый", description="", duration_seconds=3600,
+                    direct_urls={}, page_url="https://youtube.com/watch?v=битый"),
+        SourceVideo(ref="youtube_живой", title="Живой", description="", duration_seconds=3600,
+                    direct_urls={}, page_url="https://youtube.com/watch?v=живой"),
+    ])
+    publisher = FakePublisher()
+
+    def download(video, dest_dir, **kwargs):
+        if video.ref == "youtube_битый":
+            raise RuntimeError("HTTP Error 403: Forbidden")
+        path = tmp_path / "film.mp4"
+        path.write_bytes(b"video")
+        return path
+
+    alerts: list[tuple[str, str]] = []
+    with patch("app.core.video.daily_video_repost.download_video", side_effect=download), \
+         patch("app.core.video.daily_video_repost.cut_clips", return_value=[]), \
+         patch("app.core.video.daily_video_repost.rewrite_video_texts",
+               return_value=("Название", "Описание")), \
+         patch("app.core.video.daily_video_repost.generate_clip_hooks", return_value=[]), \
+         patch("app.core.video.daily_video_repost.pick_unreposted_youtube",
+               side_effect=lambda *a, **kw: next(candidates, None)), \
+         patch("app.core.video.daily_video_repost.alert_once",
+               side_effect=lambda repo_, text, key, **kw: alerts.append((key, text)) or True):
+        run_daily_video_repost(
+            repo, channel, vk_fetcher=None, vk_publisher=publisher,
+            llm_client=None, footer_links=None, rng=random.Random(1),
+        )
+
+    # день закрыт живым роликом, битый помечен и больше не выберется
+    assert repo.count_reposted_videos_since(channel.id, _today()) == 1
+    assert repo.list_reposted_video_refs(channel.id) == {"youtube_битый", "youtube_живой"}
+    assert alerts == []

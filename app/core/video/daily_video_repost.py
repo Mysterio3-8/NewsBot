@@ -129,6 +129,62 @@ def ensure_working_proxy(repo: Repository) -> None:
         os.environ["YT_PROXY"] = proxy
 
 
+MAX_FILM_CANDIDATES = 3
+"""Сколько роликов пробуем скачать за один заход, прежде чем сдаться.
+
+Отказ бывает привязан к КОНКРЕТНОМУ ролику, а не к сети: 15.08 `bS3MsEksGNE` отдавал
+403 на данных и с progressive-форматом, и с раздельными дорожками, тогда как соседние
+ролики того же канала качались нормально. Раньше такой ролик стоил суток без кино —
+теперь берём следующий.
+
+Три попытки, а не «пока не получится»: каждая — это запрос метаданных и попытка
+скачивания, а фильм и так один в сутки. Больше трёх подряд означает, что сломан не
+ролик, а канал или выход, и перебор только добьёт IP."""
+
+
+def _download_first_available(
+    repo: Repository,
+    channel: Channel,
+    settings: ChannelSettings,
+    vk_fetcher: VKFetcher | None,
+    video: SourceVideo,
+    llm_client: LLMClient,
+) -> tuple[SourceVideo, str, str, Path] | None:
+    """Скачать первый ролик, который поддастся. None — не поддался ни один.
+
+    Отметка в БД ставится ДО скачивания (защита от бесконечной перекачки после OOM:
+    2026-07-27 один фильм перезаливался семь раз за ночь), поэтому неудачный ролик
+    автоматически выпадает из выбора на следующей итерации."""
+    last_error: Exception | None = None
+    for attempt in range(MAX_FILM_CANDIDATES):
+        if video is None:
+            break
+        title, description = rewrite_video_texts(
+            llm_client, title=video.title, description=video.description
+        )
+        repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
+        try:
+            local_file = _prepare_local_file(_download_with_retry(repo, video), settings)
+            return video, title, description, local_file
+        except Exception as error:  # noqa: BLE001 — граница сети/диска
+            last_error = error
+            logger.warning(
+                "Видео-репост [%s]: %s не скачался (%d/%d): %s",
+                channel.name, video.ref, attempt + 1, MAX_FILM_CANDIDATES, str(error)[:90],
+            )
+            # Тревоги подбора здесь выключены: о неудаче скажет ОДНО сообщение ниже.
+            # Иначе на один провал приходило два письма — «источники исчерпаны» и
+            # «не скачался ни один», а владелец просил тревог поменьше.
+            video = _pick_video(repo, channel, settings, vk_fetcher, alerts_enabled=False)
+
+    logger.error("Видео-репост [%s]: ни один ролик не скачался", channel.name)
+    _alert_video_failure(
+        repo, channel.name, "фильм",
+        f"не скачался ни один из {MAX_FILM_CANDIDATES} роликов — {last_error}",
+    )
+    return None
+
+
 def _download_with_retry(repo: Repository, video: SourceVideo) -> Path:
     """Скачать фильм, при отказе сменив выход прокси и попробовав ещё раз.
 
@@ -176,7 +232,12 @@ def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason
 
 
 def _pick_video(
-    repo: Repository, channel: Channel, settings: ChannelSettings, vk_fetcher: VKFetcher | None
+    repo: Repository,
+    channel: Channel,
+    settings: ChannelSettings,
+    vk_fetcher: VKFetcher | None,
+    *,
+    alerts_enabled: bool = True,
 ) -> SourceVideo | None:
     """YouTube-каналы проверяются по порядку первыми (основной источник); VK-группа —
     только если ни один YouTube-канал не настроен (резервный путь).
@@ -210,12 +271,14 @@ def _pick_video(
         if video is not None:
             return video
 
-    if failures:
+    if failures and alerts_enabled:
         _alert_video_failure(
             repo, channel.name, "фильм",
             "источники не читаются — " + "; ".join(failures[:3]),
         )
-    elif settings.daily_video_youtube_channels or settings.daily_video_group is not None:
+    elif alerts_enabled and (
+        settings.daily_video_youtube_channels or settings.daily_video_group is not None
+    ):
         _alert_video_failure(
             repo, channel.name, "фильм",
             f"все ролики источников уже публиковались (просмотрено по "
@@ -285,25 +348,12 @@ def run_daily_video_repost(
         )
         return
 
-    title, description = rewrite_video_texts(
-        llm_client, title=video.title, description=video.description
+    downloaded = _download_first_available(
+        repo, channel, settings, vk_fetcher, video, llm_client
     )
-    # Отметка ДО скачивания, а не после публикации. Иначе процесс, убитый на тяжёлом
-    # шаге (OOM при заливке фильма — реальный инцидент 2026-07-27: 7 перезаливок одного
-    # видео за ночь, ~28 минут CPU каждая), оставлял видео непомеченным, и следующий
-    # цикл качал его заново по кругу. Цена — при разовом сбое это видео пропускается,
-    # что несравнимо дешевле бесконечного цикла.
-    repo.add_reposted_video(channel_id=channel.id, video_ref=video.ref, title=title or None)
-    # Скачивание — самый частый обрыв (YouTube требует подтверждения «я не бот» с
-    # серверных IP, сеть рвётся на сотнях мегабайт). Ловим здесь, а не выше: наверху это
-    # была бы просто строка в журнале, а сутки уже потрачены. Видео остаётся помеченным
-    # (в цикл перекачки не уходим), но день НЕ закрыт — джоб возьмёт следующее по зазору.
-    try:
-        local_file = _prepare_local_file(_download_with_retry(repo, video), settings)
-    except Exception as error:  # noqa: BLE001 — граница сети/диска, причина уходит владельцу
-        logger.exception("Видео-репост [%s]: фильм %s не скачался", channel.name, video.ref)
-        _alert_video_failure(repo, channel.name, "фильм", f"не скачался — {error}")
+    if downloaded is None:
         return
+    video, title, description, local_file = downloaded
     try:
         body = "\n\n".join(part for part in (title, description) if part.strip())
         result = _publish_film(
