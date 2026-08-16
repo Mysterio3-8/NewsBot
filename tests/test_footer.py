@@ -38,6 +38,24 @@ def test_build_channel_footer_returns_fallback_without_channel_url():
     assert build_channel_footer(None, None, _footer_config(), fallback) is fallback
 
 
+def test_channel_with_only_vk_url_keeps_it_and_drops_telegram_from_vk_post():
+    """ТЗ владельца 2026-08-16: «убрать ссылку на мой ТГ в ВК в кино постах».
+
+    Снятого `tg_footer_url` достаточно: запись ВК остаётся без футера вовсе, а TG-пост
+    сохраняет ссылку на VK-группу. Раньше пустой tg_url отбрасывал и её тоже — Кино
+    потеряло бы канал перегона аудитории из TG во ВКонтакте вместе с лишней ссылкой."""
+    fallback = FooterLinks(telegram_url="https://t.me/global")
+    links = build_channel_footer(
+        None, "🎬 Больше фильмов", _footer_config(), fallback,
+        vk_url="https://vk.com/public240120678",
+    )
+    assert links is not fallback
+    assert links.telegram_url is None
+    assert links.vk_url == "https://vk.com/public240120678"
+    assert build_vk_footer(links) == ""
+    assert "vk.com/public240120678" in build_html_footer(links)
+
+
 def test_build_html_footer_is_branded_hyperlink_to_telegram():
     """TG (ТЗ 2026-07-10): фирменная подпись именованной гиперссылкой на канал."""
     links = FooterLinks(

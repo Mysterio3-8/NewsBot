@@ -85,7 +85,19 @@ def publish_queued_post_vk(
 
     if result.success:
         repo.mark_published(post_id, "vk", datetime.datetime.utcnow(), vk_post_id=result.post_id)
-        logger.info("Пост %d опубликован в VK (post_id=%s)", post_id, result.post_id)
+        if result.post_id is None:
+            # Записи на стене НЕ появилось — ролик лёг в каталог сообщества. Для гварда
+            # это всё равно «публикация», и следующий пост он придержит на весь интервал,
+            # поэтому в журнале это должно читаться как особый случай, а не как обычный
+            # успех: строка «опубликован в VK (post_id=None)» стоила суток простоя
+            # Новостей 15.08 — её приняли за нормальную публикацию.
+            logger.warning(
+                "Пост %d ушёл в раздел «Видео» сообщества — записи на стене нет "
+                "(video_as_post=False). В ленте и у сторожа тишины он не виден.",
+                post_id,
+            )
+        else:
+            logger.info("Пост %d опубликован в VK (post_id=%s)", post_id, result.post_id)
     elif not _already_published(repo, post_id):
         # Не понижаем статус, если пост уже опубликован в другой сети (напр. TG прошёл,
         # а VK упал) — см. тот же фикс в queue_service.py.

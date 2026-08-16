@@ -57,8 +57,13 @@ def test_seed_news_sets_conservative_antiban(tmp_path):
     # в ротации заведомо мёртвый токен. Важно, что пул не пуст: пустой означает возврат
     # к одному захардкоженному токену мимо балансера и зазора.
     assert settings.vk_upload_token_envs
-    # Интервал должен физически растягивать дневной лимит на все сутки.
-    assert settings.max_posts_per_day * settings.min_interval_minutes >= 20 * 60
+    # ⚠️ Интервал считается от ОКНА, а не от суток: у Новостей окно 00:00–09:00 = 540
+    # мин, и прежняя проверка «лимит × интервал ≥ 20 часов» толкала ровно в обратную
+    # сторону — к интервалам, при которых последние посты не успевают выйти до утра.
+    # Проверяем то, что действительно важно: худший бросок всех промежутков влезает в окно.
+    window_minutes = 540
+    gaps = settings.max_posts_per_day - 1
+    assert gaps * settings.max_interval_minutes <= window_minutes
 
 
 def test_seed_news_removes_telegram_footer_link(tmp_path):
@@ -95,12 +100,13 @@ def test_cinema_plan_matches_the_owners_order():
 
     assert DAILY_PLAN["daily_video_count"] == 1
     assert DAILY_PLAN["daily_clip_count"] == 2
-    assert DAILY_PLAN["max_posts_per_day"] == 4
+    # ТЗ владельца 2026-08-16: «кино — 1 фильм, 3 поста, 2 клипа».
+    assert DAILY_PLAN["max_posts_per_day"] == 3
     assert DAILY_PLAN["video_as_post"] is True
-    # 1440 / 4 поста = 360 мин — потолок среднего интервала, иначе четвёртый пост
-    # не влезет в сутки.
-    average = (DAILY_PLAN["min_interval_minutes"] + DAILY_PLAN["max_interval_minutes"]) / 2
-    assert average <= 360
+    # Окно Кино 09:00–24:00 = 900 мин, постов три → два промежутка. Худший бросок
+    # обоих промежутков обязан влезть в окно, иначе третий пост не выйдет до полуночи.
+    gaps = DAILY_PLAN["max_posts_per_day"] - 1
+    assert gaps * DAILY_PLAN["max_interval_minutes"] <= 900
 
 
 def test_seed_news_enables_simple_media(tmp_path):
@@ -126,4 +132,4 @@ def test_seed_news_is_idempotent(tmp_path):
     channel = _news_channel(repo)
     assert channel.enabled is True
     # settings_json не раздувается дублями ключей — merge обновляет на месте
-    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 5
+    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 3
