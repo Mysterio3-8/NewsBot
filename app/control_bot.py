@@ -47,7 +47,8 @@ from app.manager import systemd
 from app.moscow_time import format_moscow_time
 from app.factories import build_telegram_publisher, build_vk_publisher
 from app.core.llm import prompt_store
-from app.manager.contract import SoftContract, write_contract_file
+from app.bot_keyboards import SOFT_TEXT_LABELS
+from app.manager.contract import SoftContract, missing_placeholders, write_contract_file
 from app.paths import OUTPUT_DIR, PROMPTS_DIR
 from app.process_controller import ProcessController
 
@@ -555,6 +556,7 @@ def _persist_contract(manager_repo, soft_id: str, contract: SoftContract) -> str
     payload = contract.to_config_dict()
     config["limits"] = payload.get("limits", {})
     config["sources"] = payload.get("sources", {})
+    config["texts"] = payload.get("texts", {})
     manager_repo.update_config(soft_id, config)
     if not record.project_path:
         return "✅ Сохранено (путь к софту не задан — файл контракта не пишется)."
@@ -606,6 +608,54 @@ def delete_soft_source(manager_repo, soft_id: str, kind: str, index: int) -> str
     if updated is contract:
         return "Это последний источник — удалять нельзя, иначе софту негде брать контент."
     return _persist_contract(manager_repo, soft_id, updated) + f"\nУдалён: {url}"
+
+
+SOFT_TEXT_PROMPTS = {
+    "template": (
+        "Пришли шаблон текста публикации одним сообщением.\n"
+        "Плейсхолдеры вида {artist}, {title} софт подставит сам — сохрани их.\n"
+        "Пустое сообщение (точка) вернёт заводской шаблон софта."
+    ),
+    "tags": (
+        "Пришли базовые теги через запятую.\n"
+        "Они уходят в КАЖДУЮ публикацию — это постоянные теги сообщества.\n"
+        "Точка очистит список."
+    ),
+    "phrases": (
+        "Пришли ключевые фразы сообщества через запятую (напр. «музыка без цензуры»).\n"
+        "Это запросы, по которым ищут САМО сообщество, а не конкретный трек.\n"
+        "Точка очистит список."
+    ),
+}
+
+
+def render_soft_text(contract: SoftContract | None, key: str) -> str:
+    """Текущее значение поля для показа перед правкой."""
+    label = SOFT_TEXT_LABELS.get(key, key)
+    value = contract.text_value(key) if contract is not None else ""
+    if not value:
+        return f"{label}\n\nСейчас: заводское значение софта (контракт поле не задаёт)."
+    return f"{label}\n\nСейчас:\n{value[:1500]}"
+
+
+def set_soft_text(manager_repo, soft_id: str, key: str, raw: str) -> str:
+    """Сохранить текстовое поле в контракт.
+
+    Одинокая точка = «снять настройку»: пустое сообщение Telegram не пришлёт, а способ
+    вернуться к заводскому значению нужен обязательно — иначе однажды заданный шаблон
+    было бы не убрать из бота вовсе."""
+    contract = soft_contract_of(manager_repo, soft_id)
+    if contract is None:
+        return "Софт не найден в реестре."
+    value = "" if (raw or "").strip() in (".", "") else raw
+    lost = missing_placeholders(contract.text_post_template, value) if key == "template" else []
+    updated = contract.with_text(key, value)
+    answer = _persist_contract(manager_repo, soft_id, updated)
+    if lost:
+        # Не запрещаем: владелец мог убрать плейсхолдер намеренно. Но молчать нельзя —
+        # публикация не упадёт, просто выйдет с пустым местом вместо названия.
+        answer += "\n⚠️ Пропали плейсхолдеры: " + ", ".join(lost)
+    return answer
 
 
 def _apply_limit(contract: SoftContract, field: str, raw: str) -> SoftContract:
@@ -1267,6 +1317,9 @@ def build_dispatcher(
     class SoftSourceInput(StatesGroup):
         waiting_value = State()  # ждём источник внешнего софта (контракт)
 
+    class SoftTextInput(StatesGroup):
+        waiting_value = State()  # ждём текст/теги внешнего софта (контракт)
+
     class PromptInput(StatesGroup):
         waiting_text = State()  # ждём новый текст шаблона
 
@@ -1536,6 +1589,15 @@ def build_dispatcher(
                 secondary=contract.sources_secondary if contract else (),
             ),
         )
+
+    @dp.message(StateFilter(SoftTextInput.waiting_value))
+    async def on_soft_text_value(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        soft_id, key = data.get("soft_id"), data.get("text_key")
+        await state.clear()
+        result = set_soft_text(manager_repo, soft_id, key, message.text or "")
+        contract = soft_contract_of(manager_repo, soft_id)
+        await _edit_menu_message(message, result, kb.soft_texts_menu(soft_id, contract))
 
     @dp.message(StateFilter(PromptInput.waiting_text))
     async def on_prompt_text(message: Message, state: FSMContext) -> None:
@@ -2124,6 +2186,37 @@ def build_dispatcher(
             soft_sources_menu(
                 soft_id, contract.sources_primary, secondary=contract.sources_secondary
             ),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:txt:"))
+    async def on_soft_texts(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        contract = soft_contract_of(manager_repo, soft_id)
+        if contract is None:
+            await cb.answer("Софт не найден", show_alert=True)
+            return
+        await _edit_current(
+            cb,
+            "📝 Тексты софта. ✏️ — задано контрактом, 📄 — заводское значение софта.",
+            kb.soft_texts_menu(soft_id, contract),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:txted:"))
+    async def on_soft_text_edit(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, key = cb.data.split(":")
+        contract = soft_contract_of(manager_repo, soft_id)
+        await state.set_state(SoftTextInput.waiting_value)
+        await state.update_data(soft_id=soft_id, text_key=key)
+        await _edit_current(
+            cb,
+            f"{render_soft_text(contract, key)}\n\n{SOFT_TEXT_PROMPTS[key]}",
+            None,
         )
         await cb.answer()
 

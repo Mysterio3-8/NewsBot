@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 
 import yaml
 
@@ -36,6 +37,25 @@ class SoftContract:
     Сопоставление делает сам софт (у Музыки primary → треки, secondary → сборники;
     у Минусов primary → YouTube-канал, secondary не используется)."""
     sources_secondary: tuple[str, ...] = ()
+    text_post_template: str | None = None
+    """Шаблон текста публикации. None = софт берёт свой заводской.
+
+    ⚠️ В шаблоне живут плейсхолдеры вида `{artist}`, `{title}`. Потерянный плейсхолдер
+    ломает публикацию МОЛЧА — пост выходит с пустым местом вместо названия, и владелец
+    узнаёт об этом по стене. Поэтому редактор обязан сверять набор плейсхолдеров с
+    прежним значением и предупреждать (`missing_placeholders`)."""
+    text_base_tags: tuple[str, ...] = ()
+    text_channel_phrases: tuple[str, ...] = ()
+    """Постоянные SEO-ключи сообщества. Не зависят от текста конкретного поста — см.
+    разбор двух сортов ключей в `all_auto/SEO.md`."""
+
+    TEXT_FIELDS = {
+        "template": "text_post_template",
+        "tags": "text_base_tags",
+        "phrases": "text_channel_phrases",
+    }
+    """Короткий ключ кнопки → поле. Короткий нужен, потому что callback_data Telegram
+    ограничен 64 байтами, а в него уже входят префикс и soft_id."""
 
     @classmethod
     def from_config_json(cls, raw: str | None) -> "SoftContract":
@@ -47,7 +67,11 @@ class SoftContract:
             return cls()
         limits = data.get("limits", {}) if isinstance(data, dict) else {}
         sources = data.get("sources", {}) if isinstance(data, dict) else {}
+        texts = data.get("texts", {}) if isinstance(data, dict) else {}
         return cls(
+            text_post_template=texts.get("post_template") or None,
+            text_base_tags=tuple(texts.get("base_tags") or ()),
+            text_channel_phrases=tuple(texts.get("channel_phrases") or ()),
             max_posts_per_day=limits.get("max_posts_per_day"),
             min_interval_minutes=limits.get("min_interval_minutes"),
             max_interval_minutes=limits.get("max_interval_minutes"),
@@ -80,12 +104,41 @@ class SoftContract:
             )
             if value
         }
+        texts: dict = {}
+        if self.text_post_template:
+            texts["post_template"] = self.text_post_template
+        if self.text_base_tags:
+            texts["base_tags"] = list(self.text_base_tags)
+        if self.text_channel_phrases:
+            texts["channel_phrases"] = list(self.text_channel_phrases)
         result: dict = {}
         if limits:
             result["limits"] = limits
         if sources:
             result["sources"] = sources
+        if texts:
+            result["texts"] = texts
         return result
+
+    def with_text(self, key: str, raw: str) -> "SoftContract":
+        """Копия контракта с новым текстовым полем. Пустая строка снимает настройку —
+        софт возвращается к своему заводскому значению из `config.yaml`."""
+        field = self.TEXT_FIELDS[key]
+        value = (raw or "").strip()
+        if field == "text_post_template":
+            return dataclasses.replace(self, text_post_template=value or None)
+        items = tuple(
+            part.strip() for part in value.replace("\n", ",").split(",") if part.strip()
+        )
+        return dataclasses.replace(self, **{field: items})
+
+    def text_value(self, key: str) -> str:
+        """Текущее значение поля одной строкой — для показа в боте."""
+        value = getattr(self, self.TEXT_FIELDS[key])
+        if isinstance(value, tuple):
+            return ", ".join(value)
+        return value or ""
+
 
     def to_config_json(self) -> str:
         return json.dumps(self.to_config_dict(), ensure_ascii=False)
@@ -147,7 +200,24 @@ class SoftContract:
             lines.append(f"📥 Источников: {len(self.sources_primary)}")
         if self.sources_secondary:
             lines.append(f"📥 Второй поток: {len(self.sources_secondary)}")
+        if self.text_post_template:
+            lines.append("📝 Шаблон поста: свой")
+        if self.text_base_tags or self.text_channel_phrases:
+            total = len(self.text_base_tags) + len(self.text_channel_phrases)
+            lines.append(f"🔎 SEO-ключей: {total}")
         return "\n".join(lines)
+
+
+def missing_placeholders(old: str | None, new: str) -> list[str]:
+    """Плейсхолдеры, которые были в прежнем шаблоне и пропали в новом.
+
+    Потеря плейсхолдера — тихая поломка: публикация не падает, просто выходит без
+    названия трека. Та же проверка уже стоит в редакторе шаблонов Новостей, и заведена
+    она была ровно после такого случая."""
+    if not old:
+        return []
+    pattern = re.compile(r"\{[a-zA-Z_]+\}")
+    return [name for name in dict.fromkeys(pattern.findall(old)) if name not in new]
 
 
 def contract_file_path(project_path: str) -> str:

@@ -119,7 +119,8 @@ def test_build_dispatcher_registers_expected_handlers():
     # не нужен»; он же перехватывал сборник Музыки, приходящий в этот чат) = 46
     # +1 команда /source (добавить источник фильмов ответом на тревогу, 2026-08-15) = 47
     # +1 message (FSM ввода источника внешнего софта через контракт, 2026-08-15) = 48
-    assert len(dp.message.handlers) == 48
+    # +1 message (FSM ввода текста/тегов внешнего софта, этап «Тексты» 2026-08-16) = 49
+    assert len(dp.message.handlers) == 49
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток
@@ -127,7 +128,8 @@ def test_build_dispatcher_registers_expected_handlers():
     # (tpl:list/open/edit/reset) = 43; заглушка soft:na заменена на soft:lim +
     # soft:cfg (реальное управление лимитами внешних софтов) = 44
     # +4 callback источников внешних софтов (soft:src / srcadd / srcdel / srcdel!) = 48
-    assert len(dp.callback_query.handlers) == 48
+    # +2 callback текстов внешних софтов (soft:txt — список, soft:txted — правка) = 50
+    assert len(dp.callback_query.handlers) == 50
 
 
 def test_build_nature_controller_none_without_env_path():

@@ -114,6 +114,9 @@ def soft_menu(
                     text=f"📥 Источники: {_contract_sources_count(contract)}",
                     callback_data=f"soft:src:{soft_id}",
                 ),
+                InlineKeyboardButton(
+                    text="📝 Тексты", callback_data=f"soft:txt:{soft_id}"
+                ),
             ],
             [InlineKeyboardButton(text="📄 Показать контракт", callback_data=f"soft:cfg:{soft_id}")],
         ]
@@ -151,6 +154,27 @@ def soft_sources_menu(soft_id: str, sources, *, secondary=()) -> InlineKeyboardM
         InlineKeyboardButton(text="➕ Добавить", callback_data=f"soft:srcadd:{soft_id}:p"),
         InlineKeyboardButton(text="➕ Во второй поток", callback_data=f"soft:srcadd:{soft_id}:s"),
     ])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=f"soft:open:{soft_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+SOFT_TEXT_LABELS = {
+    "template": "📄 Шаблон поста",
+    "tags": "🏷 Базовые теги",
+    "phrases": "🔎 Ключи сообщества",
+}
+
+
+def soft_texts_menu(soft_id: str, contract=None) -> InlineKeyboardMarkup:
+    """Правимые тексты софта. На кнопке видно, задано поле контрактом или нет —
+    «заводское» и «своё» это разные состояния, и путать их нельзя."""
+    rows = []
+    for key, label in SOFT_TEXT_LABELS.items():
+        value = contract.text_value(key) if contract is not None else ""
+        mark = "✏️" if value else "📄"
+        rows.append([InlineKeyboardButton(
+            text=f"{mark} {label}", callback_data=f"soft:txted:{soft_id}:{key}"
+        )])
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=f"soft:open:{soft_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
