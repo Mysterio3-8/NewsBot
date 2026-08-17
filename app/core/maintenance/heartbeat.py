@@ -41,20 +41,34 @@ class WatchedCommunity:
     name: str
     group_id: int
     max_silence_hours: int
-    """Сколько часов без публикаций считается нормой.
+    """Сколько РАБОЧИХ часов без публикаций считается нормой.
 
     Считается от РЕАЛЬНОГО темпа софта с запасом примерно вдвое: тревога должна
     сработать на поломке, а не на случайно растянувшемся интервале."""
+    work_start_hour: int = 0
+    work_end_hour: int = 24
+    """Окно работы софта в МСК (ТЗ владельца 2026-08-14: софты разведены по времени суток,
+    чтобы не драться за единственный личный VK-аккаунт).
+
+    🔴 Без него сторож считал тишину по КАЛЕНДАРНЫМ часам и врал каждый день. Новости
+    работают 9 часов из 24 — значит 15 часов они молчат ШТАТНО, а порог стоял 6, и
+    тревога уходила владельцу ежедневно. Ровно поэтому он и сказал «меня бесят эти
+    алерты»: сторож, который кричит всегда, не замечают, когда он кричит по делу."""
 
 
 # Пороги посчитаны от суточных объёмов (см. all_auto/CLAUDE.md):
 # Новости 10/сутки (~2.4 ч между постами), Кино 7 (~3.5 ч), Музыка 4 (~6 ч),
 # Минусы 1 (24 ч). Берём примерно двойной запас.
+# Пороги считаются в РАБОЧИХ часах окна (ТЗ 2026-08-16 по объёмам):
+# Новости 3 поста за 9 ч окна (~3 ч между постами) → 6; Кино фильм + 3 поста + 2 клипа
+# за 15 ч (~2.5 ч) → 6; Музыка 2 трека + 2 сборника за 9 ч (~2.2 ч) → 7 (сборник
+# собирается полчаса, запас нужен); Минусы 1 в сутки → 20 рабочих часов, это больше двух
+# его окон подряд. Везде примерно двойной запас к реальному темпу.
 DEFAULT_WATCHLIST = (
-    WatchedCommunity("Новости", 233689032, max_silence_hours=6),
-    WatchedCommunity("Кино", 240120678, max_silence_hours=8),
-    WatchedCommunity("Infinity Music", 240295467, max_silence_hours=14),
-    WatchedCommunity("Минусы", 234048994, max_silence_hours=30),
+    WatchedCommunity("Новости", 233689032, max_silence_hours=6, work_start_hour=0, work_end_hour=9),
+    WatchedCommunity("Кино", 240120678, max_silence_hours=6, work_start_hour=9, work_end_hour=24),
+    WatchedCommunity("Infinity Music", 240295467, max_silence_hours=7, work_start_hour=0, work_end_hour=9),
+    WatchedCommunity("Минусы", 234048994, max_silence_hours=20, work_start_hour=0, work_end_hour=9),
 )
 
 
@@ -77,11 +91,48 @@ def last_post_moment(items: list[dict]) -> datetime.datetime | None:
     return datetime.datetime.utcfromtimestamp(max(dates))
 
 
-def silence_hours(moment: datetime.datetime | None, now: datetime.datetime) -> float:
-    """Сколько часов сообщество молчит. Записей нет вовсе → бесконечность."""
+MOSCOW_OFFSET = datetime.timedelta(hours=3)
+
+
+def working_hours_between(
+    start: datetime.datetime, end: datetime.datetime, work_start: int, work_end: int
+) -> float:
+    """Сколько РАБОЧИХ часов прошло между двумя моментами (оба в UTC).
+
+    Часы вне окна софта не считаются: он в это время молчит по расписанию, а не потому
+    что сломался. Идём по получасам — точность выше любой разумной, а окно может
+    пересекать полночь, и аналитическая формула для такого случая читается хуже, чем
+    цикл, который просто спрашивает «этот час рабочий?».
+
+    Окно на все сутки (0..24) даёт ровно календарную разницу — прежнее поведение."""
+    if work_start == 0 and work_end >= 24:
+        return (end - start).total_seconds() / 3600
+    step = datetime.timedelta(minutes=30)
+    total = 0.0
+    moment = start
+    while moment < end:
+        hour = (moment + MOSCOW_OFFSET).hour
+        inside = (
+            work_start <= hour < work_end
+            if work_start < work_end
+            else hour >= work_start or hour < work_end
+        )
+        if inside:
+            total += step.total_seconds() / 3600
+        moment += step
+    return total
+
+
+def silence_hours(
+    moment: datetime.datetime | None,
+    now: datetime.datetime,
+    work_start: int = 0,
+    work_end: int = 24,
+) -> float:
+    """Сколько РАБОЧИХ часов сообщество молчит. Записей нет вовсе → бесконечность."""
     if moment is None:
         return float("inf")
-    return (now - moment).total_seconds() / 3600
+    return working_hours_between(moment, now, work_start, work_end)
 
 
 def build_silence_alert(stale: list[tuple[WatchedCommunity, float]]) -> str:
@@ -89,7 +140,11 @@ def build_silence_alert(stale: list[tuple[WatchedCommunity, float]]) -> str:
     lines = ["🔇 Софт молчит дольше обычного:"]
     for community, hours in stale:
         measured = "записей нет вовсе" if hours == float("inf") else f"{hours:.0f} ч"
-        lines.append(f"• {community.name}: {measured} (норма до {community.max_silence_hours} ч)")
+        lines.append(
+            f"• {community.name}: {measured} рабочего времени "
+            f"(норма до {community.max_silence_hours} ч, окно "
+            f"{community.work_start_hour}:00–{community.work_end_hour}:00 МСК)"
+        )
     lines.append(
         "\nЧастые причины: пустая очередь, занят личный токен VK, упал внешний источник. "
         "Проверить: /status и /disk в этом боте."
@@ -146,7 +201,9 @@ def find_silent_communities(
         items = fetch_wall_items(token, community.group_id)
         if not items:
             continue
-        hours = silence_hours(last_post_moment(items), now)
+        hours = silence_hours(
+            last_post_moment(items), now, community.work_start_hour, community.work_end_hour
+        )
         if hours > community.max_silence_hours:
             stale.append((community, hours))
             logger.warning(

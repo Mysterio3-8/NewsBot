@@ -79,10 +79,73 @@ def test_alert_names_the_soft_and_its_threshold():
 
 
 def test_thresholds_are_at_least_double_the_publishing_rate():
-    """Порог должен ловить поломку, а не случайно растянувшийся интервал. Объёмы —
-    в all_auto/CLAUDE.md: Новости 10/сутки, Кино 7, Музыка 4, Минусы 1."""
-    expected_gap_hours = {"Новости": 24 / 10, "Кино": 24 / 7, "Infinity Music": 24 / 4}
+    """Порог должен ловить поломку, а не случайно растянувшийся интервал.
+
+    ⚠️ Считается от ОКНА софта, а не от суток (расписание по времени суток, 2026-08-14):
+    Новости 3 поста за 9 ч, Кино 6 публикаций за 15 ч, Музыка 4 за 9 ч. Прежний счёт от
+    суток занижал пороги и делал тревогу ежедневной."""
+    plan = {  # имя: (публикаций в окне, длина окна в часах)
+        "Новости": (3, 9),
+        "Кино": (6, 15),
+        "Infinity Music": (4, 9),
+    }
     watched = {c.name: c for c in heartbeat.DEFAULT_WATCHLIST}
 
-    for name, gap in expected_gap_hours.items():
+    for name, (posts, window) in plan.items():
+        gap = window / posts
         assert watched[name].max_silence_hours >= gap * 2, name
+        # И не настолько велик, чтобы поломка пряталась дольше целого окна.
+        assert watched[name].max_silence_hours <= window, name
+
+
+def test_night_silence_of_a_day_soft_is_not_an_alarm():
+    """🔴 Кино работает 09:00–24:00 МСК. Ночью оно молчит ПО РАСПИСАНИЮ, и календарный
+    счёт давал 9 часов тишины при пороге 8 — тревога уходила владельцу каждую ночь.
+    Сторож, который кричит всегда, не замечают, когда он кричит по делу."""
+    import datetime
+
+    from app.core.maintenance.heartbeat import silence_hours
+
+    # Последняя запись 20:42 МСК, сейчас 07:00 МСК следующего дня (UTC = МСК − 3).
+    last = datetime.datetime(2026, 8, 16, 17, 42)
+    now = datetime.datetime(2026, 8, 17, 4, 0)
+
+    assert silence_hours(last, now, work_start=9, work_end=24) < 4
+    assert silence_hours(last, now) > 10  # календарно — те самые «10 часов»
+
+
+def test_working_hours_are_counted_inside_the_window():
+    import datetime
+
+    from app.core.maintenance.heartbeat import working_hours_between
+
+    # 00:00–04:00 МСК целиком внутри окна Новостей.
+    start = datetime.datetime(2026, 8, 16, 21, 0)  # 00:00 МСК
+    end = datetime.datetime(2026, 8, 17, 1, 0)  # 04:00 МСК
+
+    assert working_hours_between(start, end, 0, 9) == 4.0
+
+
+def test_round_the_clock_window_equals_calendar_time():
+    """Окно 0..24 обязано давать ровно прежнее поведение."""
+    import datetime
+
+    from app.core.maintenance.heartbeat import working_hours_between
+
+    start = datetime.datetime(2026, 8, 16, 10, 0)
+    end = datetime.datetime(2026, 8, 16, 15, 30)
+
+    assert working_hours_between(start, end, 0, 24) == 5.5
+
+
+def test_window_crossing_midnight_is_handled():
+    """Окно Новостей 00:00–09:00 не пересекает полночь, а вот у Кино 09:00–24:00 конец
+    упирается в неё — проверяем и обратный случай, чтобы формула не развалилась."""
+    import datetime
+
+    from app.core.maintenance.heartbeat import working_hours_between
+
+    start = datetime.datetime(2026, 8, 16, 19, 0)  # 22:00 МСК
+    end = datetime.datetime(2026, 8, 16, 22, 0)  # 01:00 МСК
+
+    assert working_hours_between(start, end, 22, 2) == 3.0
