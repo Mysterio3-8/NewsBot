@@ -205,3 +205,43 @@ def test_single_failure_does_not_stop_the_scan(monkeypatch):
 
     picked = video_source.pick_unreposted_youtube("https://youtube.com/@x", set())
     assert picked is not None and picked.ref == "youtube_хороший"
+
+
+# --- закреплённый клиент YouTube (2026-08-18) --------------------------------
+
+
+def test_player_client_is_pinned_in_options():
+    """🔴 18.08: yt-dlp сам съезжал на android_vr, а CDN отдавал по его ссылкам ровно
+    2 МБ и дальше 403. `web_embedded` через тот же выход отдал фильм целиком."""
+    from app.core.video.video_source import PLAYER_CLIENTS, ytdlp_options
+
+    options = ytdlp_options(player_clients=PLAYER_CLIENTS)
+
+    assert options["extractor_args"]["youtube"]["player_client"] == ["web_embedded"]
+
+
+def test_pot_provider_is_not_lost_when_the_client_is_pinned():
+    """Обе настройки живут в одном словаре extractor_args — вторая затирала первую."""
+    import os
+    from unittest.mock import patch
+
+    from app.core.video.video_source import ytdlp_options
+
+    with patch.object(os.path, "exists", return_value=True), patch(
+        "app.core.video.video_source.Path"
+    ) as fake_path:
+        fake_path.return_value.exists.return_value = True
+        options = ytdlp_options(player_clients=("web_embedded",))
+
+    args = options["extractor_args"]
+    assert "youtube" in args
+    assert "youtubepot-bgutilscript" in args
+
+
+def test_empty_client_list_lets_ytdlp_decide():
+    """Запасная попытка ходит без закрепления: клиенты YouTube закрывает по очереди."""
+    from app.core.video.video_source import ytdlp_options
+
+    options = ytdlp_options(player_clients=())
+
+    assert "youtube" not in options.get("extractor_args", {})

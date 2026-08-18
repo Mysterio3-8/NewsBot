@@ -57,6 +57,22 @@ COOKIES_MASTER_ENV = "YT_COOKIES_MASTER"
 
 POT_SCRIPT_ENV = "YT_POT_SCRIPT"
 DEFAULT_POT_SCRIPT = "/opt/bgutil-pot/server/build/generate_once.js"
+PLAYER_CLIENTS = ("web_embedded",)
+"""Каким клиентом YouTube просить ссылки на ДАННЫЕ.
+
+🔴 Разобрано живыми вызовами 18.08, когда фильм не вышел. Клиент `web_safari` YouTube
+переводит на SABR и его https-ссылки не отдаёт вовсе, поэтому yt-dlp молча съезжал на
+`android_vr` — а CDN отдавал по этим ссылкам ровно 2 МБ и дальше `403 Forbidden` на
+любом диапазоне, на всех пяти выходах, с куками и без. Выглядело это как «прокси
+сдохли», хотя метаданные, форматы и первые килобайты шли безупречно.
+
+`web_embedded` через тот же выход отдал те же 720p целиком: фильм 632 МБ скачался за
+три минуты на 3.4 МБ/с. Поэтому клиент закреплён явно, а не отдан на усмотрение
+yt-dlp: «выбери сам» — это и был путь на android_vr.
+
+Пусто (`player_clients=()`) → выбирает yt-dlp, как раньше; так работает запасная
+попытка в `daily_video_repost._download_with_retry`."""
+
 JS_RUNTIMES = {"node": {}, "deno": {}}
 """Движки для решения n-challenge. По умолчанию yt-dlp ищет только Deno, а на сервере
 стоит Node — отсюда и брались «форматы отсутствуют» при живых куках. Перечисляем оба:
@@ -91,7 +107,7 @@ def _prepare_cookiefile() -> str | None:
     return None
 
 
-def ytdlp_options(**overrides) -> dict[str, Any]:
+def ytdlp_options(*, player_clients=None, **overrides) -> dict[str, Any]:
     """Базовые опции yt-dlp: куки, PO-token провайдер и JS-движок.
 
     Три вещи, без которых YouTube с серверного IP не отдаёт видео ВООБЩЕ (разобрано
@@ -111,6 +127,9 @@ def ytdlp_options(**overrides) -> dict[str, Any]:
     Любой из трёх отсутствует — ходим как раньше: опция просто не выставляется, код не
     падает. Это важно для дев-машины, где ни провайдера, ни node может не быть."""
     options: dict[str, Any] = {"quiet": True, "no_warnings": True, "js_runtimes": JS_RUNTIMES}
+    extractor_args: dict[str, Any] = {}
+    if player_clients:
+        extractor_args["youtube"] = {"player_client": list(player_clients)}
     proxy = os.environ.get(PROXY_ENV, "").strip()
     if proxy:
         options["proxy"] = proxy
@@ -120,9 +139,9 @@ def ytdlp_options(**overrides) -> dict[str, Any]:
 
     pot_script = os.environ.get(POT_SCRIPT_ENV, DEFAULT_POT_SCRIPT)
     if pot_script and Path(pot_script).exists():
-        options["extractor_args"] = {
-            "youtubepot-bgutilscript": {"script_path": [pot_script]}
-        }
+        extractor_args["youtubepot-bgutilscript"] = {"script_path": [pot_script]}
+    if extractor_args:
+        options["extractor_args"] = extractor_args
     options.update(overrides)
     return options
 
@@ -291,7 +310,11 @@ def pick_unreposted(
 
 
 def download_video(
-    video: SourceVideo, dest_dir: Path, *, max_height: int = MAX_DOWNLOAD_HEIGHT
+    video: SourceVideo,
+    dest_dir: Path,
+    *,
+    max_height: int = MAX_DOWNLOAD_HEIGHT,
+    player_clients=PLAYER_CLIENTS,
 ) -> Path:
     """Скачать видео в dest_dir: лучшая прямая mp4-ссылка ≤max_height из video.get,
     при её отсутствии/обрыве — фолбэк yt-dlp по странице видео."""
@@ -307,7 +330,7 @@ def download_video(
         except Exception as error:
             logger.warning("Видео %s: прямая ссылка %dp не сработала: %s", video.ref, height, error)
 
-    return _download_with_ytdlp(video, dest, max_height=max_height)
+    return _download_with_ytdlp(video, dest, max_height=max_height, player_clients=player_clients)
 
 
 def _download_url(url: str, dest: Path) -> None:
@@ -318,7 +341,9 @@ def _download_url(url: str, dest: Path) -> None:
                 file.write(chunk)
 
 
-def _download_with_ytdlp(video: SourceVideo, dest: Path, *, max_height: int) -> Path:
+def _download_with_ytdlp(
+    video: SourceVideo, dest: Path, *, max_height: int, player_clients=PLAYER_CLIENTS
+) -> Path:
     try:
         import yt_dlp
     except ImportError as error:
@@ -333,6 +358,7 @@ def _download_with_ytdlp(video: SourceVideo, dest: Path, *, max_height: int) -> 
     # формат-строка ровно такая, `bestvideo+bestaudio`. Progressive остаётся хвостом
     # фолбэка: у части роликов раздельных дорожек просто нет.
     options = ytdlp_options(
+        player_clients=player_clients,
         format=(
             f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/"
             f"bestvideo[height<={max_height}]+bestaudio/"

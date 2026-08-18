@@ -221,10 +221,16 @@ def _download_with_retry(repo: Repository, video: SourceVideo) -> Path:
             video.ref, current or "прямой путь", str(first_error)[:80],
         )
         other = pick_working_proxy(repo, exclude=current)
-        if other is None or other == current:
-            raise
-        os.environ["YT_PROXY"] = other
-        return download_video(video, DAILY_VIDEO_DIR)
+        if other is not None and other != current:
+            os.environ["YT_PROXY"] = other
+            return download_video(video, DAILY_VIDEO_DIR)
+        # Выхода на замену нет — пробуем тем же выходом, но БЕЗ закреплённого клиента:
+        # пусть yt-dlp выбирает сам. Закрепление (`web_embedded`) спасло 18.08, но
+        # клиенты YouTube закрывает по очереди, и однажды рабочим окажется другой.
+        logger.warning(
+            "Фильм %s: замены выходу нет — повтор без закреплённого клиента", video.ref
+        )
+        return download_video(video, DAILY_VIDEO_DIR, player_clients=())
 
 
 def _alert_video_failure(repo: Repository, channel_name: str, stage: str, reason: str) -> None:
