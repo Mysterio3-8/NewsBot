@@ -67,7 +67,11 @@ class WatchedCommunity:
 DEFAULT_WATCHLIST = (
     WatchedCommunity("Новости", 233689032, max_silence_hours=6, work_start_hour=0, work_end_hour=9),
     WatchedCommunity("Кино", 240120678, max_silence_hours=6, work_start_hour=9, work_end_hour=24),
-    WatchedCommunity("Infinity Music", 240295467, max_silence_hours=7, work_start_hour=0, work_end_hour=9),
+    # Музыка с 2026-08-18 работает 08:00–01:00 МСК (ТЗ «растянуть на весь день»):
+    # окно 17 часов, интервал каждого потока 420–560 мин, то есть штатный разрыв между
+    # записями доходит до девяти рабочих часов. Порог 11 — двойной запас к обычному
+    # темпу и всё ещё меньше одного окна, поэтому вставший софт заметен в тот же день.
+    WatchedCommunity("Infinity Music", 240295467, max_silence_hours=11, work_start_hour=8, work_end_hour=1),
     WatchedCommunity("Минусы", 234048994, max_silence_hours=20, work_start_hour=0, work_end_hour=9),
 )
 
