@@ -22,6 +22,15 @@ STATUS_TIMEOUT_SECONDS = 30
 
 CLI_RELATIVE_PATH = "app/soundcloud_cli.py"
 
+PLAYLISTS_CLI_RELATIVE_PATH = "app/yt_playlists_cli.py"
+"""Второй вход того же софта — поток СБОРНИКОВ (кнопка «🎼 Сборник по жанру»).
+
+У софта два независимых потока (альбомы и сборники), и входы у них разные намеренно:
+общий argparse позволил бы им задеть друг друга."""
+
+GENRES_TIMEOUT_SECONDS = 30
+REQUEST_TIMEOUT_SECONDS = 60
+
 
 def supports_soundcloud(record) -> bool:
     """Есть ли у софта альбомный поток. Битый config_json — не роняем бот."""
@@ -43,12 +52,14 @@ def _python_executable(project_path: Path) -> str:
     return sys.executable
 
 
-def _run_cli(project_path: str, args: list[str], timeout: int) -> dict:
+def _run_cli(
+    project_path: str, args: list[str], timeout: int, cli: str = CLI_RELATIVE_PATH
+) -> dict:
     path = Path(project_path)
-    if not (path / CLI_RELATIVE_PATH).exists():
-        return {"ok": False, "error": f"CLI софта не найден: {path / CLI_RELATIVE_PATH}"}
+    if not (path / cli).exists():
+        return {"ok": False, "error": f"CLI софта не найден: {path / cli}"}
 
-    command = [_python_executable(path), CLI_RELATIVE_PATH, *args]
+    command = [_python_executable(path), cli, *args]
     try:
         proc = subprocess.run(
             command, cwd=str(path), capture_output=True, text=True, timeout=timeout
@@ -77,6 +88,63 @@ async def enqueue(project_path: str, url: str, chat_id: int) -> dict:
 
 async def status(project_path: str) -> dict:
     return await asyncio.to_thread(_run_cli, project_path, ["status"], STATUS_TIMEOUT_SECONDS)
+
+
+async def genres(project_path: str) -> dict:
+    """Список жанров для кнопок. Бот не читает config софта — только ответ CLI."""
+    return await asyncio.to_thread(
+        _run_cli, project_path, ["genres"], GENRES_TIMEOUT_SECONDS, PLAYLISTS_CLI_RELATIVE_PATH
+    )
+
+
+async def request_genre(project_path: str, genre: str) -> dict:
+    """Заказать сборник жанра. Софт кладёт заказ в очередь и собирает его тиком —
+    ждать здесь нечего: сборка идёт 25–30 минут."""
+    return await asyncio.to_thread(
+        _run_cli,
+        project_path,
+        ["request", genre],
+        REQUEST_TIMEOUT_SECONDS,
+        PLAYLISTS_CLI_RELATIVE_PATH,
+    )
+
+
+def genre_names(payload: dict) -> list[str]:
+    """Имена жанров из ответа CLI. Битый ответ — пустой список, бот не падает."""
+    items = payload.get("genres") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [str(item.get("name", "")).strip() for item in items if str(item.get("name", "")).strip()]
+
+
+def render_genres_prompt(payload: dict) -> str:
+    if not payload.get("ok"):
+        return f"❌ Не получилось: {payload.get('error', 'неизвестная ошибка')}"
+    if not genre_names(payload):
+        return "Список жанров пуст — добавь их в config софта (soundcloud.genres)."
+
+    pending = payload.get("pending", 0)
+    limit = payload.get("limit", 0)
+    lines = [
+        "🎼 Какой сборник собрать?",
+        "",
+        # Про окно говорим прямо: софт работает с 00:00 до 09:00 МСК, и «нажал днём —
+        # ничего не вышло» иначе читается как поломка.
+        "Соберу в ближайшую ночь (окно 00:00–09:00 МСК) — заказ занимает один из "
+        "двух сборников за ночь.",
+    ]
+    if pending:
+        lines.append(f"Уже в очереди заказов: {pending} из {limit}.")
+    return "\n".join(lines)
+
+
+def render_request_result(payload: dict) -> str:
+    if not payload.get("ok"):
+        return f"❌ Не получилось: {payload.get('error', 'неизвестная ошибка')}"
+    return (
+        f"✅ Заказал сборник: {payload.get('genre', '')}\n"
+        "Соберу в ближайшую ночь и опубликую в VK. Не соберётся — напишу."
+    )
 
 
 def render_enqueue_result(payload: dict) -> str:

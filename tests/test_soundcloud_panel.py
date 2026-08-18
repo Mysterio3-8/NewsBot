@@ -88,3 +88,49 @@ def test_missing_cli_reports_path_instead_of_crashing(tmp_path):
 
     assert result["ok"] is False
     assert "CLI софта не найден" in result["error"]
+
+
+# --- заказ сборника по жанру (2026-08-18) ------------------------------------
+
+
+def test_genre_names_survive_a_broken_answer():
+    """Софт ответил мусором — бот показывает пустой список, а не падает."""
+    assert panel.genre_names({"ok": True, "genres": "не список"}) == []
+    assert panel.genre_names({"ok": False}) == []
+
+
+def test_genre_names_drop_empty_entries():
+    payload = {"ok": True, "genres": [{"name": "Фонк"}, {"name": "  "}, {"query": "x"}]}
+
+    assert panel.genre_names(payload) == ["Фонк"]
+
+
+def test_genre_prompt_warns_about_the_night_window():
+    """Нажатие днём даёт сборник ночью — молчать об этом нельзя."""
+    text = panel.render_genres_prompt({"ok": True, "genres": [{"name": "Фонк"}], "pending": 0})
+
+    assert "00:00–09:00" in text
+
+
+def test_genre_prompt_shows_how_many_requests_are_waiting():
+    text = panel.render_genres_prompt(
+        {"ok": True, "genres": [{"name": "Фонк"}], "pending": 1, "limit": 2}
+    )
+
+    assert "1 из 2" in text
+
+
+def test_empty_genre_list_says_where_to_add_them():
+    text = panel.render_genres_prompt({"ok": True, "genres": []})
+
+    assert "soundcloud.genres" in text
+
+
+def test_request_result_names_the_ordered_genre():
+    assert "Фонк" in panel.render_request_result({"ok": True, "genre": "Фонк"})
+
+
+def test_request_refusal_is_shown_as_is():
+    text = panel.render_request_result({"ok": False, "error": "уже 2 заказа в очереди"})
+
+    assert "уже 2 заказа в очереди" in text

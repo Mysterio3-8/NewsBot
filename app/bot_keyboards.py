@@ -78,6 +78,9 @@ def soft_menu(
                 InlineKeyboardButton(text="📋 Очередь", callback_data=f"soft:scq:{soft_id}"),
             ]
         )
+        rows.append(
+            [InlineKeyboardButton(text="🎼 Сборник по жанру", callback_data=f"soft:gen:{soft_id}")]
+        )
     if kind == "channel" and channel_id is not None:
         rows += [
             [
@@ -392,3 +395,20 @@ def process_menu(prefix: str) -> InlineKeyboardMarkup:
             _close_row(),
         ]
     )
+
+
+def genre_menu(soft_id: str, names: list[str]) -> InlineKeyboardMarkup:
+    """Жанры для заказа сборника, по два в ряд.
+
+    В callback_data идёт ИНДЕКС жанра, а не имя: лимит Telegram — 64 байта, кириллица
+    ест по два байта на букву, и длинное имя обрезалось бы молча."""
+    rows = []
+    for start in range(0, len(names), 2):
+        rows.append(
+            [
+                InlineKeyboardButton(text=name, callback_data=f"soft:genq:{soft_id}:{start + shift}")
+                for shift, name in enumerate(names[start : start + 2])
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"soft:open:{soft_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

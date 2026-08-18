@@ -48,3 +48,41 @@ def test_soft_list_rows_carry_dot_and_id():
     rows = {r.soft_id: r for r in bot.soft_list_rows(softs, {"ch_1": "🟢"})}
     assert rows["ch_1"].dot == "🟢"
     assert rows["ch_5"].dot == "❔"  # нет в statuses → дефолт
+
+
+def test_genre_menu_carries_index_not_the_cyrillic_name():
+    """callback_data ограничен 64 байтами, кириллица ест по два байта на букву."""
+    from app import bot_keyboards as kb
+
+    markup = kb.genre_menu("p_music", ["Фонк", "Рэп", "Атмосферный"])
+
+    codes = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert codes[:3] == ["soft:genq:p_music:0", "soft:genq:p_music:1", "soft:genq:p_music:2"]
+    assert all(len(code.encode()) <= 64 for code in codes)
+
+
+def test_genre_menu_lays_buttons_two_per_row_and_ends_with_back():
+    from app import bot_keyboards as kb
+
+    markup = kb.genre_menu("p_music", ["Фонк", "Рэп", "Поп"])
+
+    assert [len(row) for row in markup.inline_keyboard] == [2, 1, 1]
+    assert markup.inline_keyboard[-1][0].callback_data == "soft:open:p_music"
+
+
+def test_soundcloud_soft_gets_the_genre_button():
+    from app import bot_keyboards as kb
+
+    markup = kb.soft_menu("p_music", kind="process", running=True, soundcloud=True)
+
+    codes = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "soft:gen:p_music" in codes
+
+
+def test_soft_without_soundcloud_has_no_genre_button():
+    from app import bot_keyboards as kb
+
+    markup = kb.soft_menu("p_minus", kind="process", running=True, soundcloud=False)
+
+    codes = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "soft:gen:p_minus" not in codes

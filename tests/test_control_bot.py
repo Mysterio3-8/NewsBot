@@ -129,7 +129,8 @@ def test_build_dispatcher_registers_expected_handlers():
     # soft:cfg (реальное управление лимитами внешних софтов) = 44
     # +4 callback источников внешних софтов (soft:src / srcadd / srcdel / srcdel!) = 48
     # +2 callback текстов внешних софтов (soft:txt — список, soft:txted — правка) = 50
-    assert len(dp.callback_query.handlers) == 50
+    # +2 callback заказа сборника по жанру (soft:gen — список, soft:genq — тап, 2026-08-18) = 52
+    assert len(dp.callback_query.handlers) == 52
 
 
 def test_build_nature_controller_none_without_env_path():

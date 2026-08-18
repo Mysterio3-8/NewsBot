@@ -2156,6 +2156,50 @@ def build_dispatcher(
         await _show_soft(cb, soft, header=soundcloud_panel.render_status(payload))
         await cb.answer()
 
+    # Порядок регистрации важен: "soft:gen:" — префикс "soft:genq:", и общий
+    # обработчик перехватил бы тап по жанру. Конкретный идёт первым.
+    @dp.callback_query(F.data.startswith("soft:genq:"))
+    async def on_soft_genre_pick(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, raw_index = cb.data.split(":")
+        project_path = _soundcloud_path(soft_id)
+        if project_path is None:
+            await cb.answer("У этого софта нет потока сборников", show_alert=True)
+            return
+
+        # Список перечитываем, а не держим в памяти: бот переживает рестарт, а
+        # запомненный индекс после правки жанров указывал бы не туда.
+        names = soundcloud_panel.genre_names(await soundcloud_panel.genres(project_path))
+        index = int(raw_index)
+        if index >= len(names):
+            await cb.answer("Список жанров изменился — открой заново", show_alert=True)
+            return
+
+        payload = await soundcloud_panel.request_genre(project_path, names[index])
+        soft = find_soft(_softs(), soft_id)
+        await _show_soft(cb, soft, header=soundcloud_panel.render_request_result(payload))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:gen:"))
+    async def on_soft_genres(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        project_path = _soundcloud_path(soft_id)
+        if project_path is None:
+            await cb.answer("У этого софта нет потока сборников", show_alert=True)
+            return
+
+        payload = await soundcloud_panel.genres(project_path)
+        names = soundcloud_panel.genre_names(payload)
+        await _edit_current(
+            cb,
+            soundcloud_panel.render_genres_prompt(payload),
+            kb.genre_menu(soft_id, names) if names else None,
+        )
+        await cb.answer()
+
     @dp.callback_query(F.data.startswith("soft:lim:"))
     async def on_soft_limit(cb: CallbackQuery, state: FSMContext) -> None:
         if not await _callback_guard(cb):
