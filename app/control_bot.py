@@ -557,6 +557,7 @@ def _persist_contract(manager_repo, soft_id: str, contract: SoftContract) -> str
     config["limits"] = payload.get("limits", {})
     config["sources"] = payload.get("sources", {})
     config["texts"] = payload.get("texts", {})
+    config["genres"] = payload.get("genres", [])
     manager_repo.update_config(soft_id, config)
     if not record.project_path:
         return "✅ Сохранено (путь к софту не задан — файл контракта не пишется)."
@@ -608,6 +609,52 @@ def delete_soft_source(manager_repo, soft_id: str, kind: str, index: int) -> str
     if updated is contract:
         return "Это последний источник — удалять нельзя, иначе софту негде брать контент."
     return _persist_contract(manager_repo, soft_id, updated) + f"\nУдалён: {url}"
+
+
+GENRE_ADD_PROMPT = (
+    "Пришли жанр одним сообщением: «Имя | поисковый запрос».\n\n"
+    "Например: «Фонк | русский фонк». Без вертикальной черты имя станет и запросом.\n"
+    "Имя видно на кнопке, по запросу софт ищет треки на SoundCloud."
+)
+
+
+def add_soft_genre(manager_repo, soft_id: str, raw: str) -> str:
+    """Добавить жанр в контракт. Разделитель — «|», как в подсказке владельцу."""
+    name, _, query = (raw or "").partition("|")
+    if not name.strip():
+        return "Пустая строка — жанр не добавлен."
+    contract = soft_contract_of(manager_repo, soft_id)
+    if contract is None:
+        return "Софт не найден в реестре."
+    updated = contract.with_genre(name, query)
+    return _persist_contract(manager_repo, soft_id, updated)
+
+
+def delete_soft_genre(manager_repo, soft_id: str, index: int) -> str:
+    """Удалить жанр по индексу. Индекс, а не имя: кириллица в callback_data съедает
+    лимит 64 байта, и длинное имя обрезалось бы молча."""
+    contract = soft_contract_of(manager_repo, soft_id)
+    if contract is None:
+        return "Софт не найден в реестре."
+    if index < 0 or index >= len(contract.genres):
+        return "Жанр не найден — список изменился."
+    name = contract.genres[index][0]
+    return _persist_contract(manager_repo, soft_id, contract.without_genre(name)) + (
+        f"\nУдалён жанр: {name}"
+    )
+
+
+def render_genre_editor(contract) -> str:
+    """Заголовок редактора жанров. Разводим два разных состояния явно."""
+    if contract is None:
+        return "Софт не найден в реестре."
+    if not contract.genres:
+        return (
+            "🎼 Жанров в контракте нет — кнопки берутся из config.yaml софта.\n"
+            "Добавишь первый — контракт начнёт перекрывать конфиг ЦЕЛИКОМ, "
+            "то есть в списке останутся только заданные здесь."
+        )
+    return "🎼 Жанры кнопки «Сборник по жанру». Тап — удалить."
 
 
 SOFT_TEXT_PROMPTS = {
@@ -1319,6 +1366,9 @@ def build_dispatcher(
 
     class SoftTextInput(StatesGroup):
         waiting_value = State()  # ждём текст/теги внешнего софта (контракт)
+
+    class SoftGenreInput(StatesGroup):
+        waiting_value = State()  # ждём жанр «Имя | запрос» для кнопки сборника
 
     class PromptInput(StatesGroup):
         waiting_text = State()  # ждём новый текст шаблона
@@ -2154,6 +2204,56 @@ def build_dispatcher(
         payload = await soundcloud_panel.status(project_path)
         soft = find_soft(_softs(), soft_id)
         await _show_soft(cb, soft, header=soundcloud_panel.render_status(payload))
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:gedit:"))
+    async def on_soft_genre_editor(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        contract = soft_contract_of(manager_repo, soft_id)
+        await _edit_current(
+            cb,
+            render_genre_editor(contract),
+            kb.genre_editor_menu(soft_id, contract.genres if contract else ()),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("soft:gadd:"))
+    async def on_soft_genre_add(cb: CallbackQuery, state: FSMContext) -> None:
+        if not await _callback_guard(cb):
+            return
+        soft_id = cb.data.split(":", 2)[2]
+        await state.set_state(SoftGenreInput.waiting_value)
+        await state.update_data(soft_id=soft_id)
+        await _edit_current(cb, GENRE_ADD_PROMPT, None)
+        await cb.answer()
+
+    @dp.message(StateFilter(SoftGenreInput.waiting_value))
+    async def on_soft_genre_value(message: Message, state: FSMContext) -> None:
+        if not await guard(message):
+            return
+        data = await state.get_data()
+        await state.clear()
+        soft_id = data.get("soft_id", "")
+        answer = add_soft_genre(manager_repo, soft_id, message.text or "")
+        contract = soft_contract_of(manager_repo, soft_id)
+        await message.answer(
+            answer, reply_markup=kb.genre_editor_menu(
+                soft_id, contract.genres if contract else ()
+            )
+        )
+
+    @dp.callback_query(F.data.startswith("soft:gdel:"))
+    async def on_soft_genre_delete(cb: CallbackQuery) -> None:
+        if not await _callback_guard(cb):
+            return
+        _, _, soft_id, index = cb.data.split(":")
+        answer = delete_soft_genre(manager_repo, soft_id, int(index))
+        contract = soft_contract_of(manager_repo, soft_id)
+        await _edit_current(
+            cb, answer, kb.genre_editor_menu(soft_id, contract.genres if contract else ())
+        )
         await cb.answer()
 
     # Порядок регистрации важен: "soft:gen:" — префикс "soft:genq:", и общий

@@ -120,7 +120,8 @@ def test_build_dispatcher_registers_expected_handlers():
     # +1 команда /source (добавить источник фильмов ответом на тревогу, 2026-08-15) = 47
     # +1 message (FSM ввода источника внешнего софта через контракт, 2026-08-15) = 48
     # +1 message (FSM ввода текста/тегов внешнего софта, этап «Тексты» 2026-08-16) = 49
-    assert len(dp.message.handlers) == 49
+    # +1 message (FSM ввод жанра «Имя | запрос», 2026-08-18) = 50
+    assert len(dp.message.handlers) == 50
     # 23 было; +6 callback каналов (ch:list/open/toggle/filter/sources/set) = 29;
     # +1 тумблер оформления фото (set:photodesign) = 30; +7 пульт «📦 Софты»
     # (soft:list/open/on/off/status/dests/na) = 37; +2 альбомный поток
@@ -130,7 +131,8 @@ def test_build_dispatcher_registers_expected_handlers():
     # +4 callback источников внешних софтов (soft:src / srcadd / srcdel / srcdel!) = 48
     # +2 callback текстов внешних софтов (soft:txt — список, soft:txted — правка) = 50
     # +2 callback заказа сборника по жанру (soft:gen — список, soft:genq — тап, 2026-08-18) = 52
-    assert len(dp.callback_query.handlers) == 52
+    # +3 callback редактора жанров (soft:gedit / gadd / gdel, 2026-08-18) = 55
+    assert len(dp.callback_query.handlers) == 55
 
 
 def test_build_nature_controller_none_without_env_path():

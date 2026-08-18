@@ -410,5 +410,23 @@ def genre_menu(soft_id: str, names: list[str]) -> InlineKeyboardMarkup:
                 for shift, name in enumerate(names[start : start + 2])
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"soft:open:{soft_id}")])
+    rows.append([
+        InlineKeyboardButton(text="✏️ Править жанры", callback_data=f"soft:gedit:{soft_id}"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"soft:open:{soft_id}"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def genre_editor_menu(soft_id: str, genres) -> InlineKeyboardMarkup:
+    """Правка списка жанров: тап по жанру — удалить, отдельная кнопка — добавить.
+
+    В callback_data идёт индекс: имена кириллические, а лимит Telegram — 64 байта."""
+    rows = [
+        [InlineKeyboardButton(
+            text=f"🗑 {name} → {query}"[:60], callback_data=f"soft:gdel:{soft_id}:{index}"
+        )]
+        for index, (name, query) in enumerate(genres)
+    ]
+    rows.append([InlineKeyboardButton(text="➕ Добавить жанр", callback_data=f"soft:gadd:{soft_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"soft:gen:{soft_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -48,6 +48,12 @@ class SoftContract:
     text_channel_phrases: tuple[str, ...] = ()
     """Постоянные SEO-ключи сообщества. Не зависят от текста конкретного поста — см.
     разбор двух сортов ключей в `all_auto/SEO.md`."""
+    genres: tuple[tuple[str, str], ...] = ()
+    """Жанры кнопки «🎼 Сборник по жанру»: пары «имя кнопки → поисковый запрос».
+
+    Пара, а не одна строка: на кнопке нужно короткое «Фонк», а искать надо «русский
+    фонк» — иначе либо кнопка нечитаемая, либо выдача не та. Пусто = софт берёт свой
+    список из `config.yaml`, ровно как до появления этой правки."""
 
     TEXT_FIELDS = {
         "template": "text_post_template",
@@ -79,7 +85,24 @@ class SoftContract:
             quiet_end_hour=limits.get("quiet_end_hour"),
             sources_primary=tuple(sources.get("primary") or ()),
             sources_secondary=tuple(sources.get("secondary") or ()),
+            genres=cls._genres_from(data.get("genres") if isinstance(data, dict) else None),
         )
+
+    @staticmethod
+    def _genres_from(raw) -> tuple[tuple[str, str], ...]:
+        """Список из реестра → пары. Битую запись пропускаем: контракт не должен уметь
+        уронить бот, а один потерянный жанр владелец добавит заново."""
+        if not isinstance(raw, list):
+            return ()
+        pairs = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            query = str(item.get("query", "")).strip() or name
+            if name:
+                pairs.append((name, query))
+        return tuple(pairs)
 
     LIMIT_FIELDS = (
         "max_posts_per_day",
@@ -118,7 +141,34 @@ class SoftContract:
             result["sources"] = sources
         if texts:
             result["texts"] = texts
+        if self.genres:
+            result["genres"] = [{"name": name, "query": query} for name, query in self.genres]
         return result
+
+    def with_genre(self, name: str, query: str = "") -> "SoftContract":
+        """Копия контракта с добавленным (или переписанным) жанром.
+
+        Повтор имени ЗАМЕНЯЕТ запрос, а не добавляет второй такой же жанр: две кнопки
+        «Фонк» с разными запросами владелец различить не сможет."""
+        name = (name or "").strip()
+        query = (query or "").strip() or name
+        if not name:
+            return self
+        others = tuple(
+            pair for pair in self.genres if pair[0].casefold() != name.casefold()
+        )
+        return dataclasses.replace(self, genres=others + ((name, query),))
+
+    def without_genre(self, name: str) -> "SoftContract":
+        """Копия контракта без жанра. Последний удалять МОЖНО, в отличие от источников:
+        пустой список жанров — это просто «кнопка ведёт к списку софта из config.yaml»,
+        а не «софту негде брать контент»."""
+        return dataclasses.replace(
+            self,
+            genres=tuple(
+                pair for pair in self.genres if pair[0].casefold() != (name or "").strip().casefold()
+            ),
+        )
 
     def with_text(self, key: str, raw: str) -> "SoftContract":
         """Копия контракта с новым текстовым полем. Пустая строка снимает настройку —
@@ -205,6 +255,8 @@ class SoftContract:
         if self.text_base_tags or self.text_channel_phrases:
             total = len(self.text_base_tags) + len(self.text_channel_phrases)
             lines.append(f"🔎 SEO-ключей: {total}")
+        if self.genres:
+            lines.append(f"🎼 Жанров: {len(self.genres)}")
         return "\n".join(lines)
 
 

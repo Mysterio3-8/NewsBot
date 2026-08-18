@@ -61,13 +61,28 @@ def test_genre_menu_carries_index_not_the_cyrillic_name():
     assert all(len(code.encode()) <= 64 for code in codes)
 
 
-def test_genre_menu_lays_buttons_two_per_row_and_ends_with_back():
+def test_genre_menu_lays_buttons_two_per_row_and_ends_with_editor_and_back():
     from app import bot_keyboards as kb
 
     markup = kb.genre_menu("p_music", ["Фонк", "Рэп", "Поп"])
 
-    assert [len(row) for row in markup.inline_keyboard] == [2, 1, 1]
-    assert markup.inline_keyboard[-1][0].callback_data == "soft:open:p_music"
+    assert [len(row) for row in markup.inline_keyboard] == [2, 1, 2]
+    assert [b.callback_data for b in markup.inline_keyboard[-1]] == [
+        "soft:gedit:p_music", "soft:open:p_music"
+    ]
+
+
+def test_genre_editor_lists_pairs_and_offers_add():
+    """Правка списка жанров из бота (ТЗ 2026-08-18): config.yaml Музыки не
+    версионируется, и правка руками на сервере теряется."""
+    from app import bot_keyboards as kb
+
+    markup = kb.genre_editor_menu("p_music", (("Фонк", "русский фонк"), ("Рэп", "рэп")))
+
+    codes = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert codes[:2] == ["soft:gdel:p_music:0", "soft:gdel:p_music:1"]
+    assert "soft:gadd:p_music" in codes
+    assert all(len(code.encode()) <= 64 for code in codes)
 
 
 def test_soundcloud_soft_gets_the_genre_button():
