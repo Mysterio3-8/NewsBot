@@ -72,9 +72,16 @@ def probe_proxy(proxy: str | None, *, video_id: str = PROBE_VIDEO_ID) -> bool:
        скачается (живой случай 18.08, сутки без фильма)."""
     import yt_dlp
 
-    from app.core.video.video_source import METADATA_THROTTLE, ytdlp_options
+    from app.core.video.video_source import (
+        METADATA_THROTTLE,
+        PLAYER_CLIENTS,
+        ytdlp_options,
+    )
 
-    options = ytdlp_options(**METADATA_THROTTLE)
+    # Клиент — ТОТ ЖЕ, что у скачивания. Проба обязана повторять боевой путь: 18.08 она
+    # ходила клиентом по умолчанию (android_vr) и браковала выходы, через которые
+    # закреплённый `web_embedded` качал фильм целиком.
+    options = ytdlp_options(player_clients=PLAYER_CLIENTS, **METADATA_THROTTLE)
     options["skip_download"] = True
     if proxy:
         options["proxy"] = proxy

@@ -192,3 +192,15 @@ def test_no_url_means_no_probe():
     from app.core.video.proxy_rotation import _data_flows
 
     assert not _data_flows("socks5://127.0.0.1:10817", "")
+
+
+def test_probe_uses_the_same_player_client_as_the_download():
+    """Проба обязана повторять боевой путь: 18.08 она ходила клиентом по умолчанию и
+    браковала выходы, через которые закреплённый клиент качал фильм целиком."""
+    import inspect
+
+    from app.core.video import proxy_rotation
+
+    source = inspect.getsource(proxy_rotation.probe_proxy)
+
+    assert "player_clients=PLAYER_CLIENTS" in source
