@@ -48,25 +48,41 @@ def proxy_candidates(last_good: str | None = None) -> list[str]:
     return urls
 
 
-def probe_proxy(proxy: str | None, *, video_id: str = PROBE_VIDEO_ID) -> bool:
-    """Отдаёт ли YouTube через этот выход настоящие форматы.
+DATA_PROBE_BYTES = 3 * 1024 * 1024
+"""Сколько данных просим у выхода на проверке.
 
-    Именно форматы, а не «ответил ли сервер»: при барьере ответ приходит, но в нём одни
-    раскадровки, и по коду ответа это неотличимо от рабочего случая."""
+🔴 Три мегабайта, а не сто килобайт, и это главное число здесь. 18.08 все пять выходов
+отдавали метаданные и форматы безупречно, а на самих данных YouTube резал их РОВНО
+после 2 МБ: `Range 0-1MiB` → 206, `2MiB-3MiB` на той же ссылке → 403. Фильм на 435 МБ
+не качался ни через один выход, при этом любая проверка «жив ли выход» отвечала «жив».
+
+Порог пробы обязан быть ВЫШЕ реза, иначе проверка врёт ровно в том случае, ради
+которого она и написана."""
+
+
+def probe_proxy(proxy: str | None, *, video_id: str = PROBE_VIDEO_ID) -> bool:
+    """Отдаёт ли YouTube через этот выход настоящие форматы И сами данные.
+
+    Две проверки, и вторая появилась дорого:
+
+    1. **форматы** — при барьере «я не бот» ответ приходит, но в нём одни раскадровки,
+       и по коду ответа это неотличимо от рабочего случая;
+    2. **данные** — CDN отвечает отдельно от плеера и режет выход независимо. Проверять
+       только метаданные значит регулярно выбирать выход, через который ничего не
+       скачается (живой случай 18.08, сутки без фильма)."""
     import yt_dlp
 
     from app.core.video.video_source import METADATA_THROTTLE, ytdlp_options
 
-    options = ytdlp_options(skip_download=True, **METADATA_THROTTLE)
+    options = ytdlp_options(**METADATA_THROTTLE)
+    options["skip_download"] = True
     if proxy:
         options["proxy"] = proxy
     else:
         options.pop("proxy", None)
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}", download=False, process=False
-            )
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
     except Exception as error:  # noqa: BLE001 — граница сети, отказ это штатный ответ
         logger.info("Прокси %s не подошёл: %s", proxy or "прямой путь", str(error)[:80])
         return False
@@ -75,7 +91,53 @@ def probe_proxy(proxy: str | None, *, video_id: str = PROBE_VIDEO_ID) -> bool:
     if not playable:
         logger.info("Прокси %s отдаёт только раскадровки", proxy or "прямой путь")
         return False
+    return _data_flows(proxy, _probe_url(formats))
+
+
+def _probe_url(formats: list[dict]) -> str:
+    """Ссылка самого ЛЁГКОГО потока с прямым URL.
+
+    Лёгкого намеренно: проба стоит трафика и времени, а режет CDN одинаково независимо
+    от того, аудио это или видео."""
+    with_url = [item for item in formats if item.get("url")]
+    if not with_url:
+        return ""
+    return min(with_url, key=lambda item: item.get("tbr") or float("inf"))["url"]
+
+
+def _data_flows(proxy: str | None, url: str, *, size: int = DATA_PROBE_BYTES) -> bool:
+    """Отдаёт ли CDN через этот выход хотя бы `size` байт подряд.
+
+    Просим ОДНИМ диапазоном: порезанный выход отвечает 206 на первый мегабайт и 403 на
+    следующий, поэтому мелкими кусками проверка снова соврала бы."""
+    if not url:
+        return False
+    import requests
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        response = requests.get(
+            url,
+            headers={"Range": f"bytes=0-{size - 1}"},
+            proxies=proxies,
+            timeout=DATA_PROBE_TIMEOUT_SECONDS,
+            stream=True,
+        )
+        got = len(response.raw.read(size, decode_content=True))
+        response.close()
+    except Exception as error:  # noqa: BLE001 — граница сети
+        logger.info("Прокси %s не отдал данные: %s", proxy or "прямой путь", str(error)[:80])
+        return False
+    if response.status_code not in (200, 206) or got < size:
+        logger.warning(
+            "Прокси %s режет данные: код %s, отдал %d из %d байт",
+            proxy or "прямой путь", response.status_code, got, size,
+        )
+        return False
     return True
+
+
+DATA_PROBE_TIMEOUT_SECONDS = 60
 
 
 def pick_working_proxy(repo, *, probe=probe_proxy, exclude: str | None = None) -> str | None:

@@ -98,3 +98,97 @@ def test_single_exit_leaves_nothing_to_retry_with(tmp_path, monkeypatch):
     assert pick_working_proxy(
         repo, probe=lambda proxy: True, exclude="socks5://127.0.0.1:10813"
     ) is None
+
+
+# --- проверка ДАННЫХ, а не только метаданных (2026-08-18) --------------------
+
+
+class _Response:
+    """Ответ CDN: код и сколько байт реально отдал."""
+
+    def __init__(self, status_code: int, payload: bytes):
+        self.status_code = status_code
+        self.raw = _Raw(payload)
+
+    def close(self):
+        pass
+
+
+class _Raw:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    def read(self, size, decode_content=True):
+        return self._payload[:size]
+
+
+def test_exit_that_cuts_data_after_two_megabytes_is_rejected(monkeypatch):
+    """🔴 Живой случай 18.08: пять выходов отдавали форматы безупречно, а данные резали
+    ровно на 2 МБ — фильм не качался ни через один, и проверка «жив ли выход» врала."""
+    from app.core.video import proxy_rotation
+
+    monkeypatch.setattr(
+        proxy_rotation, "_probe_url", lambda formats: "https://cdn/video"
+    )
+    captured = {}
+
+    def fake_get(url, headers=None, proxies=None, timeout=None, stream=None):
+        captured["headers"] = headers
+        return _Response(206, b"x" * (2 * 1024 * 1024))  # ровно два мегабайта и всё
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert not proxy_rotation._data_flows("socks5://127.0.0.1:10817", "https://cdn/video")
+    assert captured["headers"]["Range"].startswith("bytes=0-")
+
+
+def test_exit_that_delivers_the_whole_slice_passes(monkeypatch):
+    from app.core.video import proxy_rotation
+
+    import requests
+
+    monkeypatch.setattr(
+        requests, "get",
+        lambda *a, **kw: _Response(206, b"x" * proxy_rotation.DATA_PROBE_BYTES),
+    )
+
+    assert proxy_rotation._data_flows("socks5://127.0.0.1:10817", "https://cdn/video")
+
+
+def test_forbidden_on_data_is_not_a_working_exit(monkeypatch):
+    from app.core.video import proxy_rotation
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: _Response(403, b""))
+
+    assert not proxy_rotation._data_flows("socks5://127.0.0.1:10817", "https://cdn/video")
+
+
+def test_probe_slice_is_bigger_than_the_observed_cut():
+    """Порог пробы обязан быть ВЫШЕ реза, иначе проверка врёт ровно в том случае,
+    ради которого написана."""
+    from app.core.video.proxy_rotation import DATA_PROBE_BYTES
+
+    assert DATA_PROBE_BYTES > 2 * 1024 * 1024
+
+
+def test_lightest_stream_is_chosen_for_the_probe():
+    """Проба стоит трафика, а режет CDN одинаково и аудио, и видео."""
+    from app.core.video.proxy_rotation import _probe_url
+
+    formats = [
+        {"url": "https://cdn/heavy", "tbr": 1642},
+        {"url": "https://cdn/light", "tbr": 49},
+        {"tbr": 1},  # без ссылки — не кандидат
+    ]
+
+    assert _probe_url(formats) == "https://cdn/light"
+
+
+def test_no_url_means_no_probe():
+    from app.core.video.proxy_rotation import _data_flows
+
+    assert not _data_flows("socks5://127.0.0.1:10817", "")

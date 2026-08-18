@@ -407,3 +407,21 @@ def test_clip_waits_for_the_channel_window(tmp_path):
     day = datetime.datetime(2026, 8, 15, 9, 0)  # 12:00 МСК — окно открыто
     publish_due_clips(repo, vk_publisher_for=lambda channel_: publisher, now=day)
     assert len(publisher.calls) == 1
+
+
+def test_alert_explains_that_the_exits_cut_the_data():
+    """403 на данных чинится не кодом, а новыми прокси — и владелец должен это понять
+    из самой тревоги, иначе он ждёт правки софта (живой случай 18.08)."""
+    from app.core.video.daily_video_repost import throttling_hint
+
+    hint = throttling_hint("yt-dlp не смог скачать …: HTTP Error 403: Forbidden")
+
+    assert "прокси" in hint
+    assert "2 МБ" in hint
+
+
+def test_ordinary_failure_gets_no_proxy_hint():
+    """Диск кончился или ролик приватный — прокси тут ни при чём, и подсказка врала бы."""
+    from app.core.video.daily_video_repost import throttling_hint
+
+    assert throttling_hint("No space left on device") == ""

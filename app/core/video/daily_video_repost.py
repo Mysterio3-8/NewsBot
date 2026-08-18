@@ -181,9 +181,26 @@ def _download_first_available(
     logger.error("Видео-репост [%s]: ни один ролик не скачался", channel.name)
     _alert_video_failure(
         repo, channel.name, "фильм",
-        f"не скачался ни один из {MAX_FILM_CANDIDATES} роликов — {last_error}",
+        f"не скачался ни один из {MAX_FILM_CANDIDATES} роликов — "
+        f"{last_error}{throttling_hint(str(last_error))}",
     )
     return None
+
+
+DATA_THROTTLE_HINT = (
+    "\n\n⚠️ Похоже, дело не в софте: выходы прокси отдают метаданные, но CDN YouTube "
+    "режет сами данные (замер 18.08 — ровно 2 МБ на ссылку, дальше 403 на любом "
+    "диапазоне). Ни один из выходов фильм не вытянет. Нужны новые прокси-конфиги."
+)
+
+
+def throttling_hint(error_text: str) -> str:
+    """Подсказка владельцу, когда 403 приходит именно на ДАННЫХ.
+
+    Без неё сообщение «не скачался ни один ролик» выглядит как поломка софта, и владелец
+    ждёт от меня правки кода — а чинится это только новыми выходами. Проверено живьём
+    18.08: пять выходов с разными IP, прямой путь и куки дают одно и то же."""
+    return DATA_THROTTLE_HINT if "403" in error_text else ""
 
 
 def _download_with_retry(repo: Repository, video: SourceVideo) -> Path:
