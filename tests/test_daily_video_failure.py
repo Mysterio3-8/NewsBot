@@ -425,3 +425,23 @@ def test_ordinary_failure_gets_no_proxy_hint():
     from app.core.video.daily_video_repost import throttling_hint
 
     assert throttling_hint("No space left on device") == ""
+
+
+def test_alert_explains_that_the_exits_cut_the_data(monkeypatch):
+    """403 на ДАННЫХ — это не поломка софта, и владелец должен это понять из тревоги.
+
+    Живой замер 18.08: пять выходов с разными IP, прямой путь и куки дают ровно 2 МБ на
+    ссылку, дальше 403 на любом диапазоне. Кодом это не чинится — нужны новые прокси."""
+    from app.core.video.daily_video_repost import throttling_hint
+
+    hint = throttling_hint("yt-dlp не смог скачать: ERROR: HTTP Error 403: Forbidden")
+
+    assert "прокси" in hint
+    assert "2 МБ" in hint
+
+
+def test_other_failures_get_no_proxy_hint():
+    """Не всякая неудача — про прокси: нет места на диске, битый ролик, оборванная сеть."""
+    from app.core.video.daily_video_repost import throttling_hint
+
+    assert throttling_hint("No space left on device") == ""

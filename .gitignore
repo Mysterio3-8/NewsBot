@@ -11,3 +11,4 @@ output/
 cookies/
 *.cookies.txt
 client_secret*.json
+.venv312/
