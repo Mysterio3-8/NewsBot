@@ -50,6 +50,42 @@ MAX_RETRY_AFTER_SECONDS = 60.0
 MAX_EXTRA_API_KEYS = 9
 
 
+REASONING_MODEL_MARKERS = ("gpt-oss", "qwen3", "deepseek-r1", "reason")
+"""По каким признакам модель считается «рассуждающей».
+
+🔴 Повод (2026-08-19): Groq снял `llama-3.3-70b-versatile` и `llama-3.1-8b-instant`,
+отдавая на них 404, и весь пайплайн встал — 49 постов Новостей подряд отклонены как
+`error_classification`, Кино осталось без текстовых постов. На замену доступны только
+рассуждающие модели, а они ведут себя иначе: `gpt-oss` тратит бюджет токенов на
+размышления и возвращает ОБРЕЗАННЫЙ ответ (живой замер: при `max_tokens=120` в ответе
+осталась одна буква «Н»), а `qwen3` пишет размышления прямо в текст блоком `<think>`."""
+
+REASONING_EFFORT = "low"
+"""Насколько глубоко модели разрешено размышлять.
+
+`low`, потому что задачи пайплайна короткие и механические — «новость ли это», «перепиши
+абзац». Живой замер: с `low` ответ приходит чистой одной строкой, без него — обрезанный."""
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def is_reasoning_model(model: str) -> bool:
+    return any(marker in (model or "").lower() for marker in REASONING_MODEL_MARKERS)
+
+
+def strip_reasoning(text: str) -> str:
+    """Убрать размышления из ответа.
+
+    Часть моделей отдаёт их отдельным полем (его мы просто не читаем), часть — прямо в
+    тексте блоком `<think>…</think>`. Незакрытый блок (ответ обрезали на середине
+    размышления) режем до конца строки: лучше пустой ответ, который поймает вызывающий
+    код, чем публикация с потрохами модели."""
+    cleaned = _THINK_BLOCK.sub("", text or "")
+    if "<think>" in cleaned.lower():
+        cleaned = cleaned[: cleaned.lower().index("<think>")]
+    return cleaned.strip()
+
+
 class LLMUnavailableError(Exception):
     """LLM недоступна (сервер/ключ не отвечает, модель не найдена, либо запрос не удался после retry)."""
 
@@ -271,6 +307,8 @@ class LLMClient:
             "temperature": self._config.temperature,
             "top_p": self._config.top_p,
         }
+        if is_reasoning_model(model):
+            payload["reasoning_effort"] = REASONING_EFFORT
         response = requests.post(
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {self._cloud_api_key()}"},
@@ -279,7 +317,7 @@ class LLMClient:
             proxies=self._cloud_proxies(),
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        return strip_reasoning(response.json()["choices"][0]["message"].get("content") or "")
 
     def generate_vision(self, prompt: str, image_path: Path) -> str:
         """Vision-запрос (анализ изображения) — только для OpenAI-совместимых

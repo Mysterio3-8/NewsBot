@@ -590,3 +590,71 @@ def test_models_to_try_dedupes_and_preserves_order():
     )
     client = LLMClient(config)
     assert client._models_to_try() == ["primary", "second", "third"]
+
+
+# --- рассуждающие модели (2026-08-19) ----------------------------------------
+
+
+def test_reasoning_models_are_recognised():
+    """🔴 Groq снял обе llama-модели (404), заменять пришлось рассуждающими.
+
+    Они ведут себя иначе: без ограничения «сколько думать» бюджет токенов уходит на
+    размышления, и в ответе остаётся огрызок — живой замер дал одну букву «Н»."""
+    from app.core.llm.client import is_reasoning_model
+
+    assert is_reasoning_model("openai/gpt-oss-120b")
+    assert is_reasoning_model("qwen/qwen3.6-27b")
+    assert not is_reasoning_model("llama-3.3-70b-versatile")
+
+
+def test_reasoning_effort_is_sent_only_to_reasoning_models(monkeypatch):
+    from app.config.loader import LLMConfig
+    from app.core.llm.client import REASONING_EFFORT, LLMClient
+
+    sent = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "готово"}}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None, proxies=None):
+        sent.append(json)
+        return _Response()
+
+    import app.core.llm.client as client_module
+
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+
+    config = LLMConfig(
+        provider="groq", host="", model="openai/gpt-oss-120b",
+        temperature=0.7, top_p=0.9, timeout_seconds=60, retries=1,
+    )
+    client = LLMClient(config)
+    client._throttle = lambda: None
+    client._generate_openai_compatible("s", "u", "openai/gpt-oss-120b")
+    client._generate_openai_compatible("s", "u", "llama-3.3-70b-versatile")
+
+    assert sent[0]["reasoning_effort"] == REASONING_EFFORT
+    assert "reasoning_effort" not in sent[1]
+
+
+def test_inline_thinking_never_reaches_the_post():
+    """Часть моделей пишет размышления прямо в текст — в публикацию это уходить не должно."""
+    from app.core.llm.client import strip_reasoning
+
+    assert strip_reasoning("<think>прикину…</think>Готовый текст") == "Готовый текст"
+    assert strip_reasoning("Текст\n<think>обрезано на середине") == "Текст"
+    assert strip_reasoning("Обычный ответ") == "Обычный ответ"
+
+
+def test_empty_content_does_not_crash():
+    """Ответ без content (всё съели размышления) — пустая строка, её поймает вызывающий."""
+    from app.core.llm.client import strip_reasoning
+
+    assert strip_reasoning(None) == ""

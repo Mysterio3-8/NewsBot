@@ -8,7 +8,7 @@ def test_load_config_returns_typed_config():
 
     assert config.app.name == "AI News Rewriter"
     # 70B — основная модель (2026-07-28): 8B на русском выдумывала факты, см. CLAUDE.md
-    assert config.llm.model == "llama-3.3-70b-versatile"
+    assert config.llm.model == "openai/gpt-oss-120b"
     assert config.filters.min_score == 55
 
 
