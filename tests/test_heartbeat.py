@@ -11,6 +11,7 @@ import datetime
 from app.core.maintenance import heartbeat
 from app.core.maintenance.heartbeat import (
     WatchedCommunity,
+    SilenceReport,
     build_silence_alert,
     find_silent_communities,
     last_post_moment,
@@ -46,16 +47,16 @@ def test_empty_wall_is_infinite_silence():
 
 
 def test_community_over_threshold_is_reported(monkeypatch):
-    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=10: [_item(20)])
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: [_item(20)])
     watchlist = (WatchedCommunity("Кино", 1, max_silence_hours=8),)
 
     stale = find_silent_communities("token", watchlist, now=NOW)
 
-    assert [c.name for c, _ in stale] == ["Кино"]
+    assert [report.community.name for report in stale] == ["Кино"]
 
 
 def test_community_within_threshold_is_quiet(monkeypatch):
-    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=10: [_item(3)])
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: [_item(3)])
     watchlist = (WatchedCommunity("Новости", 1, max_silence_hours=6),)
 
     assert find_silent_communities("token", watchlist, now=NOW) == []
@@ -64,18 +65,60 @@ def test_community_within_threshold_is_quiet(monkeypatch):
 def test_unreadable_wall_never_triggers_an_alert(monkeypatch):
     """Молчание VK про наши записи и молчание софта — разные вещи. Путать их значит
     слать ложную тревогу при каждом сбое сети."""
-    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=10: [])
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: [])
     watchlist = (WatchedCommunity("Минусы", 1, max_silence_hours=30),)
 
     assert find_silent_communities("token", watchlist, now=NOW) == []
 
 
 def test_alert_names_the_soft_and_its_threshold():
-    text = build_silence_alert([(WatchedCommunity("Кино", 1, max_silence_hours=8), 20.0)])
+    text = build_silence_alert(
+        [SilenceReport(WatchedCommunity("Кино", 1, max_silence_hours=8), 20.0, 8)]
+    )
 
     assert "Кино" in text
     assert "20 ч" in text
     assert "норма до 8 ч" in text
+
+
+def _video(hours_ago: float) -> dict:
+    return _item(hours_ago, attachments=[{"type": "video"}])
+
+
+def _text(hours_ago: float) -> dict:
+    return _item(hours_ago, attachments=[{"type": "photo"}])
+
+
+def test_missing_text_posts_are_noticed_while_video_keeps_the_wall_alive(monkeypatch):
+    """Ровно случай 17–19.08: у Кино пропали рерайты (Groq снял модели), а фильм и клипы
+    выходили по расписанию. Общий порог такую поломку не видит — стена «живая»."""
+    items = [_video(1), _video(6), _text(40)]
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: items)
+    watchlist = (WatchedCommunity("Кино", 1, max_silence_hours=8, text_silence_hours=10),)
+
+    stale = find_silent_communities("token", watchlist, now=NOW)
+
+    assert [(r.community.name, r.kind) for r in stale] == [("Кино", "текстовых постов")]
+    assert "текстовых постов нет 40 ч" in build_silence_alert(stale)
+
+
+def test_fresh_text_post_keeps_the_type_watch_quiet(monkeypatch):
+    items = [_video(1), _text(4)]
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: items)
+    watchlist = (WatchedCommunity("Кино", 1, max_silence_hours=8, text_silence_hours=10),)
+
+    assert find_silent_communities("token", watchlist, now=NOW) == []
+
+
+def test_dead_wall_gives_one_line_not_two(monkeypatch):
+    """Мёртвая стена означает и отсутствие текстовых постов. Вторая строка про то же
+    самое размывала бы тревогу, а сторож, которого перестают читать, бесполезен."""
+    monkeypatch.setattr(heartbeat, "fetch_wall_items", lambda token, gid, count=30: [_video(40)])
+    watchlist = (WatchedCommunity("Кино", 1, max_silence_hours=8, text_silence_hours=10),)
+
+    stale = find_silent_communities("token", watchlist, now=NOW)
+
+    assert [r.kind for r in stale] == ["записей"]
 
 
 def test_thresholds_are_at_least_double_the_publishing_rate():

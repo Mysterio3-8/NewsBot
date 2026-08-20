@@ -90,8 +90,8 @@ def test_seed_news_removes_telegram_footer_link(tmp_path):
 
 
 def test_cinema_plan_matches_the_owners_order():
-    """ТЗ владельца 2026-08-12: «1 фильм — 2 клипа и 4 поста», фильм и клипы снова
-    записями на стене.
+    """ТЗ владельца 2026-08-20: «1 фильм 1 клип 3 поста у кино», фильм и клип записями
+    на стене.
 
     Раздел «Видео» пробовали с 2026-08-10 и откатили: ролик, ушедший в каталог
     сообщества, в ленте не виден вообще, и канал выглядел полупустым («в кино мало
@@ -99,8 +99,7 @@ def test_cinema_plan_matches_the_owners_order():
     from app.seed_channels import DAILY_PLAN
 
     assert DAILY_PLAN["daily_video_count"] == 1
-    assert DAILY_PLAN["daily_clip_count"] == 2
-    # ТЗ владельца 2026-08-16: «кино — 1 фильм, 3 поста, 2 клипа».
+    assert DAILY_PLAN["daily_clip_count"] == 1
     assert DAILY_PLAN["max_posts_per_day"] == 3
     assert DAILY_PLAN["video_as_post"] is True
     # Окно Кино 09:00–24:00 = 900 мин, постов три → два промежутка. Худший бросок
