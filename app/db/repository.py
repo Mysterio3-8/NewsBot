@@ -632,15 +632,30 @@ class Repository:
             )
 
     def count_published_since(
-        self, since: datetime.datetime, *, channel_id: int | None = None
+        self,
+        since: datetime.datetime,
+        *,
+        channel_id: int | None = None,
+        network: str | None = None,
     ) -> int:
         """channel_id ограничивает счётчик публикациями канала (join source→channel) —
         для per-channel лимита (защита от бана: кино не заспамит VK лимитом другого
-        канала). None — все каналы (глобальный лимит, обратная совместимость)."""
+        канала). None — все каналы (глобальный лимит, обратная совместимость).
+
+        `network` ("tg"/"vk") считает публикации КОНКРЕТНОЙ сети по её отметке времени.
+        Нужен для раздельных лимитов (ТЗ 2026-08-20: TG без ограничений, VK строго 3 в
+        день): общий счётчик при таком режиме показывал бы число TG-публикаций и закрыл
+        бы VK в первый же час."""
+        column = {"tg": ProcessedPost.published_tg_at, "vk": ProcessedPost.published_vk_at}
         with self._session_factory() as session:
-            query = session.query(ProcessedPost).filter(
-                ProcessedPost.status == "published", ProcessedPost.published_at >= since
-            )
+            if network is not None:
+                if network not in column:
+                    raise ValueError(f"Неизвестная сеть: {network!r}")
+                query = session.query(ProcessedPost).filter(column[network] >= since)
+            else:
+                query = session.query(ProcessedPost).filter(
+                    ProcessedPost.status == "published", ProcessedPost.published_at >= since
+                )
             if channel_id is not None:
                 query = (
                     query.join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
@@ -650,20 +665,30 @@ class Repository:
             return query.count()
 
     def get_last_published_at(
-        self, *, channel_id: int | None = None
+        self, *, channel_id: int | None = None, network: str | None = None
     ) -> datetime.datetime | None:
+        """Момент последней публикации канала. `network` ("tg"/"vk") — по отметке
+        конкретной сети: при раздельных лимитах интервал VK должен считаться от прошлой
+        публикации В VK, иначе поток TG держал бы VK-паузу открытой всё время."""
+        column = {"tg": ProcessedPost.published_tg_at, "vk": ProcessedPost.published_vk_at}
         with self._session_factory() as session:
-            query = session.query(ProcessedPost.published_at).filter(
-                ProcessedPost.status == "published",
-                ProcessedPost.published_at.is_not(None),
-            )
+            if network is not None:
+                if network not in column:
+                    raise ValueError(f"Неизвестная сеть: {network!r}")
+                query = session.query(column[network]).filter(column[network].is_not(None))
+            else:
+                query = session.query(ProcessedPost.published_at).filter(
+                    ProcessedPost.status == "published",
+                    ProcessedPost.published_at.is_not(None),
+                )
             if channel_id is not None:
                 query = (
                     query.join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
                     .join(Source, RawPost.source_id == Source.id)
                     .filter(Source.channel_id == channel_id)
                 )
-            row = query.order_by(ProcessedPost.published_at.desc()).first()
+            order_column = column[network] if network is not None else ProcessedPost.published_at
+            row = query.order_by(order_column.desc()).first()
             moments = [row[0]] if row else []
 
             # Фильм и клипы — такие же записи в сообществе, как текстовый пост, поэтому

@@ -49,6 +49,7 @@ def check_publish_allowed(
     quiet_start_hour: int | None = None,
     quiet_end_hour: int | None = None,
     channel_id: int | None = None,
+    count_network: str | None = None,
     now: datetime.datetime | None = None,
 ) -> str | None:
     """Возвращает None, если публиковать можно, либо строку-причину, если нельзя.
@@ -80,11 +81,18 @@ def check_publish_allowed(
     now = now or datetime.datetime.utcnow()
     since = _start_of_today_utc(now)
 
-    published_today = repo.count_published_since(since, channel_id=channel_id)
+    # `count_network` считает публикации ТОЛЬКО этой сети — режим раздельных лимитов
+    # (ТЗ 2026-08-20: TG без ограничений, VK строго 3 в день). Без него VK закрывался бы
+    # на третьей публикации в TELEGRAM, а не в VK.
+    published_today = repo.count_published_since(
+        since, channel_id=channel_id, network=count_network
+    )
     if published_today >= max_posts_per_day:
         return f"дневной лимит публикаций достигнут ({published_today}/{max_posts_per_day})"
 
-    last_published_at = repo.get_last_published_at(channel_id=channel_id)
+    last_published_at = repo.get_last_published_at(
+        channel_id=channel_id, network=count_network
+    )
     if last_published_at is not None:
         if last_published_at.tzinfo is not None and now.tzinfo is None:
             now = now.replace(tzinfo=last_published_at.tzinfo)

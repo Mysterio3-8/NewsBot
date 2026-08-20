@@ -25,6 +25,25 @@ class ChannelSettings:
     min_interval_minutes: int | None = None
     """Минимум минут между публикациями канала (защита от пачки). None → глобальный."""
 
+    tg_unlimited: bool = False
+    """TG публикуется БЕЗ ограничений: без дневного лимита, интервала и ночной паузы.
+
+    ТЗ владельца 2026-08-20: «в тг новости без ограничений, а вк строго 3 в день».
+    Обоснование, почему это безопасно именно для TG: лимиты у нас антибановые, а банит
+    за частоту VK — и банит ЛИЧНЫЙ аккаунт, который грузит медиа. Telegram публикует
+    БОТ в свой же канал, там ни аккаунта, ни этого риска.
+
+    ⚠️ Включение РАЗРЫВАЕТ жёсткую пару VK↔TG для канала (ТЗ 2026-07-27 «один и тот же
+    пост в обе сети»): пара и раздельные лимиты — взаимоисключающие требования. Пара
+    остаётся у всех каналов, где флаг не выставлен."""
+
+    vk_max_posts_per_day: int | None = None
+    """Свой дневной лимит ДЛЯ VK. None → общий `max_posts_per_day`.
+
+    Считается по ПУБЛИКАЦИЯМ В VK (`published_vk_at`), а не по постам канала: при
+    раздельных лимитах общий счётчик показывал бы число TG-публикаций и закрывал бы VK
+    в первый же час."""
+
     tg_footer_url: str | None = None
     """Ссылка, добавляемая в конец поста этого канала (напр. ссылка на TG-канал). None → нет."""
 
@@ -261,6 +280,8 @@ class ChannelSettings:
             filters_enabled=data.get("filters_enabled", True),
             max_posts_per_day=data.get("max_posts_per_day"),
             min_interval_minutes=data.get("min_interval_minutes"),
+            tg_unlimited=data.get("tg_unlimited", False),
+            vk_max_posts_per_day=data.get("vk_max_posts_per_day"),
             tg_footer_url=data.get("tg_footer_url"),
             tg_footer_signature=data.get("tg_footer_signature"),
             image_query_mode=data.get("image_query_mode", "generic"),
@@ -316,6 +337,10 @@ class ChannelSettings:
             payload["max_posts_per_day"] = self.max_posts_per_day
         if self.min_interval_minutes is not None:
             payload["min_interval_minutes"] = self.min_interval_minutes
+        if self.tg_unlimited:
+            payload["tg_unlimited"] = True
+        if self.vk_max_posts_per_day is not None:
+            payload["vk_max_posts_per_day"] = self.vk_max_posts_per_day
         if self.tg_footer_url is not None:
             payload["tg_footer_url"] = self.tg_footer_url
         if self.tg_footer_signature is not None:

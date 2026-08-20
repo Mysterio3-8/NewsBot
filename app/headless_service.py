@@ -240,6 +240,22 @@ async def _publish_channel_post(
         or repo.get_published_network_at(post_id, "vk") is not None
     )
 
+    # РАЗДЕЛЬНЫЕ ЛИМИТЫ (ТЗ владельца 2026-08-20: «в тг новости без ограничений, а вк
+    # строго 3 в день»). Флаг канала разрывает жёсткую пару осознанно: пара и разные
+    # лимиты — взаимоисключающие требования, вместе они нереализуемы. У каналов без
+    # флага (Кино) пара работает как раньше.
+    if settings.tg_unlimited:
+        await _publish_split(
+            repo, channel, post_id=post_id, config=config,
+            tg_publisher=tg_publisher if tg_pending else None,
+            vk_publisher=vk_publisher if vk_pending else None,
+            settings=settings, channel_footer=channel_footer, breaker=breaker,
+            vk_token_env=vk_token_env, max_per_day=max_per_day,
+            min_interval=min_interval, max_interval=max_interval,
+            quiet_start=quiet_start, quiet_end=quiet_end,
+        )
+        return
+
     # ЖЁСТКАЯ ПАРА: VK недоступен (breaker) → не публикуем и в TG, ждём.
     if vk_pending and breaker.is_open("vk", vk_token_env):
         logger.warning(
@@ -335,6 +351,97 @@ async def _publish_channel_post(
             "Пост %d (канал %s): пара не закрыта (tg_ok=%s, vk_ok=%s) — вернём в очередь для дозачистки",
             post_id, channel.name, tg_ok, vk_ok,
         )
+
+
+async def _publish_split(
+    repo: Repository,
+    channel: Channel,
+    *,
+    post_id: int,
+    config: AppConfig,
+    tg_publisher: TelegramPublisher | None,
+    vk_publisher: VKPublisher | None,
+    settings: ChannelSettings,
+    channel_footer,
+    breaker: CircuitBreaker,
+    vk_token_env: str,
+    max_per_day: int,
+    min_interval: int,
+    max_interval: int | None,
+    quiet_start: int | None,
+    quiet_end: int | None,
+) -> None:
+    """Публикация с РАЗДЕЛЬНЫМИ лимитами: у каждой сети свой гейт и свой счётчик.
+
+    ТЗ владельца 2026-08-20: «в тг новости без ограничений, а вк строго 3 в день».
+
+    Почему это отдельный путь, а не флажок внутри пары: пара по построению требует
+    «обе сети или ни одной», а раздельные лимиты требуют «TG идёт, даже когда VK уже
+    закрыт на сегодня». Свести их в одну ветку значит получить условие, которое читается
+    неверно в обе стороны.
+
+    Что осталось от антибана: у VK свой дневной лимит, свой интервал и ночная пауза —
+    ограничения существуют ради ЕГО личного токена. У TG их нет: публикует бот в свой
+    канал, банить там нечего и некого.
+
+    Пост не «ждёт» вторую сеть: TG выходит сразу, VK догоняет законным кросс-постом,
+    когда откроется его окно. Не успел до протухания поста — значит, в VK этот пост не
+    выйдет, и это осознанная цена раздельных лимитов."""
+    if tg_publisher is not None:
+        try:
+            result = await publish_queued_post(
+                repo, tg_publisher, post_id=post_id, chat_id=channel.tg_destination,
+                footer_links=channel_footer,
+                max_posts_per_day=UNLIMITED_POSTS_PER_DAY,
+                min_interval_minutes=0, max_interval_minutes=None,
+                quiet_start_hour=None, quiet_end_hour=None,
+                channel_id=channel.id, include_hashtags=config.rewrite.include_hashtags,
+            )
+            if not result.success:
+                logger.info("Пост %d (канал %s): TG не принял — %s", post_id, channel.name, result.error)
+        except Exception:
+            logger.exception("Публикация в Telegram не удалась для поста %d (канал %s)", post_id, channel.name)
+
+    if vk_publisher is None:
+        return
+
+    vk_cap = settings.vk_max_posts_per_day if settings.vk_max_posts_per_day is not None else max_per_day
+    if breaker.is_open("vk", vk_token_env):
+        logger.info("Пост %d (канал %s): VK недоступен (breaker) — догоним позже", post_id, channel.name)
+        return
+
+    blocked = check_publish_allowed(
+        repo, post_id, network="vk",
+        max_posts_per_day=vk_cap,
+        min_interval_minutes=min_interval, max_interval_minutes=max_interval,
+        quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
+        channel_id=channel.id, count_network="vk",
+    )
+    if blocked is not None:
+        logger.info("Пост %d (канал %s): VK ждёт — %s", post_id, channel.name, blocked)
+        return
+
+    await asyncio.sleep(random.uniform(3, 8))  # антибан: сети не секунда-в-секунду
+    try:
+        result = publish_queued_post_vk(
+            repo, vk_publisher, post_id=post_id, group_id=int(channel.vk_destination),
+            footer_links=channel_footer, max_posts_per_day=vk_cap,
+            min_interval_minutes=min_interval, max_interval_minutes=max_interval,
+            quiet_start_hour=quiet_start, quiet_end_hour=quiet_end,
+            channel_id=channel.id,
+            include_hashtags=config.rewrite.include_hashtags or settings.seo_enabled,
+            video_as_post=settings.video_as_post,
+            video_description=_post_video_description(repo, channel, settings, post_id),
+        )
+        _record_vk_breaker(breaker, vk_token_env, result)
+    except Exception:
+        logger.exception("Публикация в VK не удалась для поста %d (канал %s)", post_id, channel.name)
+        breaker.record_failure("vk", vk_token_env, VKErrorClass.TRANSIENT)
+
+
+UNLIMITED_POSTS_PER_DAY = 10_000
+"""«Без ограничений» для TG. Число, а не None: гейт принимает целое, а отдельная ветка
+«лимита нет» добавила бы условие в код, который и так проверяет три ограничения."""
 
 
 def film_has_priority(
