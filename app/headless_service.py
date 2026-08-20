@@ -386,7 +386,15 @@ async def _publish_split(
 
     Пост не «ждёт» вторую сеть: TG выходит сразу, VK догоняет законным кросс-постом,
     когда откроется его окно. Не успел до протухания поста — значит, в VK этот пост не
-    выйдет, и это осознанная цена раздельных лимитов."""
+    выйдет, и это осознанная цена раздельных лимитов.
+
+    🔴 Догнать VK можно только у поста, который цикл ЕЩЁ БЕРЁТ. `mark_published` после
+    успешного TG ставит `status='published'`, а `list_fresh_queued_posts` выбирает
+    только `queued` — то есть без явного возврата в очередь «догоним позже» означало бы
+    «не догоним никогда». Проверено на живых данных 20.08: посты 1598 и 1600 ушли в TG,
+    получили `published_vk_at=None` и больше не рассматривались, а окно VK (00:00–09:00)
+    к тому моменту закрылось. Это та же грабля, что чинилась в жёсткой паре 27.07.
+    """
     if tg_publisher is not None:
         try:
             result = await publish_queued_post(
@@ -402,10 +410,69 @@ async def _publish_split(
         except Exception:
             logger.exception("Публикация в Telegram не удалась для поста %d (канал %s)", post_id, channel.name)
 
-    if vk_publisher is None:
-        return
+    if vk_publisher is not None:
+        vk_cap = (
+            settings.vk_max_posts_per_day
+            if settings.vk_max_posts_per_day is not None
+            else max_per_day
+        )
+        await _try_vk_half(
+            repo, channel, post_id=post_id, config=config, vk_publisher=vk_publisher,
+            settings=settings, channel_footer=channel_footer, breaker=breaker,
+            vk_token_env=vk_token_env, vk_cap=vk_cap,
+            min_interval=min_interval, max_interval=max_interval,
+            quiet_start=quiet_start, quiet_end=quiet_end,
+        )
 
-    vk_cap = settings.vk_max_posts_per_day if settings.vk_max_posts_per_day is not None else max_per_day
+    _requeue_until_networks_done(
+        repo, channel, post_id,
+        networks=[name for name, publisher in (("tg", tg_publisher), ("vk", vk_publisher))
+                  if publisher is not None],
+    )
+
+
+def _requeue_until_networks_done(
+    repo: Repository, channel: Channel, post_id: int, *, networks: list[str]
+) -> None:
+    """Держать пост в очереди, пока хоть одна его сеть не получила публикацию.
+
+    Опубликованным пост считается только тогда, когда прошли ВСЕ его сети. Иначе цикл
+    перестаёт его видеть, и «догоним позже» превращается в «не догоним никогда»
+    (см. довод в `_publish_split`). Отметки `published_<сеть>_at` при этом сохранены,
+    так что второй раз в прошедшую сеть пост не уйдёт. Протухание работает как раньше:
+    не успел в окно за отведённые часы — `expire_stale_queued_posts` уберёт его сам."""
+    pending = [net for net in networks if repo.get_published_network_at(post_id, net) is None]
+    if not pending:
+        return
+    current = repo.get_processed_post(post_id)
+    if current is None or current.status != "published":
+        return
+    repo.update_processed_post_status(post_id, "queued")
+    logger.info(
+        "Пост %d (канал %s): %s ещё не получил(и) публикацию — держим в очереди "
+        "для догоняющего кросс-поста",
+        post_id, channel.name, ", ".join(pending).upper(),
+    )
+
+
+async def _try_vk_half(
+    repo: Repository,
+    channel: Channel,
+    *,
+    post_id: int,
+    config: AppConfig,
+    vk_publisher: VKPublisher,
+    settings: ChannelSettings,
+    channel_footer,
+    breaker: CircuitBreaker,
+    vk_token_env: str,
+    vk_cap: int,
+    min_interval: int,
+    max_interval: int | None,
+    quiet_start: int | None,
+    quiet_end: int | None,
+) -> None:
+    """Половина VK у раздельных лимитов: свой дневной счётчик, свой интервал, своё окно."""
     if breaker.is_open("vk", vk_token_env):
         logger.info("Пост %d (канал %s): VK недоступен (breaker) — догоним позже", post_id, channel.name)
         return

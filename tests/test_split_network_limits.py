@@ -127,3 +127,55 @@ def test_unknown_network_is_rejected_loudly(tmp_path):
 
     with pytest.raises(ValueError):
         repo.count_published_since(datetime.datetime.utcnow(), network="вк")
+
+
+# --- догоняющий кросс-пост ----------------------------------------------------
+
+
+def test_post_returns_to_the_queue_until_vk_gets_it(tmp_path):
+    """🔴 Живой случай 20.08: посты 1598 и 1600 ушли в TG, `published_vk_at` остался
+    пустым, и больше их никто не рассматривал — `mark_published` поставил статус
+    `published`, а цикл берёт только `queued`. Окно VK (00:00–09:00) к тому моменту
+    закрылось, и в сообщество не вышло НИ ОДНОГО поста Новостей.
+
+    Опубликованным пост считается только после ВСЕХ своих сетей."""
+    from app.headless_service import _requeue_until_networks_done
+
+    repo = _repo(tmp_path)
+    channel = repo.create_channel(name="Новости", vk_destination="1")
+    post_id = _post(repo, tg=datetime.datetime.utcnow())
+
+    assert repo.get_processed_post(post_id).status == "published"
+
+    _requeue_until_networks_done(repo, channel, post_id, networks=["tg", "vk"])
+
+    assert repo.get_processed_post(post_id).status == "queued"
+    # Отметка TG сохранена — второй раз в Telegram пост не уйдёт.
+    assert repo.get_published_network_at(post_id, "tg") is not None
+
+
+def test_post_stays_published_once_both_networks_are_done(tmp_path):
+    from app.headless_service import _requeue_until_networks_done
+
+    repo = _repo(tmp_path)
+    channel = repo.create_channel(name="Новости", vk_destination="1")
+    now = datetime.datetime.utcnow()
+    post_id = _post(repo, tg=now, vk=now)
+
+    _requeue_until_networks_done(repo, channel, post_id, networks=["tg", "vk"])
+
+    assert repo.get_processed_post(post_id).status == "published"
+
+
+def test_telegram_only_channel_is_not_held_hostage_by_vk(tmp_path):
+    """У канала без VK-приёмника в списке сетей VK нет вовсе — иначе пост висел бы в
+    очереди вечно и протух бы, ничего не дождавшись."""
+    from app.headless_service import _requeue_until_networks_done
+
+    repo = _repo(tmp_path)
+    channel = repo.create_channel(name="Только TG", vk_destination="2")
+    post_id = _post(repo, tg=datetime.datetime.utcnow())
+
+    _requeue_until_networks_done(repo, channel, post_id, networks=["tg"])
+
+    assert repo.get_processed_post(post_id).status == "published"
