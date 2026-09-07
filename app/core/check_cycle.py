@@ -256,6 +256,7 @@ def _process_posts(
                 promo_banner_mode=settings.promo_banner_mode,
                 shuffle_images=settings.shuffle_images,
                 skip_text_photos=settings.skip_text_photos,
+                channel_stop_words=settings.stop_words,
                 max_images_per_post=settings.max_images_per_post,
                 seo_profile=settings.seo_profile() if settings.seo_enabled else None,
             )

@@ -218,6 +218,7 @@ async def _publish_channel_post(
     channel_footer = build_channel_footer(
         settings.tg_footer_url, settings.tg_footer_signature, config.footer, footer_links,
         vk_url=settings.vk_footer_url,
+        vk_cta=settings.vk_footer_cta,
     )
 
     tg_target = bool(

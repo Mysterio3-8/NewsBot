@@ -89,6 +89,7 @@ def process_fetched_post(
     promo_banner_mode: str = "drop",
     shuffle_images: bool = False,
     skip_text_photos: bool = False,
+    channel_stop_words: list[str] | None = None,
     max_images_per_post: int | None = None,
     seo_profile: SeoProfile | None = None,
     rng: random.Random | None = None,
@@ -128,6 +129,13 @@ def process_fetched_post(
         reason = _check_local_filters(post, filters, content_hash, recent_hashes)
     else:
         reason = _check_duplicate_only(post, filters, content_hash, recent_hashes)
+    # Стоп-слова канала действуют в ОБОИХ режимах: глобальные видит только новостная
+    # фильтрация, а запрет владельца («СВО, ВСУ, ЗСУ — такие брать точно не надо»)
+    # не должен зависеть от того, включена она у канала или нет.
+    if reason is None and channel_stop_words:
+        banned = find_blacklisted_word(post.text, channel_stop_words)
+        if banned is not None:
+            reason = f"стоп-слово канала: {banned}"
     if reason is not None:
         return ProcessingOutcome(accepted=None, rejected=_reject(repo, raw_post.id, reason))
 

@@ -30,12 +30,22 @@ def normalize_destination(value: str | None) -> str:
     return text
 
 
-def _ensure_channel(repo: Repository, name: str, *, vk_destination: str, **fields) -> Channel:
+def _ensure_channel(
+    repo: Repository,
+    name: str,
+    *,
+    vk_destination: str,
+    enabled_on_create: bool = True,
+    **fields,
+) -> Channel:
     """Идемпотентность по vk_destination (уникальный приёмник), не по имени — чтобы
     переименование канала не плодило дубликат. Имя при этом обновляется.
 
     Сравнение идёт по НОРМАЛИЗОВАННОМУ приёмнику (см. normalize_destination): иначе
-    любая разница в записи одного и того же сообщества плодит канал-двойник."""
+    любая разница в записи одного и того же сообщества плодит канал-двойник.
+
+    enabled_on_create действует ТОЛЬКО при создании: у существующего канала состояние
+    вкл/выкл — решение владельца, и сид его не трогает (см. ниже)."""
     wanted = normalize_destination(vk_destination)
     existing = next(
         (c for c in repo.list_channels() if normalize_destination(c.vk_destination) == wanted),
@@ -50,7 +60,9 @@ def _ensure_channel(repo: Repository, name: str, *, vk_destination: str, **field
         repo.update_channel(existing.id, name=name, **fields)
         print(f"Канал «{name}» обновлён (id={existing.id}, enabled/settings не трогаем)")
         return existing
-    channel = repo.create_channel(name=name, vk_destination=vk_destination, **fields)
+    channel = repo.create_channel(
+        name=name, vk_destination=vk_destination, enabled=enabled_on_create, **fields
+    )
     print(f"Создан канал «{name}» (id={channel.id})")
     return channel
 
@@ -367,12 +379,89 @@ def seed_news(repo: Repository) -> None:
     print(f"Канал «Новости» включён (id={channel.id}), источник — только {NEWS_SOURCE_URL}")
 
 
+# ─── Канал 3 «Infinity Music — новость дня» ──────────────────────────────────────────
+# ТЗ владельца 2026-09-05: «плюс хочу ещё добавить немного новостей, я дам канал откуда
+# брать… 1 новость… то есть 1 новость, 1 плейлист, 1 трек, и всё это размазать по всему
+# дню». Треки и плейлисты делает СВОЙ софт — здесь только новость.
+# Публикация ТОЛЬКО в VK (явный ответ владельца: «публиковать только в вк
+# https://vk.ru/infinitymusicplayer»), TG-приёмник не задаём.
+MUSIC_NEWS_SOURCE_URL = "https://t.me/fastfoodmusictg"
+
+# id сообщества берём из сторожа тишины (heartbeat.DEFAULT_WATCHLIST) — он следит за
+# этими же четырьмя стенами, так что число уже проверено живыми вызовами VK.
+MUSIC_NEWS_VK_GROUP = "240295467"
+
+MUSIC_NEWS_SETTINGS = {
+    # «Лить всё»: новостной LLM-гейт заточен под новости страны и музыкальную заметку
+    # забраковал бы. Реклама и дубли отсекаются и в этом режиме (_check_duplicate_only).
+    "filters_enabled": False,
+    # ТЗ владельца 2026-09-02: «если будут попадаться украинские треки, будет название
+    # СВО, ВСУ и ЗСУ — такие брать точно не надо».
+    "stop_words": ["СВО", "ВСУ", "ЗСУ"],
+    # Ровно одна новость в сутки.
+    "max_posts_per_day": 1,
+    "min_interval_minutes": 240,
+    # Публикуем днём: новость должна лечь между треком и плейлистом, а не ночью
+    # («размазать по всему дню»). Тишина 00:00–10:00 МСК.
+    "quiet_start_hour": 0,
+    "quiet_end_hour": 10,
+    # Оригинальное фото источника + заголовок-хук, без монтажа и логотипа.
+    "simple_media": True,
+    "video_as_post": False,
+    # Единственная новость дня не должна пропасть из-за занятого аккаунта загрузки:
+    # личный VK-токен один на все софты, и в свой слот новость может не попасть. Текст
+    # без фото хуже оформленного поста, но лучше, чем день молчания.
+    "require_media": False,
+    "vk_upload_token_envs": NEWS_UPLOAD_POOL,
+    "vk_token_daily_cap": VK_TOKEN_DAILY_CAP,
+    # Нативная ссылка на свой TG вместо прямого «скачивайте без цензуры» (ТЗ владельца
+    # 2026-09-05: «нативно… прямо не надо говорить»).
+    "tg_footer_url": "https://t.me/muz_damn_bot",
+    "tg_footer_signature": "🎧 Слушать в Telegram",
+    "vk_footer_cta": "Слушать и скачивать — в нашем Telegram:",
+    "seo_enabled": True,
+    "seo_hashtag_group": "",
+    "seo_base_tags": ["музыка", "новинкимузыки", "рэп"],
+    "seo_search_phrases": ["{q} слушать онлайн", "{q} новый трек", "{q} альбом"],
+    "seo_channel_phrases": [
+        "музыка",
+        "слушать музыку онлайн",
+        "новинки музыки 2026",
+        "новые треки",
+    ],
+    "seo_post_tag_limit": 3,
+    "seo_video_tag_limit": 18,
+}
+
+
+def seed_music_news(repo: Repository) -> None:
+    """Канал 3 — одна музыкальная новость в сутки в Infinity Music (только VK).
+
+    enabled НЕ включаем: каналу нужен групповой токен сообщества в .env
+    (VK_GROUP_TOKEN_MUSIC). Пока его нет, включённый канал каждый цикл писал бы в лог
+    ошибку публикации вместо тихого ожидания."""
+    settings = ChannelSettings(**MUSIC_NEWS_SETTINGS)
+    channel = _ensure_channel(
+        repo,
+        "Infinity Music - новость дня",
+        vk_destination=MUSIC_NEWS_VK_GROUP,
+        vk_token_env="VK_GROUP_TOKEN_MUSIC",
+        settings_json=settings.to_json(),
+        enabled_on_create=False,
+    )
+    _ensure_source(
+        repo, channel, type="tg", name="Fastfood Music", url=MUSIC_NEWS_SOURCE_URL
+    )
+    merge_channel_settings(repo, channel, **MUSIC_NEWS_SETTINGS)
+
+
 def main() -> None:
     engine = make_engine()
     init_db(engine)
     repo = Repository(engine)
     seed_cinema(repo)
     seed_news(repo)
+    seed_music_news(repo)
 
 
 if __name__ == "__main__":

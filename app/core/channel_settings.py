@@ -220,6 +220,19 @@ class ChannelSettings:
     архив незачем — каждый взятый пост стоит вызовов LLM. Смещение по стене хранится в
     settings и растёт от прохода к проходу; стена кончилась — начинаем круг заново."""
 
+    stop_words: list[str] = field(default_factory=list)
+    """Стоп-слова КАНАЛА: пост с любым из них не берём (ТЗ владельца 2026-09-02 —
+    «если будут попадаться украинские треки, будет название СВО, ВСУ и ЗСУ, такие брать
+    точно не надо»).
+
+    Отдельно от глобальных `filters.stop_words` потому, что те работают только при
+    включённой новостной фильтрации, а каналы в режиме «лить всё» (Кино, Музыка) их не
+    видят вовсе — а запрет владельца действует независимо от режима."""
+
+    vk_footer_cta: str | None = None
+    """Своя строка призыва перед ссылкой в VK-футере («Слушать и скачивать — в нашем
+    Telegram:»). None → общая формулировка из config.footer."""
+
     skip_text_photos: bool = False
     """Не брать пост, если на его фото есть СОБСТВЕННЫЙ текст — плашка, надпись поверх
     кадра, скриншот (ТЗ владельца 2026-08-30: «нельзя брать с текстом, особенно с
@@ -322,6 +335,8 @@ class ChannelSettings:
             promo_banner_mode=data.get("promo_banner_mode", "drop"),
             skip_text_photos=data.get("skip_text_photos", False),
             deep_scan=data.get("deep_scan", False),
+            stop_words=data.get("stop_words", []),
+            vk_footer_cta=data.get("vk_footer_cta"),
             seo_enabled=data.get("seo_enabled", False),
             seo_hashtag_group=data.get("seo_hashtag_group", ""),
             seo_base_tags=data.get("seo_base_tags", []),
@@ -421,6 +436,10 @@ class ChannelSettings:
             payload["skip_text_photos"] = True
         if self.deep_scan:
             payload["deep_scan"] = True
+        if self.stop_words:
+            payload["stop_words"] = self.stop_words
+        if self.vk_footer_cta is not None:
+            payload["vk_footer_cta"] = self.vk_footer_cta
         if self.seo_enabled:
             payload["seo_enabled"] = True
         if self.seo_hashtag_group:
