@@ -72,7 +72,8 @@ def test_publish_queued_post_vk_uses_bracket_link_footer_and_moves_hashtags(tmp_
     assert kwargs["text"] == (
         "Текст новости.\n\n"
         "Подписывайтесь на Telegram-канал:\nhttps://t.me/x\n\n"
-        "#технологии #apple"
+        # Пустая строка перед тегами — ТЗ владельца 2026-08-21 («липнут, чуть ниже»).
+        "\n#технологии #apple"
     )
 
 
