@@ -211,6 +211,16 @@ class ChannelSettings:
     """Потолок числа фото в посте. Кино → 1 («будет 1 фото с текстом»). None → как было
     (все свои фото до MAX_SOURCE_PHOTOS)."""
 
+    skip_text_photos: bool = False
+    """Не брать пост, если на его фото есть СОБСТВЕННЫЙ текст — плашка, надпись поверх
+    кадра, скриншот (ТЗ владельца 2026-08-30: «нельзя брать с текстом, особенно с
+    плашками… если одно фото и плашка — такой пост лучше не брать, пропустить»).
+
+    Кадры с текстом выбрасываются поштучно (три фото, плашка на последнем → останутся
+    два); не осталось ни одного — пост отклоняется целиком, и цикл идёт за следующим.
+    Проверка стоит ДО рерайта: пост, который мы всё равно не возьмём, не должен тратить
+    вызовы LLM."""
+
     promo_banner_mode: str = "drop"
     """Что делать с чужой ярко-жёлтой промо-плашкой на кадре:
     "drop" — кадр не берём совсем (прежнее поведение);
@@ -301,6 +311,7 @@ class ChannelSettings:
             shuffle_images=data.get("shuffle_images", False),
             max_images_per_post=data.get("max_images_per_post"),
             promo_banner_mode=data.get("promo_banner_mode", "drop"),
+            skip_text_photos=data.get("skip_text_photos", False),
             seo_enabled=data.get("seo_enabled", False),
             seo_hashtag_group=data.get("seo_hashtag_group", ""),
             seo_base_tags=data.get("seo_base_tags", []),
@@ -396,6 +407,8 @@ class ChannelSettings:
             payload["max_images_per_post"] = self.max_images_per_post
         if self.promo_banner_mode != "drop":
             payload["promo_banner_mode"] = self.promo_banner_mode
+        if self.skip_text_photos:
+            payload["skip_text_photos"] = True
         if self.seo_enabled:
             payload["seo_enabled"] = True
         if self.seo_hashtag_group:
