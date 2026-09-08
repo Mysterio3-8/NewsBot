@@ -130,3 +130,42 @@ def test_source_without_channel_never_deep_scans(tmp_path):
 def test_setting_survives_json_roundtrip():
     assert ChannelSettings.from_json(ChannelSettings(deep_scan=True).to_json()).deep_scan is True
     assert ChannelSettings.from_json("{}").deep_scan is False
+
+
+def test_known_posts_are_not_downloaded_again(tmp_path):
+    """На втором круге обхода архив выходит за окно последней тысячи id, и без точной
+    проверки по БД фото качались бы заново — чтобы тут же быть отброшенными дедупом."""
+    repo = make_repo(tmp_path)
+    source = make_source(repo)
+    fetcher = Mock()
+    fetcher.fetch_wall_page.return_value = WallPage(posts=[], items_seen=10)
+
+    _fetch_vk_deeper(repo, fetcher, source)
+
+    is_known = fetcher.fetch_wall_page.call_args.kwargs["is_known"]
+    repo.create_raw_post(source_id=source.id, external_id="777", raw_text="уже брали")
+    assert is_known("777") is True
+    assert is_known("778") is False
+
+
+def test_source_of_disabled_channel_is_not_read(tmp_path):
+    """Источник выключенного канала читать нельзя: посты прошли бы рерайт (вызовы Groq)
+    и легли в очередь, которую публикатор не обходит — он берёт только включённые."""
+    from app.core.check_cycle import _channel_is_enabled
+
+    repo = make_repo(tmp_path)
+    channel = repo.create_channel(name="Музыка", enabled=False)
+    source = make_source(repo, channel_id=channel.id)
+
+    assert _channel_is_enabled(repo, source, {}) is False
+
+    repo.update_channel(channel.id, enabled=True)
+    assert _channel_is_enabled(repo, source, {}) is True
+
+
+def test_source_without_channel_is_still_read(tmp_path):
+    """Источник без канала (на проде не бывает) читается как раньше."""
+    from app.core.check_cycle import _channel_is_enabled
+
+    repo = make_repo(tmp_path)
+    assert _channel_is_enabled(repo, make_source(repo), {}) is True

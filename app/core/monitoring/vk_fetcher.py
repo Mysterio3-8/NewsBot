@@ -131,6 +131,7 @@ class VKFetcher:
         offset: int,
         count: int,
         known_external_ids: set[str] | None = None,
+        is_known=None,
     ) -> "WallPage":
         """Страница стены с произвольным смещением, БЕЗ ограничения по возрасту — обход
         источника вглубь, когда свежие посты кончились (ТЗ владельца 2026-08-30: «можно и
@@ -138,7 +139,13 @@ class VKFetcher:
 
         Возвращает и годные посты, и число просмотренных записей: пустой список постов
         сам по себе неоднозначен (все уже известны ИЛИ стена кончилась), а вызывающему
-        нужно отличать одно от другого, чтобы вовремя пойти на новый круг."""
+        нужно отличать одно от другого, чтобы вовремя пойти на новый круг.
+
+        is_known(external_id) — ТОЧНАЯ проверка «этот пост уже обрабатывали», по БД.
+        Список known_external_ids для обхода вглубь не годится: он обрезан последней
+        тысячей записей, а на втором круге по большой стене всё, что старше этого окна,
+        считалось бы новым — и фото качались бы заново на каждом круге, чтобы тут же
+        быть отброшенными дедупом уже в пайплайне."""
         if self._cooldown is not None:
             self._cooldown.wait(self._bucket_key)
         if self._bucket is not None:
@@ -150,7 +157,11 @@ class VKFetcher:
         posts: list[FetchedPost] = []
         for item in items:
             post = vk_post_to_fetched_post(item)
+            # Обе проверки идут ДО скачивания: media стоит трафика и места на диске,
+            # а известный пост всё равно будет отброшен дальше по пайплайну.
             if post.external_id in known_ids:
+                continue
+            if is_known is not None and is_known(post.external_id):
                 continue
             local_paths = self._download_photos(post.external_id, post.media_urls)
             posts.append(dataclasses.replace(post, media_urls=local_paths))

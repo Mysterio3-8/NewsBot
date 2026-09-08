@@ -31,10 +31,14 @@ async def run_check_cycle(
     image_providers: dict[str, ImageProvider] | None = None,
 ) -> None:
     settings_cache: dict[int, ChannelSettings] = {}
+    channel_enabled: dict[int, bool] = {}
 
     if tg_fetcher is not None:
         for source in repo.list_sources(source_type="tg"):
             if not source.enabled:
+                continue
+            if not _channel_is_enabled(repo, source, channel_enabled):
+                logger.info("Источник %s: канал выключен — не читаю", source.name)
                 continue
             try:
                 posts = await _fetch_tg_new_posts(repo, tg_fetcher, source, config)
@@ -54,6 +58,9 @@ async def run_check_cycle(
     if vk_fetcher is not None:
         for source in repo.list_sources(source_type="vk"):
             if not source.enabled:
+                continue
+            if not _channel_is_enabled(repo, source, channel_enabled):
+                logger.info("Источник %s: канал выключен — не читаю", source.name)
                 continue
             try:
                 posts = vk_fetcher.fetch_recent_posts(
@@ -111,6 +118,9 @@ def _fetch_vk_deeper(
             offset=offset,
             count=DEEP_SCAN_PAGE,
             known_external_ids=repo.get_recent_external_ids(source.id),
+            # Точная проверка по БД: окно из тысячи последних id на втором круге
+            # обхода уже не покрывает архив, и фото качались бы заново.
+            is_known=lambda external_id: repo.has_external_id(source.id, external_id),
         )
     except Exception:
         logger.exception("Не удалось прочитать стену источника %s вглубь", source.name)
@@ -127,6 +137,24 @@ def _fetch_vk_deeper(
         source.name, offset, len(page.posts),
     )
     return page.posts
+
+
+def _channel_is_enabled(repo: Repository, source: Source, cache: dict[int, bool]) -> bool:
+    """Включён ли канал, которому принадлежит источник.
+
+    Цикл проверки раньше смотрел только на `source.enabled`, и источник выключенного
+    канала всё равно читался: посты скачивались, проходили рерайт (самый дорогой шаг —
+    вызовы Groq) и ложились в очередь, которую публикатор не обходит — он берёт только
+    включённые каналы. Посты молча протухали, а лимит LLM тратился каждый цикл.
+
+    Источник без канала (на проде не бывает) читаем как раньше."""
+    channel_id = source.channel_id
+    if channel_id is None:
+        return True
+    if channel_id not in cache:
+        channel = repo.get_channel(channel_id)
+        cache[channel_id] = bool(channel and channel.enabled)
+    return cache[channel_id]
 
 
 def _channel_settings_for(
