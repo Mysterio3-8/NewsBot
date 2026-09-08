@@ -79,6 +79,7 @@ class VKFetcher:
         self,
         user_token: str,
         *,
+        fallback_tokens: tuple[str, ...] | list[str] = (),
         token_bucket: TokenBucket | None = None,
         cooldown_bucket: TokenBucket | None = None,
     ) -> None:
@@ -87,11 +88,47 @@ class VKFetcher:
         2026-07-10: "даже если публикация будет идти через 10 минут, главное бана
         избежать") — личный VK-токен (VK_USER_TOKEN) используется ТОЛЬКО для чтения
         источников, минимизируем темп его вызовов обоими лимитерами."""
-        session = vk_api.VkApi(token=user_token)
-        self._api = session.get_api()
+        # Токенов может быть несколько: первым идёт официальный (своё приложение VK ID),
+        # запасным — прежний. Так переход не ломает прод: пока официальному не выдали
+        # расширенные доступы или он отозван, чтение продолжается старым токеном.
+        # Живой случай 2026-09-08: VK_USER_TOKEN отозвали посреди суток, и источники
+        # Кино перестали читаться совсем — с запасным этого бы не случилось.
+        self._tokens = [token for token in (user_token, *fallback_tokens) if token]
+        self._token_index = 0
+        self._api = vk_api.VkApi(token=self._tokens[0]).get_api()
         self._bucket = token_bucket
-        self._bucket_key = token_key(user_token)
+        self._bucket_key = token_key(self._tokens[0])
         self._cooldown = cooldown_bucket
+
+    def _switch_token(self) -> bool:
+        """Перейти на следующий токен. False — запасных не осталось."""
+        if self._token_index + 1 >= len(self._tokens):
+            return False
+        self._token_index += 1
+        token = self._tokens[self._token_index]
+        self._api = vk_api.VkApi(token=token).get_api()
+        # Ключ лимитера привязан к токену: у нового аккаунта свой счёт запросов, и
+        # чужой израсходованный лимит не должен его тормозить.
+        self._bucket_key = token_key(token)
+        logger.warning("VK: токен отозван, перехожу на запасной (%d из %d)",
+                       self._token_index + 1, len(self._tokens))
+        return True
+
+    def _call(self, method: str, **kwargs):
+        """Вызов метода VK с переходом на запасной токен при «[5] authorization failed».
+
+        Повторяем ТОЛЬКО на коде 5: остальные ошибки (нет прав, приватная стена, лимит)
+        на другом токене дадут ровно то же, и перебор лишь удвоил бы нагрузку на
+        аккаунты — ту самую, из-за которой их банят."""
+        while True:
+            call = self._api
+            for part in method.split("."):
+                call = getattr(call, part)
+            try:
+                return call(**kwargs)
+            except vk_api.exceptions.ApiError as error:
+                if error.code != 5 or not self._switch_token():
+                    raise
 
     def fetch_engagement(self, group_id: int, vk_post_ids: list[int]) -> dict[int, int]:
         """Просмотры+лайки постов группы (для еженедельного репоста лучшего). Личный
@@ -102,7 +139,7 @@ class VKFetcher:
         owner = -abs(group_id)
         refs = ",".join(f"{owner}_{pid}" for pid in vk_post_ids)
         try:
-            items = self._api.wall.getById(posts=refs)
+            items = self._call("wall.getById", posts=refs)
         except Exception as error:
             logger.warning("VK wall.getById не удался: %s", error)
             return {}
@@ -121,7 +158,7 @@ class VKFetcher:
             self._cooldown.wait(self._bucket_key)
         if self._bucket is not None:
             self._bucket.wait(self._bucket_key)
-        response = self._api.video.get(owner_id=-abs(group_id), count=count)
+        response = self._call("video.get", owner_id=-abs(group_id), count=count)
         return response.get("items", [])
 
     def fetch_wall_page(
@@ -150,7 +187,7 @@ class VKFetcher:
             self._cooldown.wait(self._bucket_key)
         if self._bucket is not None:
             self._bucket.wait(self._bucket_key)
-        response = self._api.wall.get(owner_id=-abs(group_id), count=count, offset=offset)
+        response = self._call("wall.get", owner_id=-abs(group_id), count=count, offset=offset)
 
         items = response.get("items") or []
         known_ids = known_external_ids or set()
@@ -188,7 +225,7 @@ class VKFetcher:
             self._cooldown.wait(self._bucket_key)
         if self._bucket is not None:
             self._bucket.wait(self._bucket_key)
-        response = self._api.wall.get(owner_id=-abs(group_id), count=count)
+        response = self._call("wall.get", owner_id=-abs(group_id), count=count)
         for item in response["items"]:
             post = vk_post_to_fetched_post(item)
             if post.published_at < cutoff:

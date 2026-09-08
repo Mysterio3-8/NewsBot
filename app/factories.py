@@ -165,10 +165,23 @@ def build_vk_fetcher(
     token_bucket: TokenBucket | None = None,
     cooldown_bucket: TokenBucket | None = None,
 ) -> VKFetcher | None:
-    user_token = os.environ.get("VK_USER_TOKEN")
-    if not user_token:
+    # Официальный токен (своё приложение VK ID) идёт ПЕРВЫМ, прежний остаётся запасным.
+    # Держим оба намеренно: у VK ID права wall/photos/video — расширенные, выдаются по
+    # заявке, и до этого момента официальный токен читать источники не сможет. Пустая
+    # переменная = токена нет, порядок сохраняется сам.
+    tokens = [
+        os.environ.get("VK_TOKEN_OFFICIAL", ""),
+        os.environ.get("VK_USER_TOKEN", ""),
+    ]
+    tokens = [token for token in tokens if token]
+    if not tokens:
         return None
-    return VKFetcher(user_token, token_bucket=token_bucket, cooldown_bucket=cooldown_bucket)
+    return VKFetcher(
+        tokens[0],
+        fallback_tokens=tuple(tokens[1:]),
+        token_bucket=token_bucket,
+        cooldown_bucket=cooldown_bucket,
+    )
 
 
 def build_image_providers() -> dict[str, ImageProvider]:
