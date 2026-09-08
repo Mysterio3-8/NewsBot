@@ -90,11 +90,12 @@ def test_seed_news_removes_telegram_footer_link(tmp_path):
 
 
 def test_cinema_plan_matches_the_owners_order():
-    """ТЗ владельца 2026-08-30: «в телеге три поста в день и фильм, клипы не надо, а в
-    VK всё то же самое только с двумя клипами» (было «1 фильм — 2 клипа и 4 поста»).
+    """ТЗ владельца 2026-09-09: «1 фильм 2 поста, 1 клип».
 
-    Клипы уходят ТОЛЬКО в VK и раньше: publish_due_clips работает через vk_publisher_for,
-    в TG клипов не было никогда — поэтому от нового ТЗ меняется ровно число постов.
+    Урезано против 30.08 (было 1 фильм, 2 клипа, 3 поста), потому что живой личный токен
+    остался ОДИН и получен в обход официального приложения: чем реже он дёргается, тем
+    дольше живёт. Клипы уходят только в VK — publish_due_clips работает через
+    vk_publisher_for, в TG их не было никогда.
 
     Раздел «Видео» пробовали с 2026-08-10 и откатили: ролик, ушедший в каталог
     сообщества, в ленте не виден вообще, и канал выглядел полупустым («в кино мало
@@ -102,8 +103,8 @@ def test_cinema_plan_matches_the_owners_order():
     from app.seed_channels import DAILY_PLAN
 
     assert DAILY_PLAN["daily_video_count"] == 1
-    assert DAILY_PLAN["daily_clip_count"] == 2
-    assert DAILY_PLAN["max_posts_per_day"] == 3
+    assert DAILY_PLAN["daily_clip_count"] == 1
+    assert DAILY_PLAN["max_posts_per_day"] == 2
     assert DAILY_PLAN["video_as_post"] is True
     # Окно Кино 09:00–24:00 = 900 мин, постов три → два промежутка. Худший бросок
     # обоих промежутков обязан влезть в окно, иначе третий пост не выйдет до полуночи.
@@ -134,4 +135,4 @@ def test_seed_news_is_idempotent(tmp_path):
     channel = _news_channel(repo)
     assert channel.enabled is True
     # settings_json не раздувается дублями ключей — merge обновляет на месте
-    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 3
+    assert ChannelSettings.from_json(channel.settings_json).max_posts_per_day == 1

@@ -41,7 +41,7 @@ def test_seed_creates_vk_only_channel_with_the_owners_source(tmp_path):
 
     channel = next(c for c in repo.list_channels() if c.vk_destination == MUSIC_NEWS_VK_GROUP)
     assert channel.tg_destination is None, "владелец просил публиковать только в VK"
-    assert channel.vk_token_env == "VK_GROUP_TOKEN_MUSIC"
+    assert channel.vk_token_env == "VK_USER_TOKEN"
     assert [s.url for s in repo.list_sources(channel_id=channel.id)] == [MUSIC_NEWS_SOURCE_URL]
 
 
@@ -57,14 +57,18 @@ def test_seed_is_idempotent(tmp_path):
     assert len(repo.list_sources(channel_id=channels[0].id)) == 1
 
 
-def test_seeded_channel_stays_disabled_until_its_token_exists(tmp_path):
-    """Без VK_GROUP_TOKEN_MUSIC включённый канал только сыпал бы ошибками в лог."""
+def test_seeded_channel_is_enabled(tmp_path):
+    """ТЗ владельца 2026-09-09: «Музыка 1 плейлист + 1 трек + 1 новость».
+
+    Канал месяц простоял выключенным, ожидая отдельный `VK_GROUP_TOKEN_MUSIC`, которого
+    так и не завели. Публикуем личным токеном — он у нас один на все софты и всё равно
+    грузит медиа, так что отдельного риска не добавляет."""
     repo = make_repo(tmp_path)
 
     seed_music_news(repo)
 
     channel = next(c for c in repo.list_channels() if c.vk_destination == MUSIC_NEWS_VK_GROUP)
-    assert not channel.enabled
+    assert channel.enabled
 
 
 def test_one_news_per_day():
