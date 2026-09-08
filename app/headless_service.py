@@ -43,6 +43,7 @@ from app.core.publishing.queue_service import publish_queued_post
 from app.core.publishing.rate_guard import check_publish_allowed
 from app.core.publishing.telegram_publisher import TelegramPublisher
 from app.core.publishing.token_bucket import TokenBucket
+from app.core.publishing.vk_token_refresh import build_token_refresh_job
 from app.core.publishing.vk_errors import VKErrorClass, classify_vk_code
 from app.core.publishing.vk_publisher import POSTPONED_PREFIX, VKPublisher, VKPublishResult
 from app.core.publishing.vk_queue_service import publish_queued_post_vk
@@ -979,6 +980,15 @@ async def run_forever(
         build_heartbeat_job(repo),
         IntervalTrigger(hours=1),
         next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=20),
+    )
+    # Продление официального VK-токена. Он живёт час, ходим каждые полчаса: пропущенный
+    # прогон (сеть моргнула, сервис перезапускался) тогда не обрывает доступ, а
+    # компенсируется следующим. Первый — сразу: после перезапуска токен уже может быть
+    # просрочен, и ждать полчаса значило бы полчаса не читать источники.
+    scheduler.add_job(
+        build_token_refresh_job(("VK_TOKEN_OFFICIAL", "VK_TOKEN_OFFICIAL_2")),
+        IntervalTrigger(minutes=30),
+        next_run_time=datetime.datetime.now(),
     )
     scheduler.add_job(
         build_clip_publish_job(
