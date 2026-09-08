@@ -83,8 +83,17 @@ async def publish_queued_post(
 
 
 def _already_published(repo: Repository, post_id: int) -> bool:
+    """Вышел ли пост хоть в одну сеть — по ОТМЕТКАМ, а не по статусу.
+
+    Та же дыра, что чинилась в `vk_queue_service`: догон возвращает вышедший пост в
+    `queued`, и проверка по статусу считала его неопубликованным, роняя в `failed` при
+    первом отказе второй сети."""
     current = repo.get_processed_post(post_id)
-    return current is not None and current.status == "published"
+    if current is None:
+        return False
+    if current.status == "published":
+        return True
+    return current.published_tg_at is not None or current.published_vk_at is not None
 
 
 def _build_publish_text(

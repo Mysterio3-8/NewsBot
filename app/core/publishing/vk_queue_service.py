@@ -126,8 +126,22 @@ def _looks_like_clip(video_path: Path) -> bool:
 
 
 def _already_published(repo: Repository, post_id: int) -> bool:
+    """Вышел ли пост хоть в одну сеть — по ОТМЕТКАМ, а не по статусу.
+
+    🔴 Живой случай 07–08.09: шесть постов Новостей (1982–1990) ушли в Telegram, VK не
+    удался, и они легли в `failed` — то есть в сообщество не вышли уже никогда. Проверка
+    по `status == "published"` дырявая с тех пор, как появился догон: он специально
+    возвращает вышедший в TG пост обратно в `queued`, чтобы VK его подхватил, а здесь
+    такой пост выглядел «неопубликованным» и понижался в `failed` при первом же отказе
+    VK — занятый пул токенов, неудачная загрузка фото.
+
+    Отметки сетей от статуса не зависят и переживают возврат в очередь."""
     current = repo.get_processed_post(post_id)
-    return current is not None and current.status == "published"
+    if current is None:
+        return False
+    if current.status == "published":
+        return True
+    return current.published_tg_at is not None or current.published_vk_at is not None
 
 
 def _build_vk_publish_text(
