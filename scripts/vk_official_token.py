@@ -147,13 +147,13 @@ def _exchange(client_id: str, code: str, verifier: str, device_id: str, secret: 
 
 
 REMOTE_EXCHANGE = r"""
+import base64
 import json
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-task = json.load(sys.stdin)
+task = json.loads(base64.b64decode(DATA).decode())
 payload = {k: v for k, v in task.items() if k not in ("env_path", "var")}
 request = urllib.request.Request(
     "https://id.vk.com/oauth2/auth",
@@ -184,9 +184,7 @@ for index, line in enumerate(lines):
 for name, value in values.items():
     if value and name not in written:
         lines.append(name + "=" + value)
-env_path.write_text("
-".join(lines) + "
-", encoding="utf-8")
+env_path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
 
 print("Токен записан на сервере в", env_path, "как", task["var"])
 print("Срок жизни:", data.get("expires_in"), "с; выданные права:", data.get("scope"))
@@ -214,9 +212,15 @@ def _ssh_binary() -> str:
 
 def _exchange_on_host(host: str, python_bin: str, task: dict) -> None:
     """Меняет код на токен на сервере и там же пишет его в `.env`."""
+    # `python -` читает со stdin ПРОГРАММУ, а не данные: JSON, отправленный туда, он
+    # молча съедал как выражение и выходил с нулём, ничего не сделав. Поэтому данные
+    # вшиваем в текст программы строкой base64, а на stdin отдаём саму программу —
+    # в аргументы командной строки они не попадают и в `ps` не видны.
+    payload = base64.b64encode(json.dumps(task).encode()).decode()
+    program = 'DATA = "' + payload + '"\n' + REMOTE_EXCHANGE
     completed = subprocess.run(
         [_ssh_binary(), "-o", "BatchMode=yes", host, f"{python_bin} - "],
-        input=json.dumps(task).encode(),
+        input=program.encode(),
         capture_output=True,
     )
     output = completed.stdout.decode(errors="replace").strip()
