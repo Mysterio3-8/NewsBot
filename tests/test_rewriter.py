@@ -109,3 +109,38 @@ def test_rewrite_post_includes_hashtags_instruction_when_enabled_on_real_templat
     rewrite_post(client, text="x", source="tg", style="viral", max_length=900, include_hashtags=True)
     prompt_on = client.generate.call_args.args[1]
     assert HASHTAGS_INSTRUCTION_ON in prompt_on
+
+
+def test_music_prompt_renders_with_the_placeholders_the_code_passes():
+    """Промпт музыки и код должны сходиться по плейсхолдерам.
+
+    render НЕ мокаем намеренно (правило из CLAUDE.md): именно так ловятся забытые
+    {{...}} — на проде такой рассинхрон падал KeyError на первом же реальном посте.
+    """
+    client = LLMClient(REAL_CONFIG)
+    real_template = client.load_prompt("rewrite_music")
+    mocked = Mock(spec=LLMClient)
+    mocked.load_prompt.side_effect = lambda name: (
+        real_template if name == "rewrite_music" else f"<{name}>"
+    )
+    mocked.render.side_effect = client.render
+    mocked.generate.return_value = "готово"
+
+    rendered_ok = rewrite_post(
+        mocked, text="Артист выпустил альбом", source="tg", style="viral",
+        max_length=900, prompt_name="rewrite_music",
+    )
+
+    assert rendered_ok == "готово"
+    _, user_prompt = mocked.generate.call_args.args
+    assert "{{" not in user_prompt  # ни один плейсхолдер не остался неподставленным
+    assert "Артист выпустил альбом" in user_prompt
+
+
+def test_music_prompt_requires_naming_the_author():
+    """ТЗ владельца 2026-09-02: «обязательно отмечать всех авторов, чтобы никто не
+    думал, что я треки перезалил, чтобы с них зарабатывать»."""
+    template = LLMClient(REAL_CONFIG).load_prompt("rewrite_music")
+
+    assert "автор" in template.lower()
+    assert "исполнител" in template.lower()

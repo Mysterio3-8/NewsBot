@@ -148,6 +148,9 @@ def _build_vk_publish_text(
             parts.append(footer)
 
     if hashtags and include_hashtags:
-        parts.append(hashtags)
+        # Пустая строка перед тегами — ТЗ владельца 2026-08-21: «хэштеги липнут, надо
+        # их чуть ниже ставить». Обычного одинарного отступа между блоками мало: в
+        # ленте строка тегов читалась продолжением текста.
+        parts.append("\n" + hashtags)
 
     return "\n\n".join(parts)

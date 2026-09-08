@@ -101,10 +101,12 @@ async def test_publish_queued_post_moves_hashtags_after_footer(tmp_path):
     )
 
     _, kwargs = publisher.publish.call_args
+    # Пустая строка перед тегами — ТЗ владельца 2026-08-21 («хэштеги липнут, надо их
+    # чуть ниже ставить»): одинарного отступа между блоками было мало.
     assert kwargs["text"] == (
         "Текст новости.\n\n"
         '<a href="https://t.me/x">Новости в трёх словах</a>\n\n'
-        "#технологии #apple"
+        "\n#технологии #apple"
     )
 
 

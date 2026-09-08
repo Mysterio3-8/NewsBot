@@ -1,0 +1,64 @@
+# Деплой на прод-VPS с GitHub.
+#
+# Зачем: прежний путь — `deploy.sh` с машины владельца по ssh — работает только пока
+# он сидит за своим компьютером. Сессии Claude идут в облаке, где ssh-клиента нет, а
+# порт 22 сервера недоступен, поэтому «слил PR — оно на проде» иначе не получить.
+#
+# Что делает: заходит на сервер и запускает scripts/deploy_from_github.sh — тот сам
+# тянет с GitHub код ВСЕХ ТРЁХ софтов (Новости+Кино, Минусы, Музыка), проверяет
+# импорты ДО рестарта, прогоняет seed_channels и перезапускает юниты.
+#
+# Ключ НЕОБЯЗАТЕЛЕН: без него этот workflow просто пропускает деплой, а код заберёт
+# таймер на сервере (scripts/auto_deploy.sh, раз в 15 минут). Секрет VPS_SSH_KEY нужен
+# только чтобы деплой шёл МГНОВЕННО по коммиту, а не в течение четверти часа.
+# Ключ желательно ОТДЕЛЬНЫЙ, не тот, которым ходишь сам:
+#   ssh-keygen -t ed25519 -f /root/.ssh/gh_deploy -N ""
+#   cat /root/.ssh/gh_deploy.pub >> /root/.ssh/authorized_keys
+#   cat /root/.ssh/gh_deploy        # это содержимое — в секрет VPS_SSH_KEY
+name: Деплой на VPS
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:   # ручной запуск кнопкой и через API — деплой без нового коммита
+
+# Два деплоя разом ронять сервер не должны: второй ждёт, пока закончится первый.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Ключа нет — это НЕ ошибка. Быстрый путь просто пропускается, а код всё равно
+      # доедет: на сервере стоит таймер, который сам забирает свежие коммиты с GitHub
+      # (scripts/auto_deploy.sh). Красный крест на каждом коммите только пугал бы
+      # владельца, ничего при этом не меняя.
+      - name: Есть ли ключ от сервера
+        id: key
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "have=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::Секрет VPS_SSH_KEY не задан — быстрый деплой пропущен. Код заберёт таймер на сервере, в течение 15 минут."
+          else
+            echo "have=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Деплой
+        if: steps.key.outputs.have == 'yes'
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST: ${{ vars.VPS_HOST || '38.244.213.132' }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Ключ хоста забираем на месте: у сервера он не меняется, а держать его
+          # копию в репозитории — лишняя вещь, которую забудут обновить.
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=20 \
+              root@"$HOST" \
+              'curl -fsSL https://raw.githubusercontent.com/Mysterio3-8/NewsBot/master/scripts/deploy_from_github.sh | bash'

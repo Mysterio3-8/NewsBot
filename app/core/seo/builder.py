@@ -69,13 +69,20 @@ def build_tags(text: str, profile: SeoProfile, limit: int) -> list[str]:
 
     Имена собственные идут ПЕРВЫМИ намеренно. Это то, что человек реально набирает в
     поиске («Роберт Дауни»), и ровно ради них всё затевалось. Постоянные теги канала
-    ставить вперёд нельзя: их пять, а лимит поста — шесть, и на имя не осталось бы
-    места ни разу.
+    вперёд не ставим: их пять, и на имя не осталось бы места ни разу — но одно место
+    под них резервируется, иначе при лимите в три тега канал перестал бы находиться
+    по своей теме.
 
     Дедуп идёт по нормализованному слагу, поэтому «Роберт Дауни» и «роберт дауни» не
     дадут двух тегов, а base_tags канала не продублируются найденным словом."""
     if limit <= 0:
         return []
+
+    # Одно место всегда остаётся за постоянным тегом канала (ТЗ владельца 2026-09-05:
+    # хэштегов 1–3). При коротком лимите имена собственные заняли бы строку целиком, и
+    # тега «#кино», по которому канал вообще находят в поиске, не было бы ни в одном
+    # посте — а это ровно та витрина, ради которой SEO и заводили.
+    entity_limit = max(1, limit - 1) if profile.base_tags else limit
 
     # Частотные слова в теги НЕ идут. Они не различают части речи, и в ленту лезли
     # «#играет», «#потерявшего», «#сообщил» — по таким никто не ищет, а выглядят они
@@ -83,15 +90,17 @@ def build_tags(text: str, profile: SeoProfile, limit: int) -> list[str]:
     # там они попадают внутрь человеческой фразы, а не висят отдельным тегом.
     seen: set[str] = set()
     tags: list[str] = []
-    for source in (extract_entities(text), profile.base_tags):
+    for source, cap in ((extract_entities(text), entity_limit), (profile.base_tags, limit)):
         for item in source:
             slug = _slugify(item)
             if not slug or slug in seen:
                 continue
             seen.add(slug)
             tags.append(f"#{slug}@{profile.hashtag_group}" if profile.hashtag_group else f"#{slug}")
-            if len(tags) >= limit:
-                return tags
+            if len(tags) >= cap:
+                break
+        if len(tags) >= limit:
+            return tags
     return tags
 
 

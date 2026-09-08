@@ -90,8 +90,11 @@ def test_seed_news_removes_telegram_footer_link(tmp_path):
 
 
 def test_cinema_plan_matches_the_owners_order():
-    """ТЗ владельца 2026-08-20: «1 фильм 1 клип 3 поста у кино», фильм и клип записями
-    на стене.
+    """ТЗ владельца 2026-08-30: «в телеге три поста в день и фильм, клипы не надо, а в
+    VK всё то же самое только с двумя клипами» (было «1 фильм — 2 клипа и 4 поста»).
+
+    Клипы уходят ТОЛЬКО в VK и раньше: publish_due_clips работает через vk_publisher_for,
+    в TG клипов не было никогда — поэтому от нового ТЗ меняется ровно число постов.
 
     Раздел «Видео» пробовали с 2026-08-10 и откатили: ролик, ушедший в каталог
     сообщества, в ленте не виден вообще, и канал выглядел полупустым («в кино мало
@@ -99,7 +102,7 @@ def test_cinema_plan_matches_the_owners_order():
     from app.seed_channels import DAILY_PLAN
 
     assert DAILY_PLAN["daily_video_count"] == 1
-    assert DAILY_PLAN["daily_clip_count"] == 1
+    assert DAILY_PLAN["daily_clip_count"] == 2
     assert DAILY_PLAN["max_posts_per_day"] == 3
     assert DAILY_PLAN["video_as_post"] is True
     # Окно Кино 09:00–24:00 = 900 мин, постов три → два промежутка. Худший бросок

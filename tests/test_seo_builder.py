@@ -164,3 +164,27 @@ def test_video_description_is_trimmed_on_word_boundary():
     )
     assert len(description) <= 121  # плюс многоточие
     assert description.endswith("…")
+
+
+def test_post_tags_keep_room_for_a_channel_tag():
+    """ТЗ владельца 2026-09-05: хэштегов 1–3. При коротком лимите имена собственные не
+    должны съедать строку целиком — иначе тега своей темы («#кино»), по которому канал
+    и находят, не будет ни в одном посте."""
+    profile = SeoProfile(base_tags=["кино", "фильмы"], post_tag_limit=3)
+    text = "Роберт Дауни и Скарлетт Йоханссон снялись у Кристофера Нолана"
+
+    tags = build_tags(text, profile, profile.post_tag_limit)
+
+    assert len(tags) == 3
+    assert "#кино" in tags
+
+
+def test_channel_tag_slot_does_not_shrink_a_generous_limit():
+    """Резерв — ровно одно место: при большом лимите имён по-прежнему берётся много."""
+    profile = SeoProfile(base_tags=["кино"], post_tag_limit=6)
+    text = "Роберт Дауни и Скарлетт Йоханссон снялись у Кристофера Нолана"
+
+    tags = build_tags(text, profile, profile.post_tag_limit)
+
+    assert "#кино" in tags
+    assert len(tags) >= 3

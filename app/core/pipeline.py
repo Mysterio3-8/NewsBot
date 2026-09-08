@@ -88,6 +88,8 @@ def process_fetched_post(
     stock_fallback: bool = True,
     promo_banner_mode: str = "drop",
     shuffle_images: bool = False,
+    skip_text_photos: bool = False,
+    channel_stop_words: list[str] | None = None,
     max_images_per_post: int | None = None,
     seo_profile: SeoProfile | None = None,
     rng: random.Random | None = None,
@@ -127,8 +129,46 @@ def process_fetched_post(
         reason = _check_local_filters(post, filters, content_hash, recent_hashes)
     else:
         reason = _check_duplicate_only(post, filters, content_hash, recent_hashes)
+    # Стоп-слова канала действуют в ОБОИХ режимах: глобальные видит только новостная
+    # фильтрация, а запрет владельца («СВО, ВСУ, ЗСУ — такие брать точно не надо»)
+    # не должен зависеть от того, включена она у канала или нет.
+    if reason is None and channel_stop_words:
+        banned = find_blacklisted_word(post.text, channel_stop_words)
+        if banned is not None:
+            reason = f"стоп-слово канала: {banned}"
     if reason is not None:
         return ProcessingOutcome(accepted=None, rejected=_reject(repo, raw_post.id, reason))
+
+    # Расклейка склеенных кадров (кино): 2 кадра в одном фото → 2 отдельных, ДО
+    # фильтрации/вотермарка, чтобы плашка и лого обрабатывались покадрово.
+    media_urls = post.media_urls
+    if split_collage and media_urls:
+        media_urls = [frame for m in media_urls for frame in split_vertical_collage(m)]
+        if len(media_urls) != len(post.media_urls):
+            logger.info(
+                "[пост %s] коллажи расклеены: %d фото → %d кадров",
+                post.external_id, len(post.media_urls), len(media_urls),
+            )
+
+    # Перемешиваем ДО отбора: источник отдаёт кадры всегда в одном порядке, и при лимите
+    # в одно фото на пост канал раз за разом получал бы один и тот же кадр коллажа.
+    if shuffle_images and len(media_urls) > 1:
+        media_urls = list(media_urls)
+        (rng or random.Random()).shuffle(media_urls)
+
+    # Кадры с текстом (ТЗ 2026-08-30). Стоит ДО классификации и рерайта осознанно: пост,
+    # который мы всё равно не возьмём, не должен тратить вызовы LLM — а рерайт самый
+    # дорогой шаг пайплайна.
+    if skip_text_photos and media_urls:
+        media_urls = _drop_text_photos(llm_client, media_urls, promo_banner_mode)
+        if not media_urls:
+            logger.info(
+                "[пост %s] на всех фото текст/плашка — пост не берём, ищем следующий",
+                post.external_id,
+            )
+            return ProcessingOutcome(
+                accepted=None, rejected=_reject(repo, raw_post.id, "текст на фото")
+            )
 
     if filters_enabled:
         try:
@@ -202,23 +242,6 @@ def process_fetched_post(
 
     if seo_profile is not None:
         rewritten_text = _append_seo_tail(rewritten_text, seo_profile)
-
-    # Расклейка склеенных кадров (кино): 2 кадра в одном фото → 2 отдельных, ДО
-    # фильтрации/вотермарка, чтобы плашка и лого обрабатывались покадрово.
-    media_urls = post.media_urls
-    if split_collage and media_urls:
-        media_urls = [frame for m in media_urls for frame in split_vertical_collage(m)]
-        if len(media_urls) != len(post.media_urls):
-            logger.info(
-                "[пост %s] коллажи расклеены: %d фото → %d кадров",
-                post.external_id, len(post.media_urls), len(media_urls),
-            )
-
-    # Перемешиваем ДО отбора: источник отдаёт кадры всегда в одном порядке, и при лимите
-    # в одно фото на пост канал раз за разом получал бы один и тот же кадр коллажа.
-    if shuffle_images and len(media_urls) > 1:
-        media_urls = list(media_urls)
-        (rng or random.Random()).shuffle(media_urls)
 
     image_paths = _prepare_images(
         llm_client,
@@ -609,6 +632,41 @@ def _handle_promo_banner(item: str, mode: str) -> str | None:
         return None
     logger.info("Фото %s: промо-плашка — кадр не берём", item)
     return None
+
+
+# Сколько чистых кадров достаточно, чтобы прекратить проверку остальных. Каждая
+# проверка — vision-вызов, а больше этого числа фото в пост всё равно не уйдёт
+# (max_images_per_post у Кино равен единице).
+TEXT_GATE_ENOUGH_FRAMES = 4
+
+
+def _drop_text_photos(
+    llm_client: LLMClient, media_urls: list[str], promo_banner_mode: str = "drop"
+) -> list[str]:
+    """Кадры с собственным текстом — вон (ТЗ 2026-08-30). Пустой результат означает
+    «пост брать нельзя», решение принимает вызывающий.
+
+    Плашка проверяется первой: она детерминированна и бесплатна (по цвету), поэтому
+    vision зовём только для переживших её кадров — иначе лимит LLM жгли бы на заведомо
+    негодных. FAIL-OPEN у самой проверки (`image_has_heavy_text`) сохранён намеренно:
+    отвалившийся vision не должен останавливать канал целиком, лучше пропустить кадр
+    с текстом, чем не публиковать ничего."""
+    kept: list[str] = []
+    for item in media_urls:
+        if len(kept) >= TEXT_GATE_ENOUGH_FRAMES:
+            break
+        if item.startswith("http://") or item.startswith("https://"):
+            kept.append(item)  # ещё не скачан — проверить нечего, штатный путь не сюда
+            continue
+
+        frame = _handle_promo_banner(item, promo_banner_mode)
+        if frame is None:
+            continue
+        if image_has_heavy_text(llm_client, Path(frame)):
+            logger.info("Фото %s: текст на кадре — не берём", frame)
+            continue
+        kept.append(frame)
+    return kept
 
 
 def _filter_watermarked_photos(

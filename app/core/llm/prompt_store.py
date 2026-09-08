@@ -19,6 +19,7 @@ SETTING_PREFIX = "prompt_override:"
 EDITABLE_PROMPTS: dict[str, str] = {
     "rewrite": "📰 Рерайт новости",
     "rewrite_kino": "🎬 Рерайт кино",
+    "rewrite_music": "🎧 Рерайт музыки",
     "system": "⚙️ Системный (общий стиль)",
     "headline": "🔤 Заголовок-хук",
     "clip_hook": "✂️ Надпись на клипе",

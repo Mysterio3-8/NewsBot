@@ -39,6 +39,7 @@ def build_channel_footer(
     config_footer: FooterConfig,
     fallback: FooterLinks | None,
     vk_url: str | None = None,
+    vk_cta: str | None = None,
 ) -> FooterLinks | None:
     """Футер конкретного канала: если у канала задана своя ссылка — строим подпись
     с её URL и подписью канала (или брендовой из config, если своя не задана). Иначе —
@@ -48,13 +49,17 @@ def build_channel_footer(
     `tg_url` отбрасывал и `vk_url` заодно — а это разные сети и разные цели. ТЗ владельца
     2026-08-16 «убрать ссылку на мой ТГ в ВК у Кино» лечится ровно снятием `tg_footer_url`:
     `build_vk_footer` без телеграмного URL отдаёт пустую строку, а TG-пост сохраняет
-    ссылку на VK-группу (гнать аудиторию из TG во ВКонтакте — ТЗ 2026-07-28)."""
+    ссылку на VK-группу (гнать аудиторию из TG во ВКонтакте — ТЗ 2026-07-28).
+
+    vk_cta перекрывает строку призыва в VK-футере: «Подписывайтесь на Telegram-канал»
+    уместно у новостей и странно под музыкальным постом."""
     if not tg_url and not vk_url:
         return fallback
     return FooterLinks(
         telegram_url=tg_url,
         telegram_signature=tg_signature or config_footer.telegram_signature,
-        subscribe_cta=config_footer.subscribe_cta,
+        # Своя формулировка призыва канала: у музыки зовут слушать, у новостей — читать.
+        subscribe_cta=vk_cta or config_footer.subscribe_cta,
         vk_url=vk_url,
     )
 

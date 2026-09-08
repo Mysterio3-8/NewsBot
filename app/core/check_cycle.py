@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import logging
 
 from app.config.loader import AppConfig
@@ -30,10 +31,14 @@ async def run_check_cycle(
     image_providers: dict[str, ImageProvider] | None = None,
 ) -> None:
     settings_cache: dict[int, ChannelSettings] = {}
+    channel_enabled: dict[int, bool] = {}
 
     if tg_fetcher is not None:
         for source in repo.list_sources(source_type="tg"):
             if not source.enabled:
+                continue
+            if not _channel_is_enabled(repo, source, channel_enabled):
+                logger.info("Источник %s: канал выключен — не читаю", source.name)
                 continue
             try:
                 posts = await _fetch_tg_new_posts(repo, tg_fetcher, source, config)
@@ -54,6 +59,9 @@ async def run_check_cycle(
         for source in repo.list_sources(source_type="vk"):
             if not source.enabled:
                 continue
+            if not _channel_is_enabled(repo, source, channel_enabled):
+                logger.info("Источник %s: канал выключен — не читаю", source.name)
+                continue
             try:
                 posts = vk_fetcher.fetch_recent_posts(
                     int(source.url),
@@ -65,7 +73,88 @@ async def run_check_cycle(
                 continue
             logger.info("Источник %s (vk): получено %d постов", source.name, len(posts))
             settings = _channel_settings_for(repo, source, settings_cache)
+            if not posts and settings.deep_scan and _channel_queue_is_empty(repo, source, config):
+                posts = _fetch_vk_deeper(repo, vk_fetcher, source)
             _process_posts(repo, source, posts, llm_client, config, image_providers, settings)
+
+
+# Сколько записей стены просматривать за один заход вглубь. Малый шаг намеренно:
+# каждый взятый пост стоит вызовов LLM, а каналу нужно всего несколько публикаций в
+# сутки — глубина набирается заходами, а не одним большим ковшом.
+DEEP_SCAN_PAGE = 10
+
+
+def _vk_deep_offset_key(source_id: int) -> str:
+    return f"vk_deep_offset:{source_id}"
+
+
+def _channel_queue_is_empty(repo: Repository, source: Source, config: AppConfig) -> bool:
+    """Пусто ли в очереди публикаций канала этого источника.
+
+    Условие включения обхода вглубь: пока публиковать есть что, лезть в архив незачем.
+    Источник без канала (на проде не бывает) архив не обходит — считаем очередь полной."""
+    if source.channel_id is None:
+        return False
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(
+        hours=config.publishing.schedule.publish_freshness_hours
+    )
+    return not repo.list_fresh_queued_posts(cutoff, channel_id=source.channel_id)
+
+
+def _fetch_vk_deeper(
+    repo: Repository, vk_fetcher: VKFetcher, source: Source
+) -> list[FetchedPost]:
+    """Следующая страница стены вглубь. Смещение переживает рестарт (лежит в settings),
+    поэтому проходы идут дальше и дальше, а не топчутся по одному и тому же месту.
+
+    Дошли до конца стены — смещение сбрасывается, и обход начинается заново по кругу
+    (ТЗ владельца 2026-08-30). Повторно взять уже опубликованное не даст дедуп по
+    external_id и SimHash — круг приносит только то, что раньше пропустили."""
+    key = _vk_deep_offset_key(source.id)
+    offset = int(repo.get_setting(key) or 0)
+    try:
+        page = vk_fetcher.fetch_wall_page(
+            int(source.url),
+            offset=offset,
+            count=DEEP_SCAN_PAGE,
+            known_external_ids=repo.get_recent_external_ids(source.id),
+            # Точная проверка по БД: окно из тысячи последних id на втором круге
+            # обхода уже не покрывает архив, и фото качались бы заново.
+            is_known=lambda external_id: repo.has_external_id(source.id, external_id),
+        )
+    except Exception:
+        logger.exception("Не удалось прочитать стену источника %s вглубь", source.name)
+        return []
+
+    if page.items_seen == 0:
+        repo.set_setting(key, "0")
+        logger.info("Источник %s (vk): стена кончилась — обход начнётся заново", source.name)
+        return []
+
+    repo.set_setting(key, str(offset + page.items_seen))
+    logger.info(
+        "Источник %s (vk): свежих нет — смотрю вглубь со смещения %d, годных постов %d",
+        source.name, offset, len(page.posts),
+    )
+    return page.posts
+
+
+def _channel_is_enabled(repo: Repository, source: Source, cache: dict[int, bool]) -> bool:
+    """Включён ли канал, которому принадлежит источник.
+
+    Цикл проверки раньше смотрел только на `source.enabled`, и источник выключенного
+    канала всё равно читался: посты скачивались, проходили рерайт (самый дорогой шаг —
+    вызовы Groq) и ложились в очередь, которую публикатор не обходит — он берёт только
+    включённые каналы. Посты молча протухали, а лимит LLM тратился каждый цикл.
+
+    Источник без канала (на проде не бывает) читаем как раньше."""
+    channel_id = source.channel_id
+    if channel_id is None:
+        return True
+    if channel_id not in cache:
+        channel = repo.get_channel(channel_id)
+        cache[channel_id] = bool(channel and channel.enabled)
+    return cache[channel_id]
 
 
 def _channel_settings_for(
@@ -194,6 +283,8 @@ def _process_posts(
                 stock_fallback=settings.stock_fallback,
                 promo_banner_mode=settings.promo_banner_mode,
                 shuffle_images=settings.shuffle_images,
+                skip_text_photos=settings.skip_text_photos,
+                channel_stop_words=settings.stop_words,
                 max_images_per_post=settings.max_images_per_post,
                 seo_profile=settings.seo_profile() if settings.seo_enabled else None,
             )

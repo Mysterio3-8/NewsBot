@@ -60,6 +60,14 @@ def _classify_vk_post_type(item: dict[str, Any]) -> str:
     return "text"
 
 
+@dataclasses.dataclass(frozen=True)
+class WallPage:
+    """Страница стены: годные посты и сколько записей всего просмотрено на ней."""
+
+    posts: list[FetchedPost]
+    items_seen: int
+
+
 class VKFetcher:
     # Дефолты класса — тесты создают экземпляр через __new__ (минуя __init__) и не
     # трогают лимитеры; без этих дефолтов такой экземпляр падал бы AttributeError.
@@ -115,6 +123,49 @@ class VKFetcher:
             self._bucket.wait(self._bucket_key)
         response = self._api.video.get(owner_id=-abs(group_id), count=count)
         return response.get("items", [])
+
+    def fetch_wall_page(
+        self,
+        group_id: int,
+        *,
+        offset: int,
+        count: int,
+        known_external_ids: set[str] | None = None,
+        is_known=None,
+    ) -> "WallPage":
+        """Страница стены с произвольным смещением, БЕЗ ограничения по возрасту — обход
+        источника вглубь, когда свежие посты кончились (ТЗ владельца 2026-08-30: «можно и
+        старые, можно максимально даже вниз спускаться»).
+
+        Возвращает и годные посты, и число просмотренных записей: пустой список постов
+        сам по себе неоднозначен (все уже известны ИЛИ стена кончилась), а вызывающему
+        нужно отличать одно от другого, чтобы вовремя пойти на новый круг.
+
+        is_known(external_id) — ТОЧНАЯ проверка «этот пост уже обрабатывали», по БД.
+        Список known_external_ids для обхода вглубь не годится: он обрезан последней
+        тысячей записей, а на втором круге по большой стене всё, что старше этого окна,
+        считалось бы новым — и фото качались бы заново на каждом круге, чтобы тут же
+        быть отброшенными дедупом уже в пайплайне."""
+        if self._cooldown is not None:
+            self._cooldown.wait(self._bucket_key)
+        if self._bucket is not None:
+            self._bucket.wait(self._bucket_key)
+        response = self._api.wall.get(owner_id=-abs(group_id), count=count, offset=offset)
+
+        items = response.get("items") or []
+        known_ids = known_external_ids or set()
+        posts: list[FetchedPost] = []
+        for item in items:
+            post = vk_post_to_fetched_post(item)
+            # Обе проверки идут ДО скачивания: media стоит трафика и места на диске,
+            # а известный пост всё равно будет отброшен дальше по пайплайну.
+            if post.external_id in known_ids:
+                continue
+            if is_known is not None and is_known(post.external_id):
+                continue
+            local_paths = self._download_photos(post.external_id, post.media_urls)
+            posts.append(dataclasses.replace(post, media_urls=local_paths))
+        return WallPage(posts=posts, items_seen=len(items))
 
     def fetch_recent_posts(
         self,
