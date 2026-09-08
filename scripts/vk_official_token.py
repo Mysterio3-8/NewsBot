@@ -154,7 +154,21 @@ import urllib.request
 from pathlib import Path
 
 task = json.loads(base64.b64decode(DATA).decode())
-payload = {k: v for k, v in task.items() if k not in ("env_path", "var")}
+
+# Путь проверяем ДО обращения к VK. Код авторизации одноразовый и живёт минуты: если
+# сломаться после обмена, токен уже выдан, записать его некуда, и человеку придётся
+# входить заново. Ровно так сгорел вход 08.09 — Git Bash подменил `/opt/...` на
+# `C:/Program Files/Git/opt/...`, и падение случилось после успешного обмена.
+env_path = Path(task["env_path"])
+if not env_path.parent.is_dir():
+    print("ОШИБКА: каталога", env_path.parent, "нет — путь приехал искажённым")
+    raise SystemExit(2)
+
+if task.get("probe"):
+    print("Проверка пути пройдена:", env_path, "— обмен не выполнялся")
+    raise SystemExit(0)
+
+payload = {k: v for k, v in task.items() if k not in ("env_path", "var", "probe")}
 request = urllib.request.Request(
     "https://id.vk.com/oauth2/auth",
     data=urllib.parse.urlencode(payload).encode(),
@@ -167,7 +181,6 @@ if "access_token" not in data:
     print("ОШИБКА VK ID:", json.dumps(data, ensure_ascii=False))
     raise SystemExit(1)
 
-env_path = Path(task["env_path"])
 values = {
     task["var"]: data["access_token"],
     task["var"] + "_REFRESH": data.get("refresh_token", ""),
