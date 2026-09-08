@@ -17,6 +17,14 @@
 # стейтфул остаётся на сервере как есть.
 set -euo pipefail
 
+# Деплой запускают ДВА независимых пути — GitHub Actions (по коммиту) и таймер на
+# самом сервере (по расписанию). Совпасть они могут запросто, а два прогона разом
+# копируют файлы друг под другом и рестартуют одни и те же юниты на полпути.
+# Второй прогон не ждёт, а выходит: он всё равно повторится через 15 минут, и его
+# работу уже делает первый.
+exec 9>/var/lock/deploy_from_github.lock
+flock -n 9 || { echo "Деплой уже идёт — выхожу"; exit 0; }
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -47,6 +55,44 @@ echo "==> Новости: настройки каналов в БД (SEO, лим
 cd /opt/news-rewriter && venv/bin/python -m app.seed_channels
 
 systemctl restart news-rewriter-bot.service
+
+# ------------------------------------------------------- Таймер автодеплоя
+# Ставится САМ, при первом же прогоне: владелец не программист, и «зайди на сервер и
+# выполни три команды» — это ровно та ручная операция, от которой мы уходим.
+# Идемпотентно: повторный прогон просто обновляет файлы.
+echo "==> Автодеплой: обновляю таймер на сервере"
+install -m 755 "$WORK/news/scripts/auto_deploy.sh" /usr/local/bin/auto_deploy.sh
+
+cat > /etc/systemd/system/auto-deploy.service <<'UNIT'
+[Unit]
+Description=Автодеплой всех софтов с GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/auto_deploy.sh
+# Тик тянет код и рестартует сервисы; на 961 МБ памяти это надо ограничить.
+MemoryHigh=200M
+UNIT
+
+cat > /etc/systemd/system/auto-deploy.timer <<'UNIT'
+[Unit]
+Description=Проверять GitHub на новый код каждые 15 минут
+
+[Timer]
+# После загрузки ждём 5 минут: дать сервисам подняться, прежде чем их обновлять.
+OnBootSec=5min
+OnUnitActiveSec=15min
+# Пропущенный из-за выключенного сервера тик отрабатывает сразу после старта.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now auto-deploy.timer
 
 # ---------------------------------------------------------------------- Минусы
 fetch "Mysterio3-8/MinusZvyagaRepostFromYoutube" "master" "$WORK/minus"
@@ -158,6 +204,6 @@ df -h / | tail -1
 free -m | head -2
 echo "--- юниты ---"
 systemctl is-active news-rewriter-bot yt-vk-autopost.service \
-    tg-sc-publisher.timer tg-yt-playlists.timer
+    tg-sc-publisher.timer tg-yt-playlists.timer auto-deploy.timer
 echo "--- очередь сборников ---"
 cd /opt/yt-vk-publisher && venv/bin/python app/yt_playlists_cli.py status 2>&1 | tail -2
