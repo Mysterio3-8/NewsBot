@@ -97,12 +97,15 @@ systemctl enable --now auto-deploy.timer
 # ---------------------------------------------------------------------- Минусы
 fetch "Mysterio3-8/MinusZvyagaRepostFromYoutube" "master" "$WORK/minus"
 echo "==> Минусы: обновляю код и config.yaml"
-# Список файлов повторяет deploy.sh: он ЗАХАРДКОЖЕН и там, новый модуль надо дописывать
-# в обоих местах, иначе импорт на сервере упадёт.
-for f in autopost.py config.py db.py vk.py youtube.py playlists.py video_edit.py \
-         uniquify.py upload_token.py vk_token_pool.py seo.py config.yaml; do
-    cp "$WORK/minus/$f" /root/yt-vk/
+# Копируем ВСЕ модули корня репозитория, а не список поимённо. Хардкод-список уже
+# ломал прод: 2026-08-16 в репозиторий приехал manager_contract.py, в список его не
+# дописали, и на сервере остался гибрид — свой config.py с импортом модуля, которого
+# рядом нет. Минусы — плоский проект без пакетов, так что «все .py из корня» это ровно
+# то же множество файлов, только оно не отстаёт от репозитория.
+for f in "$WORK/minus"/*.py; do
+    cp "$f" /root/yt-vk/
 done
+cp "$WORK/minus/config.yaml" /root/yt-vk/
 cp -r "$WORK/minus/image" /root/yt-vk/ 2>/dev/null || true
 
 echo "==> Минусы: проверка импортов и конфига"
