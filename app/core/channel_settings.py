@@ -37,6 +37,17 @@ class ChannelSettings:
     пост в обе сети»): пара и раздельные лимиты — взаимоисключающие требования. Пара
     остаётся у всех каналов, где флаг не выставлен."""
 
+    tg_publish_enabled: bool = True
+    """Публиковать ли канал в Telegram. False → TG используется ТОЛЬКО для чтения.
+
+    ТЗ владельца 2026-09-08: «приоритет сейчас ВК, на ТГ можешь забить, с ТГ только
+    брать и читать посты, публиковать не надо». Выключается флагом, а не снятием
+    `tg_destination`: адрес канала нужен и для чтения, и чтобы вернуть публикацию
+    одной строкой, когда приоритет поменяется обратно.
+
+    Побочно закрывает поломку с фильмами: аккаунт заливки перестал быть участником
+    `@kinobestfilmss`, и каждая попытка отдавала `ChatWriteForbiddenError`."""
+
     vk_max_posts_per_day: int | None = None
     """Свой дневной лимит ДЛЯ VK. None → общий `max_posts_per_day`.
 
@@ -313,6 +324,7 @@ class ChannelSettings:
             max_posts_per_day=data.get("max_posts_per_day"),
             min_interval_minutes=data.get("min_interval_minutes"),
             tg_unlimited=data.get("tg_unlimited", False),
+            tg_publish_enabled=data.get("tg_publish_enabled", True),
             vk_max_posts_per_day=data.get("vk_max_posts_per_day"),
             tg_footer_url=data.get("tg_footer_url"),
             tg_footer_signature=data.get("tg_footer_signature"),
@@ -375,6 +387,10 @@ class ChannelSettings:
             payload["min_interval_minutes"] = self.min_interval_minutes
         if self.tg_unlimited:
             payload["tg_unlimited"] = True
+        if not self.tg_publish_enabled:
+            # Пишем только выключенное состояние: значение по умолчанию (публикуем)
+            # не должно раздувать settings_json у каналов, которых это не касается.
+            payload["tg_publish_enabled"] = False
         if self.vk_max_posts_per_day is not None:
             payload["vk_max_posts_per_day"] = self.vk_max_posts_per_day
         if self.tg_footer_url is not None:

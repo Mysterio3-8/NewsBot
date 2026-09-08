@@ -406,7 +406,11 @@ def run_daily_video_repost(
 
         # TG-заливка идёт ПОСЛЕ отметки в БД: если она упадёт, день всё равно считается
         # закрытым и завтрашний прогон возьмёт следующий фильм, а не этот же снова.
-        if tg_video_publisher is not None and channel.tg_destination:
+        if (
+            tg_video_publisher is not None
+            and channel.tg_destination
+            and settings.tg_publish_enabled
+        ):
             tg_video_publisher.publish_video(
                 destination=channel.tg_destination,
                 video_path=local_file,

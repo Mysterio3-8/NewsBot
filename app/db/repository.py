@@ -575,6 +575,46 @@ class Repository:
             return None
         return getattr(post, f"published_{network}_at", None)
 
+    def has_fresher_post_awaiting_network(
+        self,
+        post_id: int,
+        network: str,
+        *,
+        channel_id: int,
+        cutoff: datetime.datetime,
+    ) -> bool:
+        """Есть ли у канала пост СВЕЖЕЕ этого, который тоже ещё не вышел в `network`.
+
+        Нужен там, где сеть берёт не все посты, а несколько штук в сутки (у Новостей VK
+        строго 3). Очередь перебирается от старых к новым — значит без этой проверки
+        суточные слоты забирали бы САМЫЕ СТАРЫЕ посты. Замер на проде 20.08: медианный
+        возраст записи в VK 4.7 ч, максимум 12.2 ч, то есть в сообщество уходили вчерашние
+        новости при свежих в очереди.
+
+        Считаем только кандидатов: тот же канал, статус `queued`, не протухшие по
+        `cutoff` и без отметки публикации в этой сети."""
+        column = getattr(ProcessedPost, f"published_{network}_at", None)
+        if column is None:
+            raise ValueError(f"Неизвестная сеть: {network!r}")
+        current = self.get_processed_post(post_id)
+        if current is None:
+            return False
+        with self._session_factory() as session:
+            return (
+                session.query(ProcessedPost.id)
+                .join(RawPost, ProcessedPost.raw_post_id == RawPost.id)
+                .join(Source, RawPost.source_id == Source.id)
+                .filter(
+                    Source.channel_id == channel_id,
+                    ProcessedPost.status == "queued",
+                    ProcessedPost.created_at >= cutoff,
+                    ProcessedPost.created_at > current.created_at,
+                    column.is_(None),
+                )
+                .first()
+                is not None
+            )
+
     def list_processed_posts(self, *, status: str | None = None) -> list[ProcessedPost]:
         with self._session_factory() as session:
             query = session.query(ProcessedPost)

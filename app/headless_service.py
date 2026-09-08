@@ -222,7 +222,12 @@ async def _publish_channel_post(
     )
 
     tg_target = bool(
-        tg_publisher is not None and config.publishing.telegram.enabled and channel.tg_destination
+        tg_publisher is not None
+        and config.publishing.telegram.enabled
+        and channel.tg_destination
+        # ТЗ владельца 2026-09-08: приоритет VK, из Telegram только читаем. Адрес канала
+        # при этом сохраняется — он нужен чтению и вернёт публикацию одной настройкой.
+        and settings.tg_publish_enabled
     )
     vk_target = bool(
         vk_publisher is not None and config.publishing.vk.enabled and channel.vk_destination
